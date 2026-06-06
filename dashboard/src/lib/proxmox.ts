@@ -1,0 +1,231 @@
+/**
+ * Server-side Proxmox VE API client for the Conduit dashboard.
+ *
+ * Credentials live in env (.env.local) and never reach the browser — all calls
+ * go through Next.js route handlers that import this module. The Proxmox box
+ * uses a self-signed cert, so we dispatch through an undici Agent that skips
+ * TLS verification (dev box on the LAN only).
+ */
+import https from "node:https";
+
+const HOST = process.env.PROXMOX_HOST ?? "10.27.27.126";
+const PORT = Number(process.env.PROXMOX_PORT ?? "8006");
+const USER = process.env.PROXMOX_USER ?? "root@pam";
+const PASS = process.env.PROXMOX_PASS ?? "";
+export const NODE = process.env.PROXMOX_NODE ?? "skdCore01";
+
+// Self-signed cert -> don't verify. Dev box on trusted LAN.
+const agent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
+
+/** Minimal HTTPS request against the Proxmox API, returns parsed JSON. */
+function rawRequest(
+  method: string,
+  path: string,
+  opts: { headers?: Record<string, string>; body?: string } = {},
+): Promise<{ status: number; json: any }> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        host: HOST,
+        port: PORT,
+        path: `/api2/json${path}`,
+        method,
+        agent,
+        headers: opts.headers,
+        timeout: 30_000,
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          let json: any = {};
+          try {
+            json = data ? JSON.parse(data) : {};
+          } catch {
+            json = { _raw: data };
+          }
+          resolve({ status: res.statusCode ?? 0, json });
+        });
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => req.destroy(new Error("Proxmox request timed out")));
+    if (opts.body) req.write(opts.body);
+    req.end();
+  });
+}
+
+type Ticket = { ticket: string; csrf: string; expires: number };
+let cached: Ticket | null = null;
+
+async function auth(): Promise<Ticket> {
+  // Reuse the ticket while it's comfortably fresh (PVE tickets last ~2h).
+  if (cached && cached.expires > Date.now() + 5 * 60_000) return cached;
+
+  const body = new URLSearchParams({ username: USER, password: PASS }).toString();
+  const { status, json } = await rawRequest("POST", "/access/ticket", {
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Length": String(Buffer.byteLength(body)),
+    },
+    body,
+  });
+
+  if (status !== 200) throw new Error(`Proxmox auth failed: ${status}`);
+  const data = json?.data;
+  if (!data?.ticket) throw new Error("Proxmox auth: no ticket returned");
+
+  cached = {
+    ticket: data.ticket,
+    csrf: data.CSRFPreventionToken,
+    expires: Date.now() + 2 * 60 * 60_000,
+  };
+  return cached;
+}
+
+type ReqOpts = {
+  method?: "GET" | "POST" | "PUT" | "DELETE";
+  /** form params for write operations (url-encoded — handles net0 etc.) */
+  params?: Record<string, string | number>;
+};
+
+export async function pmx<T = unknown>(path: string, opts: ReqOpts = {}): Promise<T> {
+  const { method = "GET", params } = opts;
+  const t = await auth();
+
+  const headers: Record<string, string> = {
+    Cookie: `PVEAuthCookie=${t.ticket}`,
+  };
+  // Proxmox requires the CSRF token on every write (POST/PUT/DELETE).
+  if (method !== "GET") headers.CSRFPreventionToken = t.csrf;
+
+  let body: string | undefined;
+  if (params) {
+    const form = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) form.append(k, String(v));
+    body = form.toString();
+    headers["Content-Type"] = "application/x-www-form-urlencoded";
+    headers["Content-Length"] = String(Buffer.byteLength(body));
+  }
+
+  const { status, json } = await rawRequest(method, path, { headers, body });
+  if (status < 200 || status >= 300) {
+    const msg = json?.errors
+      ? JSON.stringify(json.errors)
+      : json?.message ?? `HTTP ${status}`;
+    throw new Error(`Proxmox ${method} ${path} -> ${status}: ${msg}`);
+  }
+  return json.data as T;
+}
+
+/* ---- typed domain helpers ------------------------------------------------ */
+
+export type PveNode = {
+  node: string;
+  status: string;
+  cpu?: number;
+  maxcpu?: number;
+  mem?: number;
+  maxmem?: number;
+  uptime?: number;
+};
+
+export type ClusterResource = {
+  id: string;
+  type: "node" | "lxc" | "qemu" | "storage" | "sdn" | string;
+  node?: string;
+  vmid?: number;
+  name?: string;
+  status?: string;
+  cpu?: number;
+  maxcpu?: number;
+  mem?: number;
+  maxmem?: number;
+  maxdisk?: number;
+  disk?: number;
+  uptime?: number;
+  template?: number;
+  tags?: string;
+  pool?: string;
+};
+
+export type Template = {
+  volid: string;
+  size?: number;
+  format?: string;
+};
+
+export const api = {
+  nodes: () => pmx<PveNode[]>("/nodes"),
+  clusterResources: () => pmx<ClusterResource[]>("/cluster/resources"),
+  nodeStatus: (node = NODE) => pmx<Record<string, unknown>>(`/nodes/${node}/status`),
+  lxcStatus: (vmid: number, node = NODE) =>
+    pmx<Record<string, unknown>>(`/nodes/${node}/lxc/${vmid}/status/current`),
+  lxcAction: (vmid: number, action: "start" | "stop" | "shutdown" | "reboot", node = NODE) =>
+    pmx<string>(`/nodes/${node}/lxc/${vmid}/status/${action}`, { method: "POST" }),
+  lxcInterfaces: (vmid: number, node = NODE) =>
+    pmx<{ name: string; inet?: string; "hwaddr"?: string }[]>(
+      `/nodes/${node}/lxc/${vmid}/interfaces`,
+    ),
+  templates: (storage = "local", node = NODE) =>
+    pmx<Template[]>(`/nodes/${node}/storage/${storage}/content?content=vztmpl`),
+  storage: (node = NODE) =>
+    pmx<{ storage: string; type: string; content: string; avail?: number; total?: number; used?: number }[]>(
+      `/nodes/${node}/storage`,
+    ),
+  createLxc: (params: Record<string, string | number>, node = NODE) =>
+    pmx<string>(`/nodes/${node}/lxc`, { method: "POST", params }),
+  deleteLxc: (vmid: number, node = NODE) =>
+    pmx<string>(`/nodes/${node}/lxc/${vmid}?purge=1&force=1`, { method: "DELETE" }),
+  lxcConfig: (vmid: number, node = NODE) =>
+    pmx<Record<string, unknown>>(`/nodes/${node}/lxc/${vmid}/config`),
+  setLxcConfig: (vmid: number, params: Record<string, string | number>, node = NODE) =>
+    pmx<null>(`/nodes/${node}/lxc/${vmid}/config`, { method: "PUT", params }),
+
+  // pools (= server groups)
+  pools: () => pmx<{ poolid: string }[]>("/pools"),
+  createPool: (poolid: string, comment = "") =>
+    pmx<null>("/pools", { method: "POST", params: { poolid, comment } }),
+  deletePool: (poolid: string) =>
+    pmx<null>(`/pools/${poolid}`, { method: "DELETE" }),
+
+  // task status (UPID)
+  taskStatus: (upid: string, node = NODE) =>
+    pmx<{ status: string; exitstatus?: string }>(
+      `/nodes/${node}/tasks/${encodeURIComponent(upid)}/status`,
+    ),
+
+  /** Lowest free VMID inside [from, to], skipping anything in use. */
+  async nextVmid(from = 200, to = 999): Promise<number> {
+    const res = await api.clusterResources();
+    const used = new Set(
+      res.filter((r) => r.vmid != null).map((r) => r.vmid as number),
+    );
+    for (let id = from; id <= to; id++) if (!used.has(id)) return id;
+    throw new Error("no free VMID in range");
+  },
+};
+
+/** Wait for a Proxmox task (UPID) to finish; returns exit status. */
+export async function waitTask(upid: string, node = NODE, timeoutMs = 90_000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const s = await api.taskStatus(upid, node).catch(() => null);
+    if (s && s.status === "stopped") return s.exitstatus ?? "OK";
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  throw new Error(`task ${upid} timed out`);
+}
+
+/** First IPv4 of a running container's eth0, or null if not up yet. */
+export async function lxcIp(vmid: number, node = NODE): Promise<string | null> {
+  try {
+    const ifaces = await api.lxcInterfaces(vmid, node);
+    const eth = ifaces.find((i) => i.name === "eth0") ?? ifaces[0];
+    const inet = eth?.inet;
+    if (!inet) return null;
+    return inet.split("/")[0];
+  } catch {
+    return null;
+  }
+}

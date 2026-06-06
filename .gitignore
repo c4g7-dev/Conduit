@@ -1,0 +1,22 @@
+# dependencies / build
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# secrets — NEVER commit (Proxmox creds, forwarding secret, live state)
+.env
+.env.*
+!.env.example
+dashboard/data/
+**/data/conduit.json
+
+# local scratch / archives
+*.tar.gz
+sdsdsdsdsd.tar.gz
+
+# misc
+.DS_Store
+*.log
+.vercel

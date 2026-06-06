@@ -1,0 +1,28 @@
+import type { Metadata } from "next";
+import { Inter } from "next/font/google";
+import "./globals.css";
+import { SidebarNav } from "@/components/sidebar-nav";
+import { Toaster } from "@/components/ui/sonner";
+
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+
+export const metadata: Metadata = {
+  title: "Conduit · c4g7 Network",
+  description: "Proxmox-based orchestration panel for the c4g7 MC network",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
+  return (
+    <html lang="en" className="dark">
+      <body className={`${inter.variable} font-sans antialiased`}>
+        <SidebarNav />
+        <main className="md:pl-60">
+          <div className="mx-auto max-w-7xl px-5 py-6 md:px-8">{children}</div>
+        </main>
+        <Toaster richColors position="bottom-right" />
+      </body>
+    </html>
+  );
+}
