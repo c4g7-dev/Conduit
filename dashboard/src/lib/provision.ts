@@ -11,6 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import type { Task } from "./store";
+import type { Seed } from "./blueprints";
 
 const SSH_HOST = process.env.PROXMOX_SSH_HOST ?? process.env.PROXMOX_HOST ?? "10.27.27.126";
 const SSH_USER = process.env.PROXMOX_SSH_USER ?? "root";
@@ -81,19 +82,42 @@ WantedBy=multi-user.target
 
 /* ---- Paper (lobby / SMP) ------------------------------------------------- */
 
-function paperScript(task: Task, secret: string): string {
+/** Shell that fetches seed content (world / plugins / icon) into the server dir. */
+function seedShell(seed: Seed): string {
+  const lines: string[] = ['mkdir -p "$MCDIR/plugins"'];
+  if (seed.worldUrl) {
+    // only seed if there's no world yet (don't clobber a persistent one)
+    lines.push(
+      `if [ ! -f "$MCDIR/world/level.dat" ]; then`,
+      `  echo "seeding world"; curl -fsSL -o /tmp/seed-world.tgz '${seed.worldUrl}' && tar xzf /tmp/seed-world.tgz -C "$MCDIR" && rm -f /tmp/seed-world.tgz || echo "world seed failed"`,
+      `fi`,
+    );
+  }
+  for (const url of seed.plugins ?? []) {
+    lines.push(
+      `curl -fsSL -o "$MCDIR/plugins/$(basename '${url}' | cut -d'?' -f1)" '${url}' || echo "plugin seed failed: ${url}"`,
+    );
+  }
+  if (seed.icon) lines.push(`curl -fsSL -o "$MCDIR/server-icon.png" '${seed.icon}' || true`);
+  return lines.join("\n");
+}
+
+function paperScript(task: Task, secret: string, seed: Seed): string {
   const mem = heap(task.memory, 1024, 1024);
   const motd = `Conduit \\u00b7 ${task.name}`;
   const maxPlayers = Math.max(20, task.playersPerInstance);
-  const props = [
-    "server-port=25565",
-    "online-mode=false",
-    `motd=${motd}`,
-    `max-players=${maxPlayers}`,
-    "spawn-protection=0",
-    "allow-nether=true",
-    "enable-command-block=true",
-  ].join("\n");
+  const baseProps: Record<string, string> = {
+    "server-port": "25565",
+    "online-mode": "false",
+    motd,
+    "max-players": String(maxPlayers),
+    "spawn-protection": "0",
+    "allow-nether": "true",
+    "enable-command-block": "true",
+  };
+  const props = Object.entries({ ...baseProps, ...(seed.properties ?? {}) })
+    .map(([k, v]) => `${k}=${v}`)
+    .join("\n");
   // Paper reads config/paper-global.yml; a minimal file is merged with defaults.
   const paperGlobal = `_version: 28
 proxies:
@@ -127,6 +151,7 @@ YML
 cat > /etc/systemd/system/mc.service <<'UNIT'
 ${unit}
 UNIT
+${seedShell(seed)}
 systemctl daemon-reload
 systemctl enable mc >/dev/null 2>&1 || true
 systemctl restart mc
@@ -135,8 +160,13 @@ echo CONDUIT_PROVISIONED_PAPER
 `;
 }
 
-export async function installPaper(vmid: number, task: Task, secret: string): Promise<void> {
-  await ctExec(vmid, paperScript(task, secret));
+export async function installPaper(
+  vmid: number,
+  task: Task,
+  secret: string,
+  seed: Seed = {},
+): Promise<void> {
+  await ctExec(vmid, paperScript(task, secret, seed));
 }
 
 /* ---- Velocity (proxy) ---------------------------------------------------- */

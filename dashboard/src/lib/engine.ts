@@ -72,7 +72,14 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
   if (bp.role === "proxy") {
     await installVelocity(inst.vmid, task, net.forwardingSecret);
   } else if (bp.role === "lobby" || bp.role === "smp") {
-    await installPaper(inst.vmid, task, net.forwardingSecret);
+    // task seed overrides/extends the blueprint's default seed
+    const seed = {
+      ...bp.seed,
+      ...task.seed,
+      properties: { ...bp.seed?.properties, ...task.seed?.properties },
+      plugins: [...(bp.seed?.plugins ?? []), ...(task.seed?.plugins ?? [])],
+    };
+    await installPaper(inst.vmid, task, net.forwardingSecret, seed);
   } else {
     return; // db/generic: container lifecycle only, no MC software (yet)
   }

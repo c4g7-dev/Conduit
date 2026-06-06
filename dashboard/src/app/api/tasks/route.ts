@@ -42,6 +42,7 @@ export async function POST(req: NextRequest) {
       disk: Number(body.disk ?? bp.disk),
       persistent: body.persistent ?? bp.persistent,
       fronts: Array.isArray(body.fronts) ? body.fronts : [],
+      seed: body.seed && typeof body.seed === "object" ? body.seed : undefined,
       createdAt: Date.now(),
     };
 

@@ -13,6 +13,18 @@
 
 export type Role = "proxy" | "lobby" | "smp" | "db" | "generic";
 
+/** Declarative "game-ready" content applied in-container at first provision. */
+export type Seed = {
+  /** tar.gz of a Paper level dir (contains world/level.dat …), extracted into the server */
+  worldUrl?: string;
+  /** plugin jar download URLs → plugins/ */
+  plugins?: string[];
+  /** extra/override server.properties entries */
+  properties?: Record<string, string>;
+  /** 64×64 png URL → server-icon.png */
+  icon?: string;
+};
+
 export type Blueprint = {
   id: string;
   name: string;
@@ -27,6 +39,8 @@ export type Blueprint = {
   port: number; // primary service port (for routing tables)
   description: string;
   provision: string;
+  /** default game-ready content for instances of this blueprint */
+  seed?: Seed;
 };
 
 const DEBIAN = "local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst";
@@ -61,6 +75,21 @@ export const BLUEPRINTS: Blueprint[] = [
     description:
       "Stateless spawn/lobby. Autoscales on player count, cloned from template, thrown away when idle.",
     provision: "openjdk-17 + Paper 1.20.4 (offline-mode, Velocity modern forwarding)",
+    seed: {
+      // a superflat lobby world, hosted in the Conduit repo's assets
+      worldUrl:
+        "https://raw.githubusercontent.com/c4g7-dev/Conduit/master/assets/worlds/lobby-flat.tar.gz",
+      properties: {
+        gamemode: "adventure",
+        "force-gamemode": "true",
+        difficulty: "peaceful",
+        "spawn-monsters": "false",
+        "spawn-protection": "0",
+        pvp: "false",
+        "allow-nether": "false",
+        "level-type": "flat",
+      },
+    },
   },
   {
     id: "paper-smp",

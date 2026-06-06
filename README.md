@@ -43,8 +43,11 @@ This is the honest status against the factors that matter for the c4g7 network.
 - A **task** instantiates a blueprint N times. `dynamic` tasks (lobbies) are meant to
   scale on demand and be thrown away; `static` tasks (SMP/region) hold a fixed count
   with a persistent world. Scaling is one click (or one API call) today.
-- ⏳ *Auto*-scaling on player count is not wired yet — the metrics needed for it
-  (below) now exist, so the trigger is the remaining step.
+- Blueprints (and individual tasks) carry a **`seed`**: a world (`tar.gz` URL,
+  extracted in-container), extra `server.properties`, a `server-icon.png`, and plugin
+  jar URLs — all applied before first boot, so instances come up **game-ready** rather
+  than vanilla. The shipped `paper-lobby` seeds a superflat lobby world + lobby config
+  (adventure mode, peaceful, no mob spawning). Per-task `seed` overrides the blueprint's.
 
 ### 3. Backups — ✅ working (PBS)
 - Backups are **built-in via Proxmox + Proxmox Backup Server**: deduplicated,
@@ -98,8 +101,9 @@ never kicks a player. The live target is written back so the dashboard shows it.
 
 - Back up groups to **PBS** on demand and on a schedule, and list snapshots.
 
+- Seed instances **game-ready** — world + config + icon + plugins per blueprint/task.
+
 **Can't do yet**
-- Seed worlds/plugins (servers come up vanilla Paper/Velocity).
 - Restore-from-snapshot via the UI (backups + listing work; restore is still CLI).
 - Multi-node placement strategy / live-migration from the UI (single node so far).
 - SSH provisioning (`pct exec`) still uses the root password; should move to a
@@ -201,10 +205,9 @@ Set `CONDUIT_CONTROLLER=off` to run the dashboard without the reconcile loop.
 
 ## Roadmap
 
-- World/plugin seeding (lobby world from git, region persistent dataset).
 - Restore-from-snapshot from the Backups UI.
 - Multi-node placement + live-migration controls.
 - Dedicated SSH key for `pct exec` provisioning (API already uses a token).
 
 Done recently: live SLP metrics · player-count autoscaling · PVE API-token auth ·
-PBS backups (on-demand + per-group schedules).
+PBS backups (on-demand + per-group schedules) · game-ready world/plugin seeding.
