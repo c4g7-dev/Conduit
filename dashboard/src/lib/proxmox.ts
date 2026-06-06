@@ -14,6 +14,12 @@ const USER = process.env.PROXMOX_USER ?? "root@pam";
 const PASS = process.env.PROXMOX_PASS ?? "";
 export const NODE = process.env.PROXMOX_NODE ?? "skdCore01";
 
+// Preferred auth: a PVE API token (revocable, scoped, no CSRF). Falls back to a
+// password ticket only if no token is configured. Format: USER!TOKENID = SECRET.
+const TOKEN_ID = process.env.PROXMOX_TOKEN_ID ?? "";
+const TOKEN_SECRET = process.env.PROXMOX_TOKEN_SECRET ?? "";
+const USE_TOKEN = Boolean(TOKEN_ID && TOKEN_SECRET);
+
 // Self-signed cert -> don't verify. Dev box on trusted LAN.
 const agent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
@@ -91,13 +97,17 @@ type ReqOpts = {
 
 export async function pmx<T = unknown>(path: string, opts: ReqOpts = {}): Promise<T> {
   const { method = "GET", params } = opts;
-  const t = await auth();
 
-  const headers: Record<string, string> = {
-    Cookie: `PVEAuthCookie=${t.ticket}`,
-  };
-  // Proxmox requires the CSRF token on every write (POST/PUT/DELETE).
-  if (method !== "GET") headers.CSRFPreventionToken = t.csrf;
+  const headers: Record<string, string> = {};
+  if (USE_TOKEN) {
+    // API tokens authenticate per-request and are exempt from CSRF.
+    headers.Authorization = `PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}`;
+  } else {
+    const t = await auth();
+    headers.Cookie = `PVEAuthCookie=${t.ticket}`;
+    // Proxmox requires the CSRF token on every write (POST/PUT/DELETE).
+    if (method !== "GET") headers.CSRFPreventionToken = t.csrf;
+  }
 
   let body: string | undefined;
   if (params) {

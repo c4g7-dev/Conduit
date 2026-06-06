@@ -64,8 +64,16 @@ This is the honest status against the factors that matter for the c4g7 network.
 - **Group** = a Proxmox **resource pool** + a slot limit + maintenance flag.
 - **Task** = a blueprint + ruleset (mode, desired/min/max, fronts).
 - The canonical example — **Time SMP** — is exactly: a group containing a *spawn/region*
-  task (`paper-smp`, static, persistent) and an *edge* task (`velocity-proxy`) that
-  fronts it. Slot-limit and maintenance live on the group.
+  task (`paper-smp`, static, persistent), a *spawn/lobby* task (`paper-lobby`, dynamic,
+  **autoscaling**) and an *edge* task (`velocity-proxy`) fronting both. Slot-limit and
+  maintenance live on the group.
+
+### Autoscaling — ✅ working
+Dynamic tasks (lobbies) carry `autoscale: true`. Each reconcile the controller reads
+live player counts (via SLP), computes a target — `ceil(players / playersPerInstance)
++ 1` to always keep one fresh joinable lobby — clamped to `[min, max]`, and
+provisions/drains to match. **Scale-down only ever removes *empty* instances**, so it
+never kicks a player. The live target is written back so the dashboard shows it.
 
 ---
 
@@ -82,12 +90,15 @@ This is the honest status against the factors that matter for the c4g7 network.
 - Stay safe: it only ever touches containers tagged `conduit` in 200–999; hand-made
   containers (e.g. CT100) are never read as instances nor destroyed.
 
+- Authenticate to the Proxmox API with a **revocable API token** (no password, no
+  CSRF) — see `PROXMOX_TOKEN_ID`/`PROXMOX_TOKEN_SECRET`.
+
 **Can't do yet**
-- Auto-scale lobbies on player count (manual/scriptable for now; metrics exist).
 - Seed worlds/plugins (servers come up vanilla Paper/Velocity).
 - Drive PBS backup schedules from the UI (works at the Proxmox layer).
 - Multi-node placement strategy / live-migration from the UI (single node so far).
-- Auth: still uses the Proxmox root password from env — should become an API token + role.
+- SSH provisioning (`pct exec`) still uses the root password; should move to a
+  dedicated SSH key. (The HTTP API already uses a scoped token.)
 
 ---
 
@@ -183,8 +194,9 @@ Set `CONDUIT_CONTROLLER=off` to run the dashboard without the reconcile loop.
 
 ## Roadmap
 
-- Player-count autoscaling for `dynamic` lobby tasks (metrics already exist).
 - World/plugin seeding (lobby world from git, region persistent dataset).
 - PBS backup schedules driven from the group UI.
 - Multi-node placement + live-migration controls.
-- PVE API token + SSH key instead of the root password.
+- Dedicated SSH key for `pct exec` provisioning (API already uses a token).
+
+Done recently: live SLP metrics · player-count autoscaling · PVE API-token auth.

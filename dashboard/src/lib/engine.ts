@@ -11,7 +11,7 @@
  */
 import { api, lxcIp, waitTask, NODE } from "./proxmox";
 import { blueprint, type Blueprint } from "./blueprints";
-import { getDB, getNetwork, type Task, type Group } from "./store";
+import { getDB, saveDB, getNetwork, type Task, type Group } from "./store";
 import {
   installPaper,
   installVelocity,
@@ -19,6 +19,7 @@ import {
   forgetVelocity,
   type ProxyServer,
 } from "./provision";
+import { pingMc } from "./mcping";
 
 export const CONDUIT_TAG = "conduit";
 export const READY_TAG = "ready";
@@ -162,6 +163,37 @@ export function instancesOf(all: Instance[], taskId: string): Instance[] {
   return all.filter((i) => i.taskId === taskId);
 }
 
+/** Live online-player count per vmid via SLP (best-effort; unreachable → absent). */
+async function playerCounts(
+  insts: Instance[],
+  portOf: (i: Instance) => number,
+): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  await Promise.all(
+    insts
+      .filter((i) => i.status === "running" && i.ip && i.ready)
+      .map(async (i) => {
+        try {
+          const p = await pingMc(i.ip!, portOf(i), 2000);
+          out.set(i.vmid, p.online);
+        } catch {
+          /* not up yet / unreachable — leave absent */
+        }
+      }),
+  );
+  return out;
+}
+
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(n, hi));
+
+/** Autoscale target for a dynamic task: one spare joinable server above current load. */
+export function autoscaleTarget(players: number, perInstance: number, min: number, max: number) {
+  const per = Math.max(1, perInstance);
+  const loadBased = Math.ceil(players / per) + 1; // +1 keeps a fresh lobby ready
+  const cap = max > 0 ? max : loadBased;
+  return clamp(loadBased, min, cap);
+}
+
 async function ensurePool(group: Group) {
   const pools = await api.pools().catch(() => []);
   if (!pools.some((p) => p.poolid === group.id)) {
@@ -226,9 +258,23 @@ export async function reconcileAll(): Promise<string[]> {
   if (busy) return ["skip: busy"];
   busy = true;
   const log: string[] = [];
+  let dirty = false;
   try {
     const db = await getDB();
     const all = await discoverInstances();
+
+    // Gather live player counts once if any task autoscales (drives desired + safe drain).
+    const autoTasks = db.tasks.filter((t) => t.autoscale);
+    const portOf = (i: Instance) => {
+      const t = db.tasks.find((x) => x.id === i.taskId);
+      return (t ? blueprint(t.blueprintId)?.port : undefined) ?? 25565;
+    };
+    const players = autoTasks.length
+      ? await playerCounts(
+          autoTasks.flatMap((t) => instancesOf(all, t.id)),
+          portOf,
+        )
+      : new Map<number, number>();
 
     for (const task of db.tasks) {
       const group = db.groups.find((g) => g.id === task.groupId);
@@ -240,10 +286,19 @@ export async function reconcileAll(): Promise<string[]> {
       const pending = recentVmids(task.id).filter((v) => !liveIds.has(v));
       const have = live.length + pending.length;
 
-      const desired = Math.max(
-        task.min,
-        task.max > 0 ? Math.min(task.desired, task.max) : task.desired,
-      );
+      let desired: number;
+      if (task.autoscale) {
+        const load = live.reduce((n, i) => n + (players.get(i.vmid) ?? 0), 0);
+        desired = autoscaleTarget(load, task.playersPerInstance, task.min, task.max);
+        if (desired !== task.desired) {
+          task.desired = desired; // reflect the live target in the store/UI
+          dirty = true;
+        }
+        if (desired !== have)
+          log.push(`autoscale ${task.id}: ${load}p → want ${desired} (have ${have})`);
+      } else {
+        desired = clamp(task.desired, task.min, task.max > 0 ? task.max : task.desired);
+      }
 
       if (have < desired) {
         for (let i = 0; i < desired - have; i++) {
@@ -255,12 +310,15 @@ export async function reconcileAll(): Promise<string[]> {
           }
         }
       } else if (have > desired) {
-        // scale down: prefer stopped, then highest vmid; never below min
-        const removable = [...live].sort(
+        // scale down: prefer stopped, then highest vmid; never below min.
+        // For autoscale tasks, only drain EMPTY instances so we never kick players.
+        let removable = [...live].sort(
           (a, b) =>
             Number(a.status === "running") - Number(b.status === "running") ||
             b.vmid - a.vmid,
         );
+        if (task.autoscale)
+          removable = removable.filter((i) => (players.get(i.vmid) ?? 0) === 0);
         for (let i = 0; i < have - desired && removable.length; i++) {
           const victim = removable.shift()!;
           try {
@@ -276,6 +334,8 @@ export async function reconcileAll(): Promise<string[]> {
     // software provisioning (background) + proxy routing config push
     provisionPass(db, all, log);
     await velocityPass(db, all, log);
+
+    if (dirty) await saveDB(db).catch(() => {});
   } catch (e) {
     log.push(`! reconcile error: ${String(e)}`);
   } finally {

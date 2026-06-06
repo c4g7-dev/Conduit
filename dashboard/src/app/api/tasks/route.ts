@@ -21,8 +21,10 @@ export async function POST(req: NextRequest) {
 
     const id = slug(`${groupId}-${name}`);
     const mode: "dynamic" | "static" = body.mode ?? bp.mode;
-    const min = Number(body.min ?? (mode === "dynamic" ? 1 : 1));
+    const min = Number(body.min ?? 1);
     const initialDesired = Number(body.desired ?? min);
+    // dynamic tasks autoscale by default and need an upper cap; static run a fixed count
+    const autoscale = body.autoscale ?? mode === "dynamic";
 
     const task: Task = {
       id,
@@ -32,8 +34,9 @@ export async function POST(req: NextRequest) {
       mode,
       desired: Math.max(min, initialDesired),
       min,
-      max: Number(body.max ?? (mode === "dynamic" ? 0 : initialDesired)),
-      playersPerInstance: Number(body.playersPerInstance ?? 80),
+      max: Number(body.max ?? (mode === "dynamic" ? 5 : initialDesired)),
+      autoscale,
+      playersPerInstance: Number(body.playersPerInstance ?? (bp.role === "lobby" ? 50 : 80)),
       cores: Number(body.cores ?? bp.cores),
       memory: Number(body.memory ?? bp.memory),
       disk: Number(body.disk ?? bp.disk),
