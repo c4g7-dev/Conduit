@@ -76,9 +76,9 @@ export const BLUEPRINTS: Blueprint[] = [
       "Stateless spawn/lobby. Autoscales on player count, cloned from template, thrown away when idle.",
     provision: "openjdk-17 + Paper 1.20.4 (offline-mode, Velocity modern forwarding)",
     seed: {
-      // a superflat lobby world, hosted in the Conduit repo's assets
+      // a superflat lobby world, hosted in the conduit-assets repo
       worldUrl:
-        "https://raw.githubusercontent.com/c4g7-dev/Conduit/master/assets/worlds/lobby-flat.tar.gz",
+        "https://raw.githubusercontent.com/c4g7-dev/conduit-assets/master/worlds/lobby-flat.tar.gz",
       properties: {
         gamemode: "adventure",
         "force-gamemode": "true",

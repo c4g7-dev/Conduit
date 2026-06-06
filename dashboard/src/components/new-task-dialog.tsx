@@ -56,9 +56,28 @@ export function NewTaskDialog({
   const [desired, setDesired] = useState(1);
   const [fronts, setFronts] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [showSeed, setShowSeed] = useState(false);
+  const [worldUrl, setWorldUrl] = useState("");
+  const [pluginsText, setPluginsText] = useState("");
+  const [propsText, setPropsText] = useState("");
 
   const bp = useMemo(() => blueprints.find((b) => b.id === bpId), [blueprints, bpId]);
   const isProxy = bp?.role === "proxy";
+  const isPaper = bp?.role === "lobby" || bp?.role === "smp";
+
+  function buildSeed() {
+    const plugins = pluginsText.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+    const properties: Record<string, string> = {};
+    for (const line of propsText.split(/\n+/)) {
+      const i = line.indexOf("=");
+      if (i > 0) properties[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+    }
+    const seed: { worldUrl?: string; plugins?: string[]; properties?: Record<string, string> } = {};
+    if (worldUrl.trim()) seed.worldUrl = worldUrl.trim();
+    if (plugins.length) seed.plugins = plugins;
+    if (Object.keys(properties).length) seed.properties = properties;
+    return Object.keys(seed).length ? seed : undefined;
+  }
 
   useEffect(() => {
     if (bp && !name) setName(bp.name);
@@ -78,6 +97,7 @@ export function NewTaskDialog({
           blueprintId: bp.id,
           desired,
           fronts: isProxy ? fronts : [],
+          seed: isProxy ? undefined : buildSeed(),
         }),
       });
       const json = await res.json();
@@ -87,6 +107,10 @@ export function NewTaskDialog({
       setName("");
       setBpId("");
       setFronts([]);
+      setWorldUrl("");
+      setPluginsText("");
+      setPropsText("");
+      setShowSeed(false);
       onCreated();
     } catch (e) {
       toast.error(`Could not create task: ${String(e)}`);
@@ -186,6 +210,54 @@ export function NewTaskDialog({
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {isPaper && (
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setShowSeed((s) => !s)}
+                className="text-xs font-medium text-muted-foreground hover:text-foreground"
+              >
+                {showSeed ? "▾" : "▸"} Seed (world / plugins / config){" "}
+                <span className="text-muted-foreground/70">— overrides the blueprint default</span>
+              </button>
+              {showSeed && (
+                <div className="space-y-3 rounded-md border border-border/60 p-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="seed-world" className="text-xs">World tarball URL</Label>
+                    <Input
+                      id="seed-world"
+                      value={worldUrl}
+                      onChange={(e) => setWorldUrl(e.target.value)}
+                      placeholder="https://…/world.tar.gz (extracts to world/)"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="seed-plugins" className="text-xs">Plugin jar URLs (one per line)</Label>
+                    <textarea
+                      id="seed-plugins"
+                      value={pluginsText}
+                      onChange={(e) => setPluginsText(e.target.value)}
+                      rows={2}
+                      placeholder="https://…/SomePlugin.jar"
+                      className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="seed-props" className="text-xs">server.properties overrides (key=value per line)</Label>
+                    <textarea
+                      id="seed-props"
+                      value={propsText}
+                      onChange={(e) => setPropsText(e.target.value)}
+                      rows={2}
+                      placeholder={"difficulty=hard\npvp=true"}
+                      className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

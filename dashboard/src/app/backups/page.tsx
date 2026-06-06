@@ -26,7 +26,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { bytes, pct } from "@/lib/format";
-import { Archive, HardDrive, Clock, Trash2, Play, CalendarClock } from "lucide-react";
+import { Archive, HardDrive, Clock, Trash2, Play, CalendarClock, RotateCcw } from "lucide-react";
 
 type Storage = {
   storage: string;
@@ -119,6 +119,32 @@ export default function BackupsPage() {
     await fetch(`/api/backups/jobs/${id}`, { method: "DELETE" });
     toast.success("Schedule removed");
     refresh();
+  }
+
+  async function restore(b: Backup) {
+    if (b.vmid == null) return;
+    if (
+      !confirm(
+        `Restore ${b.name ?? "#" + b.vmid} (#${b.vmid}) from the snapshot of ${when(b.ctime)}?\n\nThis OVERWRITES the current container — it will be stopped, rolled back, and restarted.`,
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/backups/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ volid: b.volid, vmid: b.vmid }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      toast.success(`Restored #${b.vmid} — restarting`);
+      setTimeout(refresh, 4000);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -267,6 +293,7 @@ export default function BackupsPage() {
                 <TableHead>Storage</TableHead>
                 <TableHead>Notes</TableHead>
                 <TableHead className="text-right">Size</TableHead>
+                <TableHead className="text-right">Restore</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -286,17 +313,29 @@ export default function BackupsPage() {
                   <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
                     {bytes(b.size)}
                   </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-8"
+                      disabled={busy || b.vmid == null}
+                      onClick={() => restore(b)}
+                      title="Restore this snapshot (overwrites the container)"
+                    >
+                      <RotateCcw className="h-4 w-4" /> Restore
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
               {!data && loading &&
                 Array.from({ length: 3 }).map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={5}><Skeleton className="h-6 w-full" /></TableCell>
+                    <TableCell colSpan={6}><Skeleton className="h-6 w-full" /></TableCell>
                   </TableRow>
                 ))}
               {data && (data.backups ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
                     No backups yet.
                   </TableCell>
                 </TableRow>

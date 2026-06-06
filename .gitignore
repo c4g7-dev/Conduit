@@ -12,9 +12,8 @@ build/
 dashboard/data/
 **/data/conduit.json
 
-# local scratch / archives (root-level only; seed assets under assets/ are tracked)
-/*.tar.gz
-sdsdsdsdsd.tar.gz
+# local scratch / archives (seed assets live in the conduit-assets repo)
+*.tar.gz
 
 # misc
 .DS_Store
