@@ -46,12 +46,15 @@ This is the honest status against the factors that matter for the c4g7 network.
 - ⏳ *Auto*-scaling on player count is not wired yet — the metrics needed for it
   (below) now exist, so the trigger is the remaining step.
 
-### 3. Backups — ✅ inherited, ⏳ scheduling UI pending
-- Backups are **built-in via Proxmox**: vzdump + **Proxmox Backup Server** already
-  give deduplicated, incremental, scheduleable container backups with retention —
-  no custom code needed. Persistent worlds live on their own LXC rootfs/dataset.
-- ⏳ What's *not* done: a Conduit-side button/schedule to trigger/define PBS jobs per
-  group. The capability exists at the Proxmox layer; Conduit just doesn't drive it yet.
+### 3. Backups — ✅ working (PBS)
+- Backups are **built-in via Proxmox + Proxmox Backup Server**: deduplicated,
+  incremental, retained — no custom storage code. Persistent worlds live on their own
+  LXC rootfs.
+- Conduit drives it from the **Backups page**: attach a PBS datastore as storage, then
+  **back up a whole group on demand** (vzdump over the pool) or **schedule per-group
+  jobs** (systemd-calendar cron → `/cluster/backup`). Recent snapshots, sizes and
+  per-storage usage are listed live. Verified: a running Paper world snapshotted to PBS
+  in ~9s; a pool backup captured all three containers of the Time SMP group.
 
 ### 4. Management / dashboard — ✅ working
 - Next.js + shadcn/ui dashboard: **Overview** (cluster + live player total),
@@ -93,9 +96,11 @@ never kicks a player. The live target is written back so the dashboard shows it.
 - Authenticate to the Proxmox API with a **revocable API token** (no password, no
   CSRF) — see `PROXMOX_TOKEN_ID`/`PROXMOX_TOKEN_SECRET`.
 
+- Back up groups to **PBS** on demand and on a schedule, and list snapshots.
+
 **Can't do yet**
 - Seed worlds/plugins (servers come up vanilla Paper/Velocity).
-- Drive PBS backup schedules from the UI (works at the Proxmox layer).
+- Restore-from-snapshot via the UI (backups + listing work; restore is still CLI).
 - Multi-node placement strategy / live-migration from the UI (single node so far).
 - SSH provisioning (`pct exec`) still uses the root password; should move to a
   dedicated SSH key. (The HTTP API already uses a scoped token.)
@@ -145,6 +150,8 @@ backend. Verified live: secrets matched, both `systemd` services active, SLP rep
 | GET/POST | `/api/groups`, PATCH/DELETE `/api/groups/{id}` | group CRUD (maintenance, slotLimit) |
 | POST | `/api/tasks`, PATCH/DELETE `/api/tasks/{id}` | task CRUD + live scaling |
 | **GET** | **`/api/metrics`** | **live player counts + sample names per instance, via SLP** |
+| GET/POST | `/api/backups` | storages + snapshots + jobs; trigger a vmid/pool backup |
+| POST/DELETE | `/api/backups/jobs`, `/api/backups/jobs/{id}` | per-group scheduled backup jobs |
 
 `/api/metrics` is the CloudNet-style telemetry feed — per-instance `online/max`,
 player `sample` names, MOTD, version, latency, and a network total (counted at the edge).
@@ -195,8 +202,9 @@ Set `CONDUIT_CONTROLLER=off` to run the dashboard without the reconcile loop.
 ## Roadmap
 
 - World/plugin seeding (lobby world from git, region persistent dataset).
-- PBS backup schedules driven from the group UI.
+- Restore-from-snapshot from the Backups UI.
 - Multi-node placement + live-migration controls.
 - Dedicated SSH key for `pct exec` provisioning (API already uses a token).
 
-Done recently: live SLP metrics · player-count autoscaling · PVE API-token auth.
+Done recently: live SLP metrics · player-count autoscaling · PVE API-token auth ·
+PBS backups (on-demand + per-group schedules).

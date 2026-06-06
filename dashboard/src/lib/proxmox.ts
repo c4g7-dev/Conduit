@@ -199,6 +199,26 @@ export const api = {
   deletePool: (poolid: string) =>
     pmx<null>(`/pools/${poolid}`, { method: "DELETE" }),
 
+  // backups (vzdump → PBS/local storage) + scheduled jobs
+  storageContent: (storage: string, content = "backup", node = NODE) =>
+    pmx<
+      { volid: string; vmid?: number; ctime?: number; size?: number; notes?: string; format?: string }[]
+    >(`/nodes/${node}/storage/${storage}/content?content=${content}`),
+  vzdump: (params: Record<string, string | number>, node = NODE) =>
+    pmx<string>(`/nodes/${node}/vzdump`, { method: "POST", params }),
+  backupStorages: (node = NODE) =>
+    pmx<{ storage: string; type: string; content: string; avail?: number; total?: number; used?: number }[]>(
+      `/nodes/${node}/storage?content=backup`,
+    ),
+  backupJobs: () =>
+    pmx<
+      { id: string; schedule?: string; storage?: string; pool?: string; enabled?: number; mode?: string; comment?: string }[]
+    >("/cluster/backup"),
+  createBackupJob: (params: Record<string, string | number>) =>
+    pmx<null>("/cluster/backup", { method: "POST", params }),
+  deleteBackupJob: (id: string) =>
+    pmx<null>(`/cluster/backup/${id}`, { method: "DELETE" }),
+
   // task status (UPID)
   taskStatus: (upid: string, node = NODE) =>
     pmx<{ status: string; exitstatus?: string }>(

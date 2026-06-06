@@ -10,6 +10,7 @@ import {
   Workflow,
   Cable,
   Server,
+  Archive,
 } from "lucide-react";
 
 const nav = [
@@ -17,6 +18,7 @@ const nav = [
   { href: "/containers", label: "Containers", icon: Boxes },
   { href: "/templates", label: "Templates", icon: LayoutTemplate },
   { href: "/groups", label: "Groups & Tasks", icon: Workflow },
+  { href: "/backups", label: "Backups", icon: Archive },
 ];
 
 export function SidebarNav() {
