@@ -1,0 +1,92 @@
+# ============================================================================
+#  conduit.yaml — Beispiel: Servergruppe "Time SMP"
+#  Modelliert das CloudNet-Konzept (Gruppen + Tasks + Autoscaling) auf Proxmox.
+#  Dies ist eine THEORETISCHE Demo-Config zur Diskussion, kein fertiges Schema.
+# ============================================================================
+
+# ---- Infrastruktur, an die Conduit spricht ---------------------------------
+proxmox:
+  nodes: [pmxe1, pmxd2, pmxf3]
+  api: https://pmxe1:8006/api2/json
+  token_id: conduit@pve!orchestrator       # eigener API-Token, least privilege
+  shared_storage: zfs-shared               # für Live-Migration nötig
+
+velocity:
+  proxies: [velocity-1, velocity-2]        # mehrfach, hinter UDM-Failover
+  api: http://velocity-1:8080
+
+backup:
+  pbs_store: pbs-main                       # Proxmox Backup Server Datastore
+
+# ---- Servergruppe = Resource Pool in Proxmox -------------------------------
+groups:
+  timesmp:
+    pool: timesmp            # Proxmox Resource Pool -> klammert alle Container
+    slot_limit: 500          # gruppenweites Limit; Velocity zählt & stoppt Routing
+    maintenance: false       # true -> Velocity weist neue Spieler ab, Admins rein
+    tasks: [spawn, region]
+
+# ---- Tasks = Template + Regelsatz ------------------------------------------
+tasks:
+
+  # ---- Spawn-Task: DYNAMISCH (Lobby-artig, zustandslos) --------------------
+  spawn:
+    group: timesmp
+    template: tmpl-spawn       # Proxmox-Template, Tag: task=spawn
+    mode: dynamic              # = Autoscaling
+    min: 1
+    max: 0                     # 0 = unbegrenzt ("startet unendlich Spawns")
+    players_per_instance: 80
+    scale_up_at: 0.80          # >80% der Slots voll -> neue Instanz klonen
+    scale_down_at: 0.20        # <20% -> Instanz leeren & zerstören
+    drain_timeout: 120s        # erst leeren (kein Neu-Routing), dann killen
+    persistent: false          # zustandslos -> darf weggeworfen werden
+    resources:
+      cores: 2
+      memory: 4096             # MB
+    network:
+      vlan: 40                 # MC-VLAN
+    placement:
+      anti_affinity: true      # nicht alle Spawns auf einem Node
+    inject:                    # Config/Welt beim Boot ziehen, nicht im Template
+      via: cloud-init
+      source: git@git.c4g7:mc/spawn-config.git
+
+  # ---- Region-Task: FEST (persistent, eigene Welt) ------------------------
+  region:
+    group: timesmp
+    template: tmpl-region      # Proxmox-Template, Tag: task=region
+    mode: static               # feste Anzahl, kein Autoscaling
+    instances: 4               # Region-1 .. Region-4
+    persistent: true
+    resources:
+      cores: 4
+      memory: 8192
+    network:
+      vlan: 40
+    data:
+      dataset: tank/worlds/region   # Welt auf separatem Dataset -> bleibt erhalten
+    placement:
+      live_migration: true     # bei Last/Wartung ohne Downtime auf anderen Node
+    backup:
+      schedule: "0 4 * * *"    # nightly, inkrementell via PBS
+      keep: { daily: 7, weekly: 4 }
+
+# ----------------------------------------------------------------------------
+#  Was Conduit daraus macht:
+#
+#  - timesmp wird als Proxmox Resource Pool angelegt (falls nicht vorhanden).
+#  - region: 4 LXCs aus tmpl-region, je eigene Welt, nightly PBS-Backup.
+#  - spawn:  startet mit 1 LXC. Der Watcher pollt Velocity-Player-Counts.
+#            Steigen die Slots über 80%, klont Conduit tmpl-spawn (ZFS-Clone,
+#            instant), der LXC bootet, zieht Config via cloud-init und meldet
+#            sich bei Velocity an. Fällt die Last unter 20%, wird die Instanz
+#            gedrained und zerstört.
+#  - slot_limit/maintenance werden als Flags an Velocity durchgereicht.
+#
+#  CLI-Beispiele:
+#    conduit ps                       # alle Instanzen der Flotte
+#    conduit scale spawn +2           # manuell 2 Spawns dazu
+#    conduit maintenance on timesmp   # Gruppe in Wartung
+#    conduit migrate region-2 pmxd2   # Live-Migration anstoßen
+# ----------------------------------------------------------------------------
