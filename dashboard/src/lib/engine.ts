@@ -66,6 +66,16 @@ const provisioning = new Set<number>();
 
 let busy = false;
 
+// While a restore is in flight the target CT is stopped/replaced; pause reconcile
+// so the controller doesn't mistake it for a missing instance and spawn a duplicate.
+let restores = 0;
+export function beginRestore() {
+  restores++;
+}
+export function endRestore() {
+  restores = Math.max(0, restores - 1);
+}
+
 /** Install the role's MC software inside a running instance, then tag it ready. */
 async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
   const net = await getNetwork();
@@ -263,6 +273,7 @@ export async function decommissionTask(taskId: string): Promise<number> {
 /** One reconcile pass over every task. Returns a short action log. */
 export async function reconcileAll(): Promise<string[]> {
   if (busy) return ["skip: busy"];
+  if (restores > 0) return ["skip: restore in progress"];
   busy = true;
   const log: string[] = [];
   let dirty = false;

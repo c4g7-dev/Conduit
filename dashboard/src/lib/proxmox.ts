@@ -187,6 +187,12 @@ export const api = {
     pmx<string>(`/nodes/${node}/lxc`, { method: "POST", params }),
   deleteLxc: (vmid: number, node = NODE) =>
     pmx<string>(`/nodes/${node}/lxc/${vmid}?purge=1&force=1`, { method: "DELETE" }),
+  /** Restore an LXC from a backup archive (overwrites the target vmid). */
+  restoreLxc: (vmid: number, archive: string, storage = "local-lvm", node = NODE) =>
+    pmx<string>(`/nodes/${node}/lxc`, {
+      method: "POST",
+      params: { vmid, ostemplate: archive, restore: 1, force: 1, storage },
+    }),
   lxcConfig: (vmid: number, node = NODE) =>
     pmx<Record<string, unknown>>(`/nodes/${node}/lxc/${vmid}/config`),
   setLxcConfig: (vmid: number, params: Record<string, string | number>, node = NODE) =>
