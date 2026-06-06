@@ -51,6 +51,8 @@ type Task = {
   desired: number;
   min: number;
   max: number;
+  autoscale: boolean;
+  playersPerInstance: number;
   cores: number;
   memory: number;
   disk: number;
@@ -293,27 +295,37 @@ export default function GroupsPage() {
                             <span className="font-semibold tabular-nums">{task.running}</span>
                             <span className="text-muted-foreground"> running · {task.live} live · want {task.desired}</span>
                           </div>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              size="icon"
+                          {task.autoscale ? (
+                            <Badge
                               variant="outline"
-                              className="h-7 w-7"
-                              disabled={busy || task.desired <= task.min}
-                              onClick={() => scale(task, -1)}
+                              className="border-orange-500/30 bg-orange-500/10 text-orange-400"
+                              title={`auto-scales on players · ~${task.playersPerInstance}/instance · range ${task.min}–${task.max || "∞"}`}
                             >
-                              <Minus className="h-3.5 w-3.5" />
-                            </Button>
-                            <span className="w-6 text-center text-sm font-medium tabular-nums">{task.desired}</span>
-                            <Button
-                              size="icon"
-                              variant="outline"
-                              className="h-7 w-7"
-                              disabled={busy || (task.max > 0 && task.desired >= task.max)}
-                              onClick={() => scale(task, +1)}
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
+                              <InfinityIcon className="mr-1 h-3 w-3" /> auto {task.min}–{task.max || "∞"}
+                            </Badge>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <Button
+                                size="icon"
+                                variant="outline"
+                                className="h-7 w-7"
+                                disabled={busy || task.desired <= task.min}
+                                onClick={() => scale(task, -1)}
+                              >
+                                <Minus className="h-3.5 w-3.5" />
+                              </Button>
+                              <span className="w-6 text-center text-sm font-medium tabular-nums">{task.desired}</span>
+                              <Button
+                                size="icon"
+                                variant="outline"
+                                className="h-7 w-7"
+                                disabled={busy || (task.max > 0 && task.desired >= task.max)}
+                                onClick={() => scale(task, +1)}
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          )}
                         </div>
 
                         {/* instances + IPs */}

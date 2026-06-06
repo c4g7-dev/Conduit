@@ -20,10 +20,12 @@ export type Task = {
   groupId: string;
   blueprintId: string;
   mode: "dynamic" | "static";
-  /** desired live instance count; controller drives reality to this */
+  /** desired live instance count; controller drives reality to this (manual mode) */
   desired: number;
   min: number;
-  max: number; // 0 = unbounded (dynamic)
+  max: number; // 0 = unbounded
+  /** when true the controller computes `desired` from live player load (lobbies) */
+  autoscale: boolean;
   playersPerInstance: number;
   cores: number;
   memory: number;
