@@ -6,6 +6,8 @@ import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
 import { NewGroupDialog } from "@/components/new-group-dialog";
 import { NewTaskDialog } from "@/components/new-task-dialog";
+import { EditGroupDialog } from "@/components/edit-group-dialog";
+import { EditTaskDialog } from "@/components/edit-task-dialog";
 import { MotdDialog } from "@/components/motd-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -236,6 +238,7 @@ export default function GroupsPage() {
                     frontCandidates={allTaskCandidates}
                     onCreated={refresh}
                   />
+                  <EditGroupDialog group={group} onSaved={refresh} />
                   <Button
                     size="icon"
                     variant="ghost"
@@ -288,6 +291,7 @@ export default function GroupsPage() {
                                 onSaved={refresh}
                               />
                             )}
+                            <EditTaskDialog task={task} onSaved={refresh} />
                             <Button
                               size="icon"
                               variant="ghost"

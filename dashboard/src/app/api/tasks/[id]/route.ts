@@ -17,14 +17,21 @@ export async function PATCH(
       const t = db.tasks.find((x) => x.id === id);
       if (!t) throw new Error("not found");
 
-      // scale: set desired directly or by delta, clamped to [min, max||∞]
+      // scale: set desired directly or by delta
       if (typeof body.desired === "number") t.desired = body.desired;
       if (typeof body.delta === "number") t.desired = t.desired + body.delta;
-      t.desired = Math.max(t.min, t.max > 0 ? Math.min(t.desired, t.max) : t.desired);
 
       if (typeof body.min === "number") t.min = body.min;
       if (typeof body.max === "number") t.max = body.max;
       if (Array.isArray(body.fronts)) t.fronts = body.fronts;
+
+      // resources: only affect newly provisioned instances (existing LXCs aren't resized)
+      if (typeof body.cores === "number") t.cores = body.cores;
+      if (typeof body.memory === "number") t.memory = body.memory;
+      if (typeof body.disk === "number") t.disk = body.disk;
+
+      // clamp desired into [min, max||∞] after any min/max change
+      t.desired = Math.max(t.min, t.max > 0 ? Math.min(t.desired, t.max) : t.desired);
       return t;
     });
 
