@@ -165,6 +165,11 @@ backend. Verified live: secrets matched, both `systemd` services active, SLP rep
 | GET/POST | `/api/backups` | storages + snapshots + jobs; trigger a vmid/pool backup |
 | POST/DELETE | `/api/backups/jobs`, `/api/backups/jobs/{id}` | per-group scheduled backup jobs |
 | POST | `/api/backups/restore` | restore a CT from a snapshot (controller paused during) |
+| GET/POST/DELETE | `/api/assets` | uploaded worlds/plugins store (node-backed) |
+| POST | `/api/tasks/{id}/motd` | set + apply a task's MOTD live (Paper § / Velocity MiniMessage) |
+| GET/POST | `/api/services/{vmid}/console` | live tmux console: capture output / send a command |
+| GET | `/api/services/{vmid}/files` | read-only file browser inside a service |
+| GET/POST | `/api/metrics/history` | time-series ring buffer for the dashboard graphs |
 
 `/api/metrics` is the CloudNet-style telemetry feed — per-instance `online/max`,
 player `sample` names, MOTD, version, latency, and a network total (counted at the edge).
@@ -222,4 +227,7 @@ or a password via `sshpass`). Set `CONDUIT_CONTROLLER=off` to run without the re
 
 Done recently: live SLP metrics · player-count autoscaling · PVE API-token + SSH-key
 auth (no password on the wire) · PBS backups (on-demand + per-group schedules +
-one-click restore) · game-ready world/plugin seeding with an in-dashboard seed editor.
+one-click restore + delete) · game-ready seeding (URL or uploaded asset) with an
+in-dashboard seed editor · custom templates + Hytale · per-service MOTD editor with
+live preview · live tmux console + file viewer per service · edit dialogs for groups
+& tasks · time-series graphs on the Overview.
