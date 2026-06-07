@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDB } from "@/lib/store";
-import { blueprint } from "@/lib/blueprints";
+import { blueprint, loadBlueprints } from "@/lib/blueprints";
 import { discoverInstances } from "@/lib/engine";
 import { pingMc } from "@/lib/mcping";
 
@@ -13,6 +13,7 @@ export const runtime = "nodejs";
  */
 export async function GET() {
   try {
+    await loadBlueprints();
     const db = await getDB();
     const instances = (await discoverInstances()).filter(
       (i) => i.status === "running" && i.ip,

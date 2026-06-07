@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
@@ -73,6 +73,11 @@ export default function BackupsPage() {
   // prefer a PBS datastore as the backup target over plain local dir storage
   const defaultStorage =
     storage || storages.find((s) => s.type === "pbs")?.storage || storages[0]?.storage || "";
+
+  // when there's only one group, pre-select it (the dropdown is then non-interactive)
+  useEffect(() => {
+    if (groups.length === 1 && !pool) setPool(groups[0].id);
+  }, [groups, pool]);
 
   async function backupNow(poolId: string) {
     if (!defaultStorage) return toast.error("no backup storage available");
@@ -222,7 +227,7 @@ export default function BackupsPage() {
           <div className="flex flex-wrap items-end gap-2">
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Group</label>
-              <Select value={pool} onValueChange={(v) => setPool(v ?? "")}>
+              <Select value={pool} onValueChange={(v) => setPool(v ?? "")} disabled={groups.length <= 1}>
                 <SelectTrigger className="w-48">
                   <SelectValue placeholder="Choose a group…" />
                 </SelectTrigger>

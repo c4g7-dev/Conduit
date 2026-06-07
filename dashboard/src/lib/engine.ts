@@ -10,7 +10,7 @@
  * Hand-made containers (e.g. CT100) are never read as instances nor destroyed.
  */
 import { api, lxcIp, waitTask, NODE } from "./proxmox";
-import { blueprint, type Blueprint } from "./blueprints";
+import { blueprint, loadBlueprints, type Blueprint } from "./blueprints";
 import { getDB, saveDB, getNetwork, type Task, type Group } from "./store";
 import {
   installPaper,
@@ -293,6 +293,7 @@ export async function reconcileAll(): Promise<string[]> {
   const log: string[] = [];
   let dirty = false;
   try {
+    await loadBlueprints(); // refresh custom templates so blueprint() sees them
     const db = await getDB();
     const all = await discoverInstances();
 

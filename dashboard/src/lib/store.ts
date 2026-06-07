@@ -5,7 +5,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Seed, Software } from "./blueprints";
+import type { Seed, Software, Blueprint } from "./blueprints";
 
 export type Group = {
   id: string; // kebab, also the Proxmox pool id
@@ -44,7 +44,13 @@ export type Task = {
 /** Network-wide settings shared by all instances (e.g. proxy↔backend secret). */
 export type Network = { forwardingSecret: string };
 
-export type DB = { groups: Group[]; tasks: Task[]; network?: Network };
+export type DB = {
+  groups: Group[];
+  tasks: Task[];
+  network?: Network;
+  /** user-created templates, merged with the built-in blueprints */
+  blueprints?: Blueprint[];
+};
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const FILE = path.join(DATA_DIR, "conduit.json");
