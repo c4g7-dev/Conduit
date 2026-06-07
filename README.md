@@ -98,7 +98,8 @@ never kicks a player. The live target is written back so the dashboard shows it.
   containers (e.g. CT100) are never read as instances nor destroyed.
 
 - Authenticate to the Proxmox API with a **revocable API token** (no password, no
-  CSRF) — see `PROXMOX_TOKEN_ID`/`PROXMOX_TOKEN_SECRET`.
+  CSRF) and provision over SSH with a **dedicated key** (`PROXMOX_SSH_KEY`) — no
+  password on the wire at all when both are set.
 
 - Back up groups to **PBS** on demand / on a schedule, list snapshots, and **restore**
   any snapshot from the UI.
@@ -108,8 +109,6 @@ never kicks a player. The live target is written back so the dashboard shows it.
 
 **Can't do yet**
 - Multi-node placement strategy / live-migration from the UI (single node so far).
-- SSH provisioning (`pct exec`) still uses the root password; should move to a
-  dedicated SSH key. (The HTTP API already uses a scoped token.)
 
 ---
 
@@ -196,21 +195,20 @@ npm install
 npm run dev                  # or: npm run build && npm run start
 ```
 
-Requirements: a Proxmox VE node with a Debian-12 LXC template, a bridge with DHCP,
-and `sshpass` on the host running the dashboard (used for `pct exec` provisioning).
-Set `CONDUIT_CONTROLLER=off` to run the dashboard without the reconcile loop.
+Requirements: a Proxmox VE node with a Debian-12 LXC template, a bridge with DHCP, and
+SSH access to the node for `pct exec` provisioning (a dedicated key via `PROXMOX_SSH_KEY`,
+or a password via `sshpass`). Set `CONDUIT_CONTROLLER=off` to run without the reconcile loop.
 
-> ⚠️ The dashboard holds Proxmox credentials server-side and SSHes to the node as root
-> to provision containers. Run it on a trusted host on the management network. Replace
-> the root password with a scoped PVE API token + SSH key before any real deployment.
+> ⚠️ The dashboard talks to the node server-side. Use a scoped **PVE API token**
+> (`PROXMOX_TOKEN_ID`/`SECRET`) and a dedicated **SSH key** (`PROXMOX_SSH_KEY`) so no
+> password is on the wire, and run it on a trusted host on the management network.
 
 ---
 
 ## Roadmap
 
 - Multi-node placement + live-migration controls.
-- Dedicated SSH key for `pct exec` provisioning (API already uses a token).
 
-Done recently: live SLP metrics · player-count autoscaling · PVE API-token auth ·
-PBS backups (on-demand + per-group schedules + one-click restore) · game-ready
-world/plugin seeding with an in-dashboard seed editor.
+Done recently: live SLP metrics · player-count autoscaling · PVE API-token + SSH-key
+auth (no password on the wire) · PBS backups (on-demand + per-group schedules +
+one-click restore) · game-ready world/plugin seeding with an in-dashboard seed editor.
