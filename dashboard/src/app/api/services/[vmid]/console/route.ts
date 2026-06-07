@@ -12,6 +12,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { nodeExec } from "@/lib/provision";
+import { vmidHost } from "@/lib/proxmox";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -33,6 +34,7 @@ export async function GET(
       const lines = await nodeExec(
         `pct exec ${id} -- tmux -L mc capture-pane -p -t mc -S -200`,
         20_000,
+        await vmidHost(id),
       );
       return NextResponse.json({ lines });
     } catch {
@@ -66,6 +68,7 @@ export async function POST(
     await nodeExec(
       `pct exec ${id} -- bash -c 'tmux -L mc send-keys -t mc "$(echo ${b64} | base64 -d)" Enter'`,
       20_000,
+      await vmidHost(id),
     );
     return NextResponse.json({ ok: true });
   } catch (e) {

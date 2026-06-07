@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "node:path";
 import { nodeExec } from "@/lib/provision";
+import { vmidHost } from "@/lib/proxmox";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -69,16 +70,19 @@ export async function GET(
     }
     const wantFile = req.nextUrl.searchParams.get("file") === "1";
     const b64Path = Buffer.from(target, "utf8").toString("base64");
+    const host = await vmidHost(id);
 
     if (wantFile) {
       // head -c caps the read; mark truncation when the file is larger.
       const content = await nodeExec(
         `pct exec ${id} -- bash -c 'p="$(echo ${b64Path} | base64 -d)"; head -c ${MAX_BYTES} "$p"'`,
         30_000,
+        host,
       );
       const sizeRaw = await nodeExec(
         `pct exec ${id} -- bash -c 'p="$(echo ${b64Path} | base64 -d)"; stat -c %s "$p" 2>/dev/null || echo 0'`,
         15_000,
+        host,
       ).catch(() => "0");
       const size = Number(sizeRaw.trim()) || content.length;
       return NextResponse.json({
@@ -92,6 +96,7 @@ export async function GET(
     const out = await nodeExec(
       `pct exec ${id} -- bash -c 'p="$(echo ${b64Path} | base64 -d)"; ls -la --time-style=+%s "$p"'`,
       20_000,
+      host,
     );
     return NextResponse.json({ path: target, entries: parseLs(out) });
   } catch (e) {

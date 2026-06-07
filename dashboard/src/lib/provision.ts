@@ -51,8 +51,12 @@ async function resolveBuild(project: "paper" | "velocity", version: string): Pro
   return { javaMajor, jarUrl };
 }
 
-/** Run a command on the Proxmox node over SSH (key auth if configured, else password). */
-function ssh(remote: string, timeoutMs = 360_000): Promise<string> {
+/**
+ * Run a command on a Proxmox node over SSH (key auth if configured, else password).
+ * `host` targets a specific node (its IP) for multi-node clusters; defaults to the
+ * configured node. The dashboard host must be able to reach every node's IP.
+ */
+function ssh(remote: string, timeoutMs = 360_000, host = SSH_HOST): Promise<string> {
   return new Promise((resolve, reject) => {
     const sshOpts = [
       "-o", "StrictHostKeyChecking=no",
@@ -64,10 +68,10 @@ function ssh(remote: string, timeoutMs = 360_000): Promise<string> {
     let args: string[];
     if (SSH_KEY) {
       cmd = "ssh";
-      args = ["-i", SSH_KEY, "-o", "BatchMode=yes", ...sshOpts, `${SSH_USER}@${SSH_HOST}`, remote];
+      args = ["-i", SSH_KEY, "-o", "BatchMode=yes", ...sshOpts, `${SSH_USER}@${host}`, remote];
     } else {
       cmd = "sshpass";
-      args = ["-p", SSH_PASS, "ssh", ...sshOpts, `${SSH_USER}@${SSH_HOST}`, remote];
+      args = ["-p", SSH_PASS, "ssh", ...sshOpts, `${SSH_USER}@${host}`, remote];
     }
     const p = spawn(cmd, args);
     let out = "";
@@ -84,21 +88,21 @@ function ssh(remote: string, timeoutMs = 360_000): Promise<string> {
   });
 }
 
-/** Run a command directly on the Proxmox node (as root, e.g. `pct set …`). */
-export async function nodeExec(cmd: string, timeoutMs = 60_000): Promise<string> {
-  return ssh(cmd, timeoutMs);
+/** Run a command directly on a Proxmox node (as root, e.g. `pct set …`). */
+export async function nodeExec(cmd: string, timeoutMs = 60_000, host?: string): Promise<string> {
+  return ssh(cmd, timeoutMs, host ?? SSH_HOST);
 }
 
-/** Run a bash script inside an LXC (base64-piped to dodge quoting). */
-export async function ctExec(vmid: number, script: string, timeoutMs = 360_000): Promise<string> {
+/** Run a bash script inside an LXC (base64-piped to dodge quoting), on the CT's node. */
+export async function ctExec(vmid: number, script: string, timeoutMs = 360_000, host?: string): Promise<string> {
   const b64 = Buffer.from(script, "utf8").toString("base64");
-  return ssh(`pct exec ${vmid} -- bash -c 'echo ${b64} | base64 -d | bash'`, timeoutMs);
+  return ssh(`pct exec ${vmid} -- bash -c 'echo ${b64} | base64 -d | bash'`, timeoutMs, host ?? SSH_HOST);
 }
 
 /** Write a file inside an LXC. */
-export async function ctWrite(vmid: number, path: string, content: string): Promise<void> {
+export async function ctWrite(vmid: number, path: string, content: string, host?: string): Promise<void> {
   const b64 = Buffer.from(content, "utf8").toString("base64");
-  await ctExec(vmid, `mkdir -p "$(dirname '${path}')"; echo ${b64} | base64 -d > '${path}'`, 60_000);
+  await ctExec(vmid, `mkdir -p "$(dirname '${path}')"; echo ${b64} | base64 -d > '${path}'`, 60_000, host);
 }
 
 const heap = (mem: number, reserve: number, floor: number) =>
@@ -234,9 +238,10 @@ export async function installPaper(
   secret: string,
   seed: Seed = {},
   version = "1.20.4",
+  host?: string,
 ): Promise<void> {
   const build = await resolveBuild("paper", version);
-  await ctExec(vmid, paperScript(task, secret, seed, build));
+  await ctExec(vmid, paperScript(task, secret, seed, build), 360_000, host);
 }
 
 /* ---- Velocity (proxy) ---------------------------------------------------- */
@@ -273,9 +278,10 @@ export async function installVelocity(
   task: Task,
   secret: string,
   version = "3.3.0-SNAPSHOT",
+  host?: string,
 ): Promise<void> {
   const build = await resolveBuild("velocity", version);
-  await ctExec(vmid, velocityScript(task, secret, build));
+  await ctExec(vmid, velocityScript(task, secret, build), 360_000, host);
 }
 
 /** Default MOTD for a task when none is set. */
@@ -303,7 +309,7 @@ function miniMessage(s: string): string {
  * Update a running server's MOTD without a full reinstall, then restart it.
  * Paper → server.properties `motd=`; Velocity → velocity.toml `motd =`.
  */
-export async function setMotd(vmid: number, role: string, motd: string): Promise<void> {
+export async function setMotd(vmid: number, role: string, motd: string, host?: string): Promise<void> {
   // Files want a LITERAL \n for line breaks; but GNU sed turns \n in its replacement
   // into a real newline, so we feed sed \\n (which it emits as the literal \n we want).
   const m = colorize(motd).replace(/\n/g, "\\\\n");
@@ -313,6 +319,7 @@ export async function setMotd(vmid: number, role: string, motd: string): Promise
       vmid,
       `sed -i 's#^motd = .*#motd = "${v}"#' /opt/mc/velocity.toml && systemctl restart mc`,
       60_000,
+      host,
     );
   } else {
     const p = m.replace(/#/g, "\\#");
@@ -320,6 +327,7 @@ export async function setMotd(vmid: number, role: string, motd: string): Promise
       vmid,
       `sed -i 's#^motd=.*#motd=${p}#' /opt/mc/server.properties && systemctl restart mc`,
       60_000,
+      host,
     );
   }
 }
@@ -363,14 +371,15 @@ export async function syncVelocity(
   vmid: number,
   task: Task,
   servers: ProxyServer[],
+  host?: string,
 ): Promise<boolean> {
   const sig = servers
     .map((s) => `${s.name}=${s.ip}:${s.port}`)
     .sort()
     .join(",");
   if (lastSig.get(vmid) === sig) return false;
-  await ctWrite(vmid, "/opt/mc/velocity.toml", velocityToml(task, servers));
-  await ctExec(vmid, "systemctl restart mc", 60_000);
+  await ctWrite(vmid, "/opt/mc/velocity.toml", velocityToml(task, servers), host);
+  await ctExec(vmid, "systemctl restart mc", 60_000, host);
   lastSig.set(vmid, sig);
   return true;
 }
