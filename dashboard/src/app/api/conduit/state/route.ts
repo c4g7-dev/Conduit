@@ -22,6 +22,8 @@ export async function GET() {
             role: bp?.role ?? "generic",
             blueprintName: bp?.name ?? t.blueprintId,
             port: bp?.port ?? 25565,
+            softwareKind: bp?.software.kind ?? "generic",
+            version: t.software?.version ?? bp?.software.version ?? "",
             instances: insts,
             live: insts.length,
             running: insts.filter((i) => i.status === "running").length,

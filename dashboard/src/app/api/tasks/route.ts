@@ -43,6 +43,10 @@ export async function POST(req: NextRequest) {
       persistent: body.persistent ?? bp.persistent,
       fronts: Array.isArray(body.fronts) ? body.fronts : [],
       seed: body.seed && typeof body.seed === "object" ? body.seed : undefined,
+      software:
+        body.software && body.software.version
+          ? { kind: bp.software.kind, version: String(body.software.version) }
+          : undefined,
       createdAt: Date.now(),
     };
 

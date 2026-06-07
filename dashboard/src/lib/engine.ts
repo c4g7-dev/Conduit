@@ -17,6 +17,7 @@ import {
   installVelocity,
   syncVelocity,
   forgetVelocity,
+  nodeExec,
   type ProxyServer,
 } from "./provision";
 import { pingMc } from "./mcping";
@@ -25,6 +26,8 @@ export const CONDUIT_TAG = "conduit";
 export const READY_TAG = "ready";
 const VMID_FROM = 200;
 const VMID_TO = 999;
+// Host dir bind-mounted read-only into every instance at /assets (shared asset store).
+const ASSETS_DIR = process.env.CONDUIT_ASSETS_DIR ?? "";
 
 export type Instance = {
   vmid: number;
@@ -79,8 +82,9 @@ export function endRestore() {
 /** Install the role's MC software inside a running instance, then tag it ready. */
 async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
   const net = await getNetwork();
+  const version = task.software?.version ?? bp.software.version;
   if (bp.role === "proxy") {
-    await installVelocity(inst.vmid, task, net.forwardingSecret);
+    await installVelocity(inst.vmid, task, net.forwardingSecret, version);
   } else if (bp.role === "lobby" || bp.role === "smp") {
     // task seed overrides/extends the blueprint's default seed
     const seed = {
@@ -89,7 +93,7 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
       properties: { ...bp.seed?.properties, ...task.seed?.properties },
       plugins: [...(bp.seed?.plugins ?? []), ...(task.seed?.plugins ?? [])],
     };
-    await installPaper(inst.vmid, task, net.forwardingSecret, seed);
+    await installPaper(inst.vmid, task, net.forwardingSecret, seed, version);
   } else {
     return; // db/generic: container lifecycle only, no MC software (yet)
   }
@@ -157,23 +161,23 @@ export async function discoverInstances(): Promise<Instance[]> {
       parseTags(r.tags).includes(CONDUIT_TAG),
   );
 
-  const out: Instance[] = [];
-  for (const c of cts) {
-    const tags = parseTags(c.tags);
-    const tTag = tags.find((t) => t.startsWith("t-"));
-    const taskId = tTag ? tTag.slice(2) : "";
-    out.push({
-      vmid: c.vmid!,
-      name: c.name ?? `ct-${c.vmid}`,
-      node: c.node ?? NODE,
-      status: c.status ?? "unknown",
-      taskId,
-      ip: c.status === "running" ? await lxcIp(c.vmid!, c.node ?? NODE) : null,
-      tags: c.tags ?? "",
-      ready: tags.includes(READY_TAG),
-    });
-  }
-  return out;
+  // resolve IPs in parallel — sequential awaits here were the main page-load cost
+  return Promise.all(
+    cts.map(async (c) => {
+      const tags = parseTags(c.tags);
+      const tTag = tags.find((t) => t.startsWith("t-"));
+      return {
+        vmid: c.vmid!,
+        name: c.name ?? `ct-${c.vmid}`,
+        node: c.node ?? NODE,
+        status: c.status ?? "unknown",
+        taskId: tTag ? tTag.slice(2) : "",
+        ip: c.status === "running" ? await lxcIp(c.vmid!, c.node ?? NODE) : null,
+        tags: c.tags ?? "",
+        ready: tags.includes(READY_TAG),
+      };
+    }),
+  );
 }
 
 export function instancesOf(all: Instance[], taskId: string): Instance[] {
@@ -227,7 +231,7 @@ async function provision(task: Task, group: Group): Promise<number> {
   noteCreate(task.id, vmid);
 
   const tags = [CONDUIT_TAG, taskTag(task.id), groupTag(group.id), bp.role].join(";");
-  const upid = await api.createLxc({
+  const params: Record<string, string | number> = {
     vmid,
     hostname: `${task.id}-${vmid}`,
     ostemplate: bp.base,
@@ -246,8 +250,19 @@ async function provision(task: Task, group: Group): Promise<number> {
     pool: group.id,
     start: 1,
     description: `Conduit ${bp.name} · task=${task.id} group=${group.id}\nprovision: ${bp.provision}`,
-  });
+  };
+
+  const upid = await api.createLxc(params);
   await waitTask(upid).catch(() => {});
+
+  // Shared read-only asset store (Hytale-style: many servers share one /assets copy).
+  // Bind mounts are rejected for API tokens (root@pam-only), so set it over SSH as root
+  // and reboot to apply. MC blueprints don't opt in — a Paper server owns its world.
+  if (ASSETS_DIR && bp.sharedAssets) {
+    await nodeExec(
+      `pct set ${vmid} -mp0 ${ASSETS_DIR},mp=/assets,ro=1 && pct reboot ${vmid}`,
+    ).catch((e) => console.error(`[conduitd] assets mount ${vmid} failed:`, String(e)));
+  }
   return vmid;
 }
 

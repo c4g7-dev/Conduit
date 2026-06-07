@@ -35,6 +35,7 @@ type Blueprint = {
   disk: number;
   port: number;
   description: string;
+  software: { kind: string; version: string };
 };
 
 type FrontCandidate = { id: string; name: string; role: string };
@@ -60,10 +61,27 @@ export function NewTaskDialog({
   const [worldUrl, setWorldUrl] = useState("");
   const [pluginsText, setPluginsText] = useState("");
   const [propsText, setPropsText] = useState("");
+  const [version, setVersion] = useState("");
+  const [versions, setVersions] = useState<string[]>([]);
 
   const bp = useMemo(() => blueprints.find((b) => b.id === bpId), [blueprints, bpId]);
   const isProxy = bp?.role === "proxy";
   const isPaper = bp?.role === "lobby" || bp?.role === "smp";
+  const kind = bp?.software?.kind;
+  const versioned = kind === "paper" || kind === "velocity";
+
+  // when the blueprint changes, default the version and fetch selectable ones
+  useEffect(() => {
+    if (!bp) return;
+    setVersion(bp.software.version);
+    setVersions([]);
+    if (bp.software.kind === "paper" || bp.software.kind === "velocity") {
+      fetch(`/api/versions?kind=${bp.software.kind}`)
+        .then((r) => r.json())
+        .then((j) => setVersions(Array.isArray(j.versions) ? j.versions : []))
+        .catch(() => setVersions([]));
+    }
+  }, [bp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function buildSeed() {
     const plugins = pluginsText.split(/\n+/).map((s) => s.trim()).filter(Boolean);
@@ -98,6 +116,7 @@ export function NewTaskDialog({
           desired,
           fronts: isProxy ? fronts : [],
           seed: isProxy ? undefined : buildSeed(),
+          software: versioned && version ? { version } : undefined,
         }),
       });
       const json = await res.json();
@@ -111,6 +130,8 @@ export function NewTaskDialog({
       setPluginsText("");
       setPropsText("");
       setShowSeed(false);
+      setVersion("");
+      setVersions([]);
       onCreated();
     } catch (e) {
       toast.error(`Could not create task: ${String(e)}`);
@@ -173,6 +194,36 @@ export function NewTaskDialog({
               </div>
             )}
           </div>
+
+          {bp && (
+            <div className="space-y-2">
+              <Label>{kind === "velocity" ? "Velocity version" : kind === "paper" ? "Minecraft version" : "Version"}</Label>
+              {versioned ? (
+                <Select value={version} onValueChange={(v) => setVersion(v ?? "")}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Loading versions…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(versions.length ? versions : [bp.software.version]).map((v) => (
+                      <SelectItem key={v} value={v}>
+                        {v}
+                        {v === bp.software.version ? " · default" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {bp.software.kind} · {bp.software.version}
+                </p>
+              )}
+              {kind === "paper" && (
+                <p className="text-[11px] text-muted-foreground">
+                  Java is auto-selected (17 for ≤1.20.4, 21 for 1.20.5+).
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
