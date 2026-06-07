@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
+import { Sparkline } from "@/components/sparkline";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +55,9 @@ type Metrics = {
   totals: { players: number; capacity: number; backends: number; proxies: number };
 };
 
+type Sample = { t: number; players: number; cpu: number; mem: number };
+type History = { samples: Sample[] };
+
 function Stat({
   icon: Icon,
   label,
@@ -90,13 +95,73 @@ function Stat({
   );
 }
 
+function ChartCard({
+  label,
+  value,
+  series,
+  color,
+  max,
+}: {
+  label: string;
+  value: string;
+  series: number[];
+  color: string;
+  max?: number;
+}) {
+  return (
+    <Card>
+      <CardContent className="space-y-3 py-1">
+        <div className="flex items-baseline justify-between">
+          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {label}
+          </div>
+          <div className="text-lg font-semibold tabular-nums leading-none">{value}</div>
+        </div>
+        {series.length < 2 ? (
+          <div className="flex h-12 items-center text-xs text-muted-foreground">
+            Collecting data…
+          </div>
+        ) : (
+          <Sparkline data={series} color={color} max={max} height={48} label={label} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function OverviewPage() {
   const { data, error, loading, refresh } = usePoll<Overview>("/api/overview", 5000);
   const { data: metrics } = usePoll<Metrics & MetricsFull>("/api/metrics", 5000);
   const { data: state } = usePoll<ConduitState>("/api/conduit/state", 5000);
+  const { data: history } = usePoll<History>("/api/metrics/history", 5000);
   const t = data?.totals;
   const m = metrics?.totals;
   const first = loading && !data;
+
+  // Aggregate node CPU% / Memory% from the first node (0..1).
+  const node = data?.nodes[0];
+  const nodeCpu = node?.cpu ?? 0;
+  const nodeMem = node && node.maxmem > 0 ? node.mem / node.maxmem : 0;
+  const players = m?.players ?? 0;
+
+  // Client-push: feed the history ring buffer whenever fresh data lands.
+  const lastPush = useRef<string>("");
+  useEffect(() => {
+    if (!data || !metrics) return;
+    const key = `${players}|${nodeCpu}|${nodeMem}`;
+    if (key === lastPush.current) return;
+    lastPush.current = key;
+    fetch("/api/metrics/history", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ players, cpu: nodeCpu, mem: nodeMem }),
+    }).catch(() => {});
+  }, [data, metrics, players, nodeCpu, nodeMem]);
+
+  const samples = history?.samples ?? [];
+  const playerSeries = samples.map((s) => s.players);
+  const cpuSeries = samples.map((s) => s.cpu * 100);
+  const memSeries = samples.map((s) => s.mem * 100);
 
   const playerOf = new Map((metrics?.instances ?? []).map((r) => [r.vmid, r]));
   const services = (state?.groups ?? []).flatMap((g) =>
@@ -159,6 +224,29 @@ export default function OverviewPage() {
           value={m ? `${m.players}` : "0"}
           sub={m ? `of ${m.capacity} slots · live via SLP` : "live via SLP"}
           loading={first}
+        />
+      </div>
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-3">
+        <ChartCard
+          label="Players over time"
+          value={`${players}`}
+          series={playerSeries}
+          color="var(--color-emerald-400, #34d399)"
+        />
+        <ChartCard
+          label="Node CPU"
+          value={`${Math.round(nodeCpu * 100)}%`}
+          series={cpuSeries}
+          color="var(--color-orange-400, #fb923c)"
+          max={100}
+        />
+        <ChartCard
+          label="Node Memory"
+          value={`${Math.round(nodeMem * 100)}%`}
+          series={memSeries}
+          color="var(--color-sky-400, #38bdf8)"
+          max={100}
         />
       </div>
 
