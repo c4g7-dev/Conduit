@@ -4,10 +4,28 @@ import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { bytes, pct, uptime } from "@/lib/format";
-import { Boxes, Cpu, MemoryStick, Users, Server, AlertCircle } from "lucide-react";
+import {
+  Boxes, Cpu, MemoryStick, Users, Server, AlertCircle, Loader2, CheckCircle2, Network,
+} from "lucide-react";
+
+type Instance = { vmid: number; name: string; node: string; status: string; ip: string | null; ready: boolean };
+type Task = { id: string; name: string; role: string; softwareKind: string; version: string; instances: Instance[] };
+type Group = { id: string; name: string; tasks: Task[] };
+type ConduitState = { groups: Group[] };
+type MetricRow = { vmid: number; online: number; max: number; reachable: boolean };
+type MetricsFull = { instances: MetricRow[] };
 
 type Overview = {
   nodes: {
@@ -74,10 +92,26 @@ function Stat({
 
 export default function OverviewPage() {
   const { data, error, loading, refresh } = usePoll<Overview>("/api/overview", 5000);
-  const { data: metrics } = usePoll<Metrics>("/api/metrics", 5000);
+  const { data: metrics } = usePoll<Metrics & MetricsFull>("/api/metrics", 5000);
+  const { data: state } = usePoll<ConduitState>("/api/conduit/state", 5000);
   const t = data?.totals;
   const m = metrics?.totals;
   const first = loading && !data;
+
+  const playerOf = new Map((metrics?.instances ?? []).map((r) => [r.vmid, r]));
+  const services = (state?.groups ?? []).flatMap((g) =>
+    g.tasks.flatMap((task) =>
+      task.instances.map((i) => ({
+        ...i,
+        group: g.name,
+        task: task.name,
+        role: task.role,
+        software: `${task.softwareKind} ${task.version}`,
+        port: 25565,
+        m: playerOf.get(i.vmid),
+      })),
+    ),
+  );
 
   return (
     <>
@@ -127,6 +161,80 @@ export default function OverviewPage() {
           loading={first}
         />
       </div>
+
+      <h2 className="mb-3 mt-8 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <Network className="h-4 w-4" /> Services
+        {services.length > 0 && (
+          <Badge variant="secondary" className="text-[10px]">{services.length}</Badge>
+        )}
+      </h2>
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Service</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Software</TableHead>
+                <TableHead>Group</TableHead>
+                <TableHead>Node</TableHead>
+                <TableHead>Address</TableHead>
+                <TableHead className="text-right">Players</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {services.map((s) => {
+                const running = s.status === "running";
+                return (
+                  <TableRow key={s.vmid}>
+                    <TableCell className="font-medium">
+                      {s.name}
+                      <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">#{s.vmid}</span>
+                    </TableCell>
+                    <TableCell>
+                      {running && !s.ready ? (
+                        <span className="flex items-center gap-1 text-xs text-amber-400">
+                          <Loader2 className="h-3 w-3 animate-spin" /> installing
+                        </span>
+                      ) : running && s.ready ? (
+                        <span className="flex items-center gap-1 text-xs text-emerald-400">
+                          <CheckCircle2 className="h-3 w-3" /> ready
+                        </span>
+                      ) : (
+                        <StatusBadge status={s.status} />
+                      )}
+                    </TableCell>
+                    <TableCell><Badge variant="secondary" className="text-[10px]">{s.role}</Badge></TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{s.software}</TableCell>
+                    <TableCell className="text-sm">{s.group}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{s.node}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {s.ip ? `${s.ip}:${s.port}` : "…dhcp"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-sm">
+                      {s.m?.reachable ? `${s.m.online}/${s.m.max}` : "—"}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {!state &&
+                Array.from({ length: 3 }).map((_, i) => (
+                  <TableRow key={`sk-${i}`}>
+                    <TableCell colSpan={8}><Skeleton className="h-6 w-full" /></TableCell>
+                  </TableRow>
+                ))}
+              {state && services.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                    No services running. Create a group and a task to deploy one.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
 
       <h2 className="mb-3 mt-8 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         Nodes
