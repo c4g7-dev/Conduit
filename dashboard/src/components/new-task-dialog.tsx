@@ -63,6 +63,11 @@ export function NewTaskDialog({
   const [propsText, setPropsText] = useState("");
   const [version, setVersion] = useState("");
   const [versions, setVersions] = useState<string[]>([]);
+  const [assets, setAssets] = useState<{ kind: string; name: string; ref: string }[]>([]);
+
+  useEffect(() => {
+    fetch("/api/assets").then((r) => r.json()).then((j) => setAssets(j.assets ?? [])).catch(() => {});
+  }, []);
 
   const bp = useMemo(() => blueprints.find((b) => b.id === bpId), [blueprints, bpId]);
   const isProxy = bp?.role === "proxy";
@@ -281,8 +286,29 @@ export function NewTaskDialog({
               </button>
               {showSeed && (
                 <div className="space-y-3 rounded-md border border-border/60 p-3">
+                  {assets.some((a) => a.kind === "worlds" || a.kind === "plugins") && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Use an uploaded asset</Label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {assets.filter((a) => a.kind === "worlds").map((a) => (
+                          <button key={a.ref} type="button" onClick={() => setWorldUrl(a.ref)}
+                            className={`rounded border px-2 py-0.5 text-[11px] ${worldUrl === a.ref ? "border-orange-500/50 bg-orange-500/15 text-orange-300" : "border-border text-muted-foreground hover:bg-accent"}`}>
+                            🌍 {a.name}
+                          </button>
+                        ))}
+                        {assets.filter((a) => a.kind === "plugins").map((a) => (
+                          <button key={a.ref} type="button"
+                            onClick={() => setPluginsText((t) => (t ? t + "\n" : "") + a.ref)}
+                            className="rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent">
+                            🔌 {a.name}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-muted-foreground">Uploaded under Templates → Assets. Pushed into the server at deploy.</p>
+                    </div>
+                  )}
                   <div className="space-y-1.5">
-                    <Label htmlFor="seed-world" className="text-xs">World tarball URL</Label>
+                    <Label htmlFor="seed-world" className="text-xs">World (URL or uploaded asset)</Label>
                     <Input
                       id="seed-world"
                       value={worldUrl}

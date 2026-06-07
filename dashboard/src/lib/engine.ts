@@ -10,7 +10,7 @@
  * Hand-made containers (e.g. CT100) are never read as instances nor destroyed.
  */
 import { api, lxcIp, waitTask, NODE } from "./proxmox";
-import { blueprint, loadBlueprints, type Blueprint } from "./blueprints";
+import { blueprint, loadBlueprints, type Blueprint, type Seed } from "./blueprints";
 import { getDB, saveDB, getNetwork, type Task, type Group } from "./store";
 import {
   installPaper,
@@ -21,6 +21,7 @@ import {
   type ProxyServer,
 } from "./provision";
 import { pingMc } from "./mcping";
+import { assetNodePath } from "./assets";
 
 export const CONDUIT_TAG = "conduit";
 export const READY_TAG = "ready";
@@ -87,18 +88,43 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
     await installVelocity(inst.vmid, task, net.forwardingSecret, version);
   } else if (bp.role === "lobby" || bp.role === "smp") {
     // task seed overrides/extends the blueprint's default seed
-    const seed = {
+    const merged = {
       ...bp.seed,
       ...task.seed,
       properties: { ...bp.seed?.properties, ...task.seed?.properties },
       plugins: [...(bp.seed?.plugins ?? []), ...(task.seed?.plugins ?? [])],
     };
+    // uploaded assets (conduit-asset: refs) → pct push into the CT, rewrite to local path
+    const seed = await resolveSeedAssets(inst, merged);
     await installPaper(inst.vmid, task, net.forwardingSecret, seed, version);
   } else {
     return; // db/generic: container lifecycle only, no MC software (yet)
   }
   const tags = inst.tags ? `${inst.tags};${READY_TAG}` : READY_TAG;
   await api.setLxcConfig(inst.vmid, { tags }, inst.node);
+}
+
+/**
+ * Push any `conduit-asset:` seed references into the container (via `pct push` on the
+ * node) and rewrite them to the in-container path, so seedShell can cp/extract them.
+ * Lets uploaded worlds/plugins reach MC containers without the read-only /assets mount.
+ */
+async function resolveSeedAssets(inst: Instance, seed: Seed): Promise<Seed> {
+  const pushOne = async (ref: string): Promise<string> => {
+    const nodePath = assetNodePath(ref);
+    if (!nodePath) return ref; // a plain URL or local path — leave as-is
+    const base = nodePath.split("/").pop()!;
+    const dest = `/opt/conduit-seed/${base}`;
+    await nodeExec(
+      `pct exec ${inst.vmid} -- mkdir -p /opt/conduit-seed && pct push ${inst.vmid} '${nodePath}' '${dest}'`,
+    );
+    return dest;
+  };
+  const out: Seed = { ...seed };
+  if (seed.worldUrl) out.worldUrl = await pushOne(seed.worldUrl);
+  if (seed.icon) out.icon = await pushOne(seed.icon);
+  if (seed.plugins?.length) out.plugins = await Promise.all(seed.plugins.map(pushOne));
+  return out;
 }
 
 /** Kick background software installs for any running, un-provisioned instance. */
