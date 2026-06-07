@@ -104,15 +104,31 @@ export async function ctWrite(vmid: number, path: string, content: string): Prom
 const heap = (mem: number, reserve: number, floor: number) =>
   Math.max(floor, mem - reserve);
 
+/**
+ * systemd unit that runs the server inside a detached tmux session named `mc`
+ * (on its own socket, `-L mc`), so Conduit can drive the in-game console:
+ *   - send input:  tmux -L mc send-keys -t mc '<cmd>' Enter
+ *   - read output: tmux -L mc capture-pane -p -t mc -S -200
+ *
+ * `Type=forking`: `tmux new-session -d` daemonises and exits, so systemd tracks
+ * the forked tmux server. ExecStop sends the server's own `stop` command into the
+ * session for a graceful shutdown (Paper & Velocity both accept `stop`); a fixed
+ * `-x 220 -y 50` pane keeps capture-pane output width stable. Restart=always
+ * still recovers from crashes.
+ *
+ * NOTE: the exact tmux/systemd incantation is to be live-verified during
+ * integration — this is the clean, plausible baseline.
+ */
 const sysdUnit = (desc: string, exec: string) => `[Unit]
 Description=${desc}
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=forking
 WorkingDirectory=/opt/mc
-ExecStart=${exec}
+ExecStart=/usr/bin/tmux -L mc new-session -d -s mc -x 220 -y 50 '${exec}'
+ExecStop=/usr/bin/tmux -L mc send-keys -t mc 'stop' Enter
 Restart=always
 RestartSec=5
 SuccessExitStatus=0 143
@@ -189,6 +205,7 @@ mkdir -p "$MCDIR/config"
 if [ -f "$MCDIR/.conduit-ready" ]; then echo "already-provisioned"; exit 0; fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
+apt-get install -y -qq tmux >/dev/null
 ${javaInstall(build.javaMajor)}
 echo "paper jar (java ${build.javaMajor})"
 curl -fsSL -o "$MCDIR/server.jar" '${build.jarUrl}'
@@ -236,6 +253,7 @@ mkdir -p "$MCDIR"
 if [ -f "$MCDIR/.conduit-ready" ]; then echo "already-provisioned"; exit 0; fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
+apt-get install -y -qq tmux >/dev/null
 ${javaInstall(build.javaMajor)}
 echo "velocity jar (java ${build.javaMajor})"
 curl -fsSL -o "$MCDIR/velocity.jar" '${build.jarUrl}'
