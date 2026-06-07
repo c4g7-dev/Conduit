@@ -16,24 +16,31 @@ import type { Seed } from "./blueprints";
 const SSH_HOST = process.env.PROXMOX_SSH_HOST ?? process.env.PROXMOX_HOST ?? "10.27.27.126";
 const SSH_USER = process.env.PROXMOX_SSH_USER ?? "root";
 const SSH_PASS = process.env.PROXMOX_SSH_PASS ?? process.env.PROXMOX_PASS ?? "";
+// Prefer key auth (no password on the wire). Falls back to sshpass+password.
+const SSH_KEY = process.env.PROXMOX_SSH_KEY ?? "";
 
 const PAPER_VER = "1.20.4";
 const VELOCITY_VER = "3.3.0-SNAPSHOT";
 
-/** Run a command on the Proxmox node over SSH. */
+/** Run a command on the Proxmox node over SSH (key auth if configured, else password). */
 function ssh(remote: string, timeoutMs = 360_000): Promise<string> {
   return new Promise((resolve, reject) => {
-    const args = [
-      "-p", SSH_PASS,
-      "ssh",
+    const sshOpts = [
       "-o", "StrictHostKeyChecking=no",
       "-o", "UserKnownHostsFile=/dev/null",
       "-o", "ConnectTimeout=10",
       "-o", "LogLevel=ERROR",
-      `${SSH_USER}@${SSH_HOST}`,
-      remote,
     ];
-    const p = spawn("sshpass", args);
+    let cmd: string;
+    let args: string[];
+    if (SSH_KEY) {
+      cmd = "ssh";
+      args = ["-i", SSH_KEY, "-o", "BatchMode=yes", ...sshOpts, `${SSH_USER}@${SSH_HOST}`, remote];
+    } else {
+      cmd = "sshpass";
+      args = ["-p", SSH_PASS, "ssh", ...sshOpts, `${SSH_USER}@${SSH_HOST}`, remote];
+    }
+    const p = spawn(cmd, args);
     let out = "";
     let err = "";
     const timer = setTimeout(() => p.kill("SIGKILL"), timeoutMs);
