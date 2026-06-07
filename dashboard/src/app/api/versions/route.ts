@@ -22,12 +22,16 @@ export async function GET(req: NextRequest) {
   if (hit && Date.now() - hit.at < TTL) return NextResponse.json({ kind, versions: hit.versions });
 
   try {
-    const res = await fetch(`https://api.papermc.io/v2/projects/${kind}`, {
+    // PaperMC v3 "Fill" API — v2 is frozen and misses newer MC versions.
+    const res = await fetch(`https://fill.papermc.io/v3/projects/${kind}/versions`, {
       headers: { accept: "application/json" },
     });
     const json = await res.json();
-    // newest first; cap the list
-    const versions: string[] = (json.versions ?? []).slice().reverse().slice(0, 30);
+    // already newest-first; cap the list
+    const versions: string[] = (json.versions ?? [])
+      .map((v: { version?: { id?: string } }) => v.version?.id)
+      .filter(Boolean)
+      .slice(0, 30);
     cache[kind] = { at: Date.now(), versions };
     return NextResponse.json({ kind, versions });
   } catch (e) {
