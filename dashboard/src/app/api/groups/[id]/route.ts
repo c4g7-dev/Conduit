@@ -17,6 +17,7 @@ export async function PATCH(
     if (!g) throw new Error("not found");
     if (typeof body.maintenance === "boolean") g.maintenance = body.maintenance;
     if (typeof body.slotLimit === "number") g.slotLimit = body.slotLimit;
+    if (typeof body.name === "string" && body.name.trim()) g.name = body.name.trim();
     return g;
   }).catch((e) => ({ error: String(e) }));
   return NextResponse.json(updated);
