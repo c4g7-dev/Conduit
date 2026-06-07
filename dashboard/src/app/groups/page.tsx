@@ -278,7 +278,7 @@ export default function GroupsPage() {
                             </Badge>
                           </div>
                           <div className="flex items-center gap-1">
-                            {task.role !== "db" && task.role !== "generic" && (
+                            {(task.softwareKind === "paper" || task.softwareKind === "velocity") && (
                               <MotdDialog
                                 taskId={task.id}
                                 taskName={task.name}
