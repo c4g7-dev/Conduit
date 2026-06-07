@@ -19,7 +19,7 @@ export type Role = "proxy" | "lobby" | "smp" | "db" | "generic";
  * `version` is what gets pulled — e.g. the Minecraft version for paper, the Velocity
  * version for velocity. Selectable per-task in the UI.
  */
-export type SoftwareKind = "paper" | "velocity" | "mariadb" | "generic";
+export type SoftwareKind = "paper" | "velocity" | "mariadb" | "hytale" | "generic";
 export type Software = { kind: SoftwareKind; version: string };
 
 /** Declarative "game-ready" content applied in-container at first provision. */
@@ -141,8 +141,44 @@ export const BLUEPRINTS: Blueprint[] = [
     provision: "mariadb-server + conduit schema",
     software: { kind: "mariadb", version: "latest" },
   },
+  {
+    id: "hytale",
+    name: "Hytale",
+    role: "generic",
+    mode: "static",
+    persistent: true,
+    base: DEBIAN,
+    cores: 4,
+    memory: 8192,
+    disk: 16,
+    port: 5520,
+    description:
+      "Hytale server (placeholder until Hytale ships). Shares the read-only /assets store; provisioning recipe TBD once the server software is public.",
+    provision: "TBD — Hytale server + shared assets",
+    software: { kind: "hytale", version: "latest" },
+    sharedAssets: true,
+  },
 ];
 
+/** Built-in IDs can't be deleted/overwritten by custom templates. */
+export const BUILTIN_IDS = new Set(BLUEPRINTS.map((b) => b.id));
+
+// Custom (user-created) templates from the store, refreshed via loadBlueprints().
+// Kept in a module cache so blueprint() stays synchronous for its many call sites.
+let custom: Blueprint[] = [];
+
+/** Refresh the custom-template cache from the store; returns the merged list. */
+export async function loadBlueprints(): Promise<Blueprint[]> {
+  const { getDB } = await import("./store");
+  const db = await getDB();
+  custom = (db.blueprints ?? []).filter((b) => !BUILTIN_IDS.has(b.id));
+  return allBlueprints();
+}
+
+export function allBlueprints(): Blueprint[] {
+  return [...BLUEPRINTS, ...custom];
+}
+
 export function blueprint(id: string): Blueprint | undefined {
-  return BLUEPRINTS.find((b) => b.id === id);
+  return allBlueprints().find((b) => b.id === id);
 }

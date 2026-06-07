@@ -70,6 +70,11 @@ export function NewTaskDialog({
   const kind = bp?.software?.kind;
   const versioned = kind === "paper" || kind === "velocity";
 
+  // a single blueprint → pre-select it (dropdown then non-interactive)
+  useEffect(() => {
+    if (blueprints.length === 1 && !bpId) setBpId(blueprints[0].id);
+  }, [blueprints, bpId]);
+
   // when the blueprint changes, default the version and fetch selectable ones
   useEffect(() => {
     if (!bp) return;
@@ -161,7 +166,7 @@ export function NewTaskDialog({
         <div className="space-y-4 py-2">
           <div className="space-y-2">
             <Label>Blueprint</Label>
-            <Select value={bpId} onValueChange={(v) => setBpId(v ?? "")}>
+            <Select value={bpId} onValueChange={(v) => setBpId(v ?? "")} disabled={blueprints.length <= 1}>
               <SelectTrigger>
                 <SelectValue placeholder="Choose a premade blueprint…" />
               </SelectTrigger>
@@ -199,7 +204,7 @@ export function NewTaskDialog({
             <div className="space-y-2">
               <Label>{kind === "velocity" ? "Velocity version" : kind === "paper" ? "Minecraft version" : "Version"}</Label>
               {versioned ? (
-                <Select value={version} onValueChange={(v) => setVersion(v ?? "")}>
+                <Select value={version} onValueChange={(v) => setVersion(v ?? "")} disabled={versions.length <= 1}>
                   <SelectTrigger>
                     <SelectValue placeholder="Loading versions…" />
                   </SelectTrigger>

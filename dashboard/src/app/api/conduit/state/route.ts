@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDB } from "@/lib/store";
-import { blueprint, BLUEPRINTS } from "@/lib/blueprints";
+import { blueprint, allBlueprints, loadBlueprints } from "@/lib/blueprints";
 import { discoverInstances, instancesOf, routingTables } from "@/lib/engine";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +8,7 @@ export const runtime = "nodejs";
 
 export async function GET() {
   try {
+    await loadBlueprints();
     const db = await getDB();
     const instances = await discoverInstances();
 
@@ -34,7 +35,7 @@ export async function GET() {
 
     const routing = await routingTables();
 
-    return NextResponse.json({ groups, routing, blueprints: BLUEPRINTS });
+    return NextResponse.json({ groups, routing, blueprints: allBlueprints() });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 502 });
   }

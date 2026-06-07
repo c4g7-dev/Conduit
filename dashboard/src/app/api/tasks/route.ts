@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { mutate, slug, type Task } from "@/lib/store";
-import { blueprint } from "@/lib/blueprints";
+import { blueprint, loadBlueprints } from "@/lib/blueprints";
 import { reconcileAll } from "@/lib/engine";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +11,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const name = String(body.name ?? "").trim();
     const groupId = String(body.groupId ?? "");
+    await loadBlueprints();
     const bp = blueprint(String(body.blueprintId ?? ""));
     if (!name || !groupId || !bp) {
       return NextResponse.json(

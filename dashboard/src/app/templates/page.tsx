@@ -14,25 +14,86 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import { NewTemplateDialog } from "@/components/new-template-dialog";
 import { bytes, pct } from "@/lib/format";
-import { HardDrive, LayoutTemplate } from "lucide-react";
+import { HardDrive, LayoutTemplate, Boxes, Trash2, Cpu, MemoryStick } from "lucide-react";
 
+type Blueprint = {
+  id: string; name: string; role: string; mode: string; cores: number; memory: number;
+  disk: number; port: number; description: string; software: { kind: string; version: string };
+};
 type Data = {
   templates: { volid: string; file: string; os: string; size: number; format: string }[];
   storage: { storage: string; type: string; content: string; avail: number; used: number; total: number }[];
 };
+type Bps = { blueprints: Blueprint[]; builtin: string[] };
 
 export default function TemplatesPage() {
   const { data, loading, refresh } = usePoll<Data>("/api/templates", 15000);
+  const { data: bps, refresh: refreshBps } = usePoll<Bps>("/api/blueprints", 15000);
+  const builtin = new Set(bps?.builtin ?? []);
+
+  async function delTemplate(id: string) {
+    if (!confirm(`Delete template "${id}"?`)) return;
+    const res = await fetch(`/api/blueprints/${id}`, { method: "DELETE" });
+    const json = await res.json();
+    if (json.error) return toast.error(json.error);
+    toast.success("Template deleted");
+    refreshBps();
+  }
 
   return (
     <>
       <PageHeader
         title="Templates & Storage"
-        subtitle="Base images for cloning and the datastores backing them"
-        onRefresh={refresh}
+        subtitle="Server templates, base images, and the datastores backing them"
+        onRefresh={() => { refresh(); refreshBps(); }}
         loading={loading}
-      />
+      >
+        <NewTemplateDialog onCreated={refreshBps} />
+      </PageHeader>
+
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <Boxes className="h-4 w-4" /> Server templates
+      </h2>
+      <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {(bps?.blueprints ?? []).map((b) => (
+          <Card key={b.id}>
+            <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
+              <div>
+                <CardTitle className="text-base">{b.name}</CardTitle>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {b.role} · {b.software.kind} {b.software.version}
+                </p>
+              </div>
+              <div className="flex items-center gap-1">
+                <Badge variant="outline" className={b.mode === "dynamic" ? "border-orange-500/30 bg-orange-500/10 text-orange-400" : "border-sky-500/30 bg-sky-500/10 text-sky-400"}>
+                  {b.mode}
+                </Badge>
+                {builtin.has(b.id) ? (
+                  <Badge variant="secondary" className="text-[10px]">built-in</Badge>
+                ) : (
+                  <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => delTemplate(b.id)} title="Delete template">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <p className="line-clamp-2 text-xs text-muted-foreground">{b.description}</p>
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="flex items-center gap-1"><Cpu className="h-3 w-3" />{b.cores}c</span>
+                <span className="flex items-center gap-1"><MemoryStick className="h-3 w-3" />{b.memory}MB</span>
+                <span className="flex items-center gap-1"><HardDrive className="h-3 w-3" />{b.disk}GB</span>
+                <span>:{b.port}</span>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+        {!bps && <Skeleton className="h-28 w-full rounded-xl" />}
+      </div>
 
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         Storage
