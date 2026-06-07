@@ -60,17 +60,25 @@ const FILE = path.join(DATA_DIR, "conduit.json");
 let cache: DB | null = null;
 let writing: Promise<void> = Promise.resolve();
 
+/**
+ * Always read the JSON from disk. Next.js can run instrumentation (the controller
+ * loop) and route handlers in separate module instances, so an in-memory cache
+ * goes stale across them — e.g. the controller GC-ing a container for a task that
+ * a route just created. Reading the small file each call keeps every instance
+ * consistent. `cache` is kept only as a last-resort fallback on read error.
+ */
 async function ensure(): Promise<DB> {
-  if (cache) return cache;
   try {
     const raw = await fs.readFile(FILE, "utf8");
     cache = JSON.parse(raw) as DB;
+    return cache;
   } catch {
+    if (cache) return cache;
     cache = { groups: [], tasks: [] };
     await fs.mkdir(DATA_DIR, { recursive: true });
     await fs.writeFile(FILE, JSON.stringify(cache, null, 2));
+    return cache;
   }
-  return cache;
 }
 
 export async function getDB(): Promise<DB> {
