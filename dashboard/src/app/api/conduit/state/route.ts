@@ -25,6 +25,7 @@ export async function GET() {
             port: bp?.port ?? 25565,
             softwareKind: bp?.software.kind ?? "generic",
             version: t.software?.version ?? bp?.software.version ?? "",
+            motd: t.motd ?? "",
             instances: insts,
             live: insts.length,
             running: insts.filter((i) => i.status === "running").length,

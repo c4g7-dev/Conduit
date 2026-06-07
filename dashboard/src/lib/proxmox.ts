@@ -212,6 +212,11 @@ export const api = {
     >(`/nodes/${node}/storage/${storage}/content?content=${content}`),
   vzdump: (params: Record<string, string | number>, node = NODE) =>
     pmx<string>(`/nodes/${node}/vzdump`, { method: "POST", params }),
+  deleteBackup: (storage: string, volid: string, node = NODE) =>
+    pmx<string>(
+      `/nodes/${node}/storage/${storage}/content/${encodeURIComponent(volid)}`,
+      { method: "DELETE" },
+    ),
   backupStorages: (node = NODE) =>
     pmx<{ storage: string; type: string; content: string; avail?: number; total?: number; used?: number }[]>(
       `/nodes/${node}/storage?content=backup`,
