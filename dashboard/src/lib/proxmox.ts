@@ -168,6 +168,10 @@ export type Template = {
 export const api = {
   nodes: () => pmx<PveNode[]>("/nodes"),
   clusterResources: () => pmx<ClusterResource[]>("/cluster/resources"),
+  clusterStatus: () =>
+    pmx<{ type: string; name?: string; ip?: string; online?: number; local?: number }[]>(
+      "/cluster/status",
+    ),
   nodeStatus: (node = NODE) => pmx<Record<string, unknown>>(`/nodes/${node}/status`),
   lxcStatus: (vmid: number, node = NODE) =>
     pmx<Record<string, unknown>>(`/nodes/${node}/lxc/${vmid}/status/current`),
@@ -246,6 +250,31 @@ export const api = {
     throw new Error("no free VMID in range");
   },
 };
+
+// node name → IP for SSH/pct-exec, learned from /cluster/status (cached ~60s).
+// The local node falls back to the configured PROXMOX_HOST.
+let nodeIpCache: { at: number; map: Map<string, string> } | null = null;
+export async function nodeIp(node: string): Promise<string> {
+  if (!nodeIpCache || Date.now() - nodeIpCache.at > 60_000) {
+    const map = new Map<string, string>();
+    try {
+      for (const m of await api.clusterStatus()) {
+        if (m.type === "node" && m.name && m.ip) map.set(m.name, m.ip);
+      }
+    } catch {
+      /* single-node / not clustered — map stays empty, fall back below */
+    }
+    nodeIpCache = { at: Date.now(), map };
+  }
+  return nodeIpCache.map.get(node) ?? (node === NODE ? HOST : HOST);
+}
+
+/** SSH host (IP) for the node that currently runs a given vmid. */
+export async function vmidHost(vmid: number): Promise<string> {
+  const res = await api.clusterResources().catch(() => []);
+  const ct = res.find((r) => r.vmid === vmid && r.node);
+  return ct?.node ? nodeIp(ct.node) : HOST;
+}
 
 /** Wait for a Proxmox task (UPID) to finish; returns exit status. */
 export async function waitTask(upid: string, node = NODE, timeoutMs = 90_000) {

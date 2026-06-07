@@ -7,11 +7,14 @@ export const runtime = "nodejs";
 /** Storages + recent snapshots + scheduled jobs — the Backups dashboard feed. */
 export async function GET() {
   try {
-    const [storages, jobs, resources] = await Promise.all([
+    const [storagesRaw, jobs, resources] = await Promise.all([
       api.backupStorages(),
       api.backupJobs().catch(() => []),
       api.clusterResources().catch(() => []),
     ]);
+    // stable order — Proxmox returns storages in arbitrary order, which made the
+    // dashboard cards swap positions on each poll.
+    const storages = [...storagesRaw].sort((a, b) => a.storage.localeCompare(b.storage));
     const nameByVmid = new Map(
       resources.filter((r) => r.vmid != null).map((r) => [r.vmid as number, r.name ?? `ct-${r.vmid}`]),
     );
@@ -38,7 +41,8 @@ export async function GET() {
       }))
       .sort((a, b) => b.ctime - a.ctime);
 
-    return NextResponse.json({ storages, backups, jobs });
+    const sortedJobs = [...jobs].sort((a, b) => (a.id ?? "").localeCompare(b.id ?? ""));
+    return NextResponse.json({ storages, backups, jobs: sortedJobs });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 502 });
   }

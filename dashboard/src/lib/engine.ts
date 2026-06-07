@@ -9,7 +9,7 @@
  * SAFETY: only ever touches containers tagged `conduit` in VMID range 200-999.
  * Hand-made containers (e.g. CT100) are never read as instances nor destroyed.
  */
-import { api, lxcIp, waitTask, NODE } from "./proxmox";
+import { api, lxcIp, waitTask, nodeIp, NODE } from "./proxmox";
 import { blueprint, loadBlueprints, type Blueprint, type Seed } from "./blueprints";
 import { getDB, saveDB, getNetwork, type Task, type Group } from "./store";
 import {
@@ -84,8 +84,9 @@ export function endRestore() {
 async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
   const net = await getNetwork();
   const version = task.software?.version ?? bp.software.version;
+  const host = await nodeIp(inst.node); // SSH to the node that hosts this instance
   if (bp.role === "proxy") {
-    await installVelocity(inst.vmid, task, net.forwardingSecret, version);
+    await installVelocity(inst.vmid, task, net.forwardingSecret, version, host);
   } else if (bp.role === "lobby" || bp.role === "smp") {
     // task seed overrides/extends the blueprint's default seed
     const merged = {
@@ -96,7 +97,7 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
     };
     // uploaded assets (conduit-asset: refs) → pct push into the CT, rewrite to local path
     const seed = await resolveSeedAssets(inst, merged);
-    await installPaper(inst.vmid, task, net.forwardingSecret, seed, version);
+    await installPaper(inst.vmid, task, net.forwardingSecret, seed, version, host);
   } else {
     return; // db/generic: container lifecycle only, no MC software (yet)
   }
@@ -110,13 +111,24 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
  * Lets uploaded worlds/plugins reach MC containers without the read-only /assets mount.
  */
 async function resolveSeedAssets(inst: Instance, seed: Seed): Promise<Seed> {
+  const host = await nodeIp(inst.node);
+  const homeHost = await nodeIp(NODE); // where assets are uploaded
   const pushOne = async (ref: string): Promise<string> => {
     const nodePath = assetNodePath(ref);
     if (!nodePath) return ref; // a plain URL or local path — leave as-is
     const base = nodePath.split("/").pop()!;
     const dest = `/opt/conduit-seed/${base}`;
+    // if the CT's node doesn't have the asset (it lives on the home node), pull it
+    // across the cluster's inter-node SSH first.
+    const dir = nodePath.slice(0, nodePath.lastIndexOf("/"));
+    const ensure =
+      host === homeHost
+        ? ""
+        : `mkdir -p '${dir}'; [ -f '${nodePath}' ] || scp -o StrictHostKeyChecking=no -o BatchMode=yes root@${homeHost}:'${nodePath}' '${nodePath}'; `;
     await nodeExec(
-      `pct exec ${inst.vmid} -- mkdir -p /opt/conduit-seed && pct push ${inst.vmid} '${nodePath}' '${dest}'`,
+      `${ensure}pct exec ${inst.vmid} -- mkdir -p /opt/conduit-seed && pct push ${inst.vmid} '${nodePath}' '${dest}'`,
+      120_000,
+      host,
     );
     return dest;
   };
@@ -166,7 +178,8 @@ async function velocityPass(
 
     for (const p of instancesOf(all, proxy.id).filter(ready)) {
       try {
-        if (await syncVelocity(p.vmid, proxy, servers))
+        const host = await nodeIp(p.node);
+        if (await syncVelocity(p.vmid, proxy, servers, host))
           log.push(`= ${proxy.id}: routed ${servers.length} backend(s) → velocity ${p.vmid}`);
       } catch (e) {
         log.push(`! velocity sync ${p.vmid}: ${String(e)}`);
@@ -248,11 +261,35 @@ async function ensurePool(group: Group) {
   }
 }
 
+/**
+ * Pick the online node with the fewest Conduit containers (spreads load across the
+ * cluster). Falls back to the configured NODE on any error / single-node setup.
+ */
+async function pickNode(): Promise<string> {
+  try {
+    const [nodes, res] = await Promise.all([api.nodes(), api.clusterResources()]);
+    const online = nodes.filter((n) => n.status === "online").map((n) => n.node);
+    if (online.length <= 1) return online[0] ?? NODE;
+    const count = new Map(online.map((n) => [n, 0]));
+    for (const r of res) {
+      if (r.type === "lxc" && r.node && r.vmid && r.vmid >= VMID_FROM && r.vmid <= VMID_TO &&
+          parseTags(r.tags).includes(CONDUIT_TAG) && count.has(r.node)) {
+        count.set(r.node, (count.get(r.node) ?? 0) + 1);
+      }
+    }
+    // fewest containers, ties broken by node name for stability
+    return [...count.entries()].sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))[0][0];
+  } catch {
+    return NODE;
+  }
+}
+
 async function provision(task: Task, group: Group): Promise<number> {
   const bp = blueprint(task.blueprintId);
   if (!bp) throw new Error(`unknown blueprint ${task.blueprintId}`);
   await ensurePool(group);
 
+  const node = await pickNode();
   const vmid = await api.nextVmid(VMID_FROM, VMID_TO);
   noteCreate(task.id, vmid);
 
@@ -278,15 +315,18 @@ async function provision(task: Task, group: Group): Promise<number> {
     description: `Conduit ${bp.name} · task=${task.id} group=${group.id}\nprovision: ${bp.provision}`,
   };
 
-  const upid = await api.createLxc(params);
-  await waitTask(upid).catch(() => {});
+  const upid = await api.createLxc(params, node);
+  await waitTask(upid, node).catch(() => {});
 
   // Shared read-only asset store (Hytale-style: many servers share one /assets copy).
   // Bind mounts are rejected for API tokens (root@pam-only), so set it over SSH as root
   // and reboot to apply. MC blueprints don't opt in — a Paper server owns its world.
   if (ASSETS_DIR && bp.sharedAssets) {
+    const host = await nodeIp(node);
     await nodeExec(
       `pct set ${vmid} -mp0 ${ASSETS_DIR},mp=/assets,ro=1 && pct reboot ${vmid}`,
+      60_000,
+      host,
     ).catch((e) => console.error(`[conduitd] assets mount ${vmid} failed:`, String(e)));
   }
   return vmid;

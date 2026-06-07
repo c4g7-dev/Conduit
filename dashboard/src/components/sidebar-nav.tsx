@@ -8,6 +8,7 @@ import {
   Boxes,
   LayoutTemplate,
   Workflow,
+  Waypoints,
   Cable,
   Server,
   Archive,
@@ -18,6 +19,7 @@ const nav = [
   { href: "/containers", label: "Containers", icon: Boxes },
   { href: "/templates", label: "Templates", icon: LayoutTemplate },
   { href: "/groups", label: "Groups & Tasks", icon: Workflow },
+  { href: "/network", label: "Network", icon: Waypoints },
   { href: "/backups", label: "Backups", icon: Archive },
 ];
 

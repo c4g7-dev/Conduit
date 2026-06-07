@@ -3,6 +3,7 @@ import { mutate } from "@/lib/store";
 import { blueprint, loadBlueprints } from "@/lib/blueprints";
 import { discoverInstances, instancesOf, reconcileAll } from "@/lib/engine";
 import { setMotd, forgetVelocity } from "@/lib/provision";
+import { nodeIp } from "@/lib/proxmox";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -35,7 +36,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     // Paper: patch the motd line in server.properties and restart, in parallel.
-    const results = await Promise.allSettled(ready.map((i) => setMotd(i.vmid, role, text)));
+    const results = await Promise.allSettled(
+      ready.map(async (i) => setMotd(i.vmid, role, text, await nodeIp(i.node))),
+    );
     const applied = results.filter((r) => r.status === "fulfilled").length;
     return NextResponse.json({ ok: true, applied, instances: ready.length });
   } catch (e) {
