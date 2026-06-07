@@ -43,6 +43,11 @@ This is the honest status against the factors that matter for the c4g7 network.
 - A **task** instantiates a blueprint N times. `dynamic` tasks (lobbies) are meant to
   scale on demand and be thrown away; `static` tasks (SMP/region) hold a fixed count
   with a persistent world. Scaling is one click (or one API call) today.
+- Each blueprint declares its **software + version** (`{kind, version}`), and the
+  version is **selectable per task** in the New Task dialog — the list is pulled live
+  from the PaperMC API (`/api/versions`). The right **Java is auto-installed** (17 for
+  MC ≤1.20.4, 21 via Adoptium for 1.20.5+), so a `1.21.x` task just works. `kind` is the
+  extension seam — paper/velocity today; nginx/Hytale/etc. slot in later.
 - Blueprints (and individual tasks) carry a **`seed`**: a world (`tar.gz` URL,
   extracted in-container), extra `server.properties`, a `server-icon.png`, and plugin
   jar URLs — all applied before first boot, so instances come up **game-ready** rather
@@ -155,6 +160,7 @@ backend. Verified live: secrets matched, both `systemd` services active, SLP rep
 | GET/POST | `/api/groups`, PATCH/DELETE `/api/groups/{id}` | group CRUD (maintenance, slotLimit) |
 | POST | `/api/tasks`, PATCH/DELETE `/api/tasks/{id}` | task CRUD + live scaling |
 | **GET** | **`/api/metrics`** | **live player counts + sample names per instance, via SLP** |
+| GET | `/api/versions?kind=` | selectable software versions (PaperMC API) |
 | GET/POST | `/api/backups` | storages + snapshots + jobs; trigger a vmid/pool backup |
 | POST/DELETE | `/api/backups/jobs`, `/api/backups/jobs/{id}` | per-group scheduled backup jobs |
 | POST | `/api/backups/restore` | restore a CT from a snapshot (controller paused during) |
@@ -207,6 +213,10 @@ or a password via `sshpass`). Set `CONDUIT_CONTROLLER=off` to run without the re
 
 ## Roadmap
 
+- More software kinds (Hytale, web/nginx, …). The `kind` seam + an optional shared
+  read-only `/assets` mount (`CONDUIT_ASSETS_DIR`, bind-mounted as root over SSH) are in
+  place for engines whose servers share large static assets — Minecraft opts out, since
+  a Paper server needs its own live, writable world.
 - Multi-node placement + live-migration controls.
 
 Done recently: live SLP metrics · player-count autoscaling · PVE API-token + SSH-key

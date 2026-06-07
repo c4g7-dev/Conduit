@@ -47,6 +47,8 @@ type Task = {
   blueprintId: string;
   role: string;
   blueprintName: string;
+  softwareKind: string;
+  version: string;
   mode: "dynamic" | "static";
   desired: number;
   min: number;
@@ -285,7 +287,11 @@ export default function GroupsPage() {
                         </div>
 
                         <div className="mt-1 text-xs text-muted-foreground">
-                          {task.blueprintName} · {task.cores}c / {task.memory}MB / {task.disk}GB
+                          {task.blueprintName}
+                          {task.version && (
+                            <span className="text-foreground/70"> · {task.softwareKind} {task.version}</span>
+                          )}
+                          {" · "}{task.cores}c / {task.memory}MB / {task.disk}GB
                           {task.persistent ? " · persistent" : " · stateless"}
                         </div>
 

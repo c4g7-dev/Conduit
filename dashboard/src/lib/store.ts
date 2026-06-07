@@ -5,7 +5,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Seed } from "./blueprints";
+import type { Seed, Software } from "./blueprints";
 
 export type Group = {
   id: string; // kebab, also the Proxmox pool id
@@ -36,6 +36,8 @@ export type Task = {
   fronts: string[];
   /** optional per-task seed overrides, merged over the blueprint's seed */
   seed?: Seed;
+  /** optional per-task software/version override (e.g. a different MC version) */
+  software?: Software;
   createdAt: number;
 };
 

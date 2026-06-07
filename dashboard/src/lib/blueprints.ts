@@ -13,6 +13,15 @@
 
 export type Role = "proxy" | "lobby" | "smp" | "db" | "generic";
 
+/**
+ * The software a blueprint installs + which version. `kind` is the install recipe
+ * (paper/velocity implemented today; the seam is here to add nginx, hytale, … later);
+ * `version` is what gets pulled — e.g. the Minecraft version for paper, the Velocity
+ * version for velocity. Selectable per-task in the UI.
+ */
+export type SoftwareKind = "paper" | "velocity" | "mariadb" | "generic";
+export type Software = { kind: SoftwareKind; version: string };
+
 /** Declarative "game-ready" content applied in-container at first provision. */
 export type Seed = {
   /** tar.gz of a Paper level dir (contains world/level.dat …), extracted into the server */
@@ -39,6 +48,14 @@ export type Blueprint = {
   port: number; // primary service port (for routing tables)
   description: string;
   provision: string;
+  /** what software + which version this blueprint installs (version selectable per task) */
+  software: Software;
+  /**
+   * Bind-mount the shared read-only `/assets` store into instances. For engines like
+   * Hytale that share large static assets across servers. NOT for Minecraft — a Paper
+   * server needs its own live, writable world/config, so MC blueprints leave this off.
+   */
+  sharedAssets?: boolean;
   /** default game-ready content for instances of this blueprint */
   seed?: Seed;
 };
@@ -59,7 +76,8 @@ export const BLUEPRINTS: Blueprint[] = [
     port: 25565,
     description:
       "Player-facing edge on :25565. Routes players to backend lobbies/SMP, holds slot limits & maintenance.",
-    provision: "openjdk-17 + Velocity 3.3.0 + modern-forwarding secret, servers pushed live",
+    provision: "openjdk-17 + Velocity + modern-forwarding secret, servers pushed live",
+    software: { kind: "velocity", version: "3.3.0-SNAPSHOT" },
   },
   {
     id: "paper-lobby",
@@ -74,7 +92,8 @@ export const BLUEPRINTS: Blueprint[] = [
     port: 25565,
     description:
       "Stateless spawn/lobby. Autoscales on player count, cloned from template, thrown away when idle.",
-    provision: "openjdk-17 + Paper 1.20.4 (offline-mode, Velocity modern forwarding)",
+    provision: "Paper (offline-mode, Velocity modern forwarding)",
+    software: { kind: "paper", version: "1.20.4" },
     seed: {
       // a superflat lobby world, hosted in the conduit-assets repo
       worldUrl:
@@ -104,7 +123,8 @@ export const BLUEPRINTS: Blueprint[] = [
     port: 25565,
     description:
       "Persistent survival/region server. Fixed count, world on its own dataset, nightly PBS backup.",
-    provision: "openjdk-17 + Paper 1.20.4 (persistent world, Velocity modern forwarding)",
+    provision: "Paper (persistent world, Velocity modern forwarding)",
+    software: { kind: "paper", version: "1.20.4" },
   },
   {
     id: "mariadb",
@@ -119,6 +139,7 @@ export const BLUEPRINTS: Blueprint[] = [
     port: 3306,
     description: "Shared database for the network. Persistent, backed up.",
     provision: "mariadb-server + conduit schema",
+    software: { kind: "mariadb", version: "latest" },
   },
 ];
 
