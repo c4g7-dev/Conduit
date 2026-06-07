@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { NewTemplateDialog } from "@/components/new-template-dialog";
+import { AssetsSection } from "@/components/assets-section";
 import { bytes, pct } from "@/lib/format";
 import { HardDrive, LayoutTemplate, Boxes, Trash2, Cpu, MemoryStick } from "lucide-react";
 
@@ -94,6 +95,11 @@ export default function TemplatesPage() {
         ))}
         {!bps && <Skeleton className="h-28 w-full rounded-xl" />}
       </div>
+
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <HardDrive className="h-4 w-4" /> Assets (worlds &amp; plugins)
+      </h2>
+      <AssetsSection />
 
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         Storage
