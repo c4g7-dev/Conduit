@@ -126,6 +126,25 @@ export default function BackupsPage() {
     refresh();
   }
 
+  async function delBackup(b: Backup) {
+    if (!confirm(`Delete this snapshot of ${b.name ?? "#" + b.vmid} from ${when(b.ctime)}?`)) return;
+    setBusy(true);
+    try {
+      const res = await fetch(
+        `/api/backups?volid=${encodeURIComponent(b.volid)}&storage=${encodeURIComponent(b.storage)}`,
+        { method: "DELETE" },
+      );
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      toast.success("Snapshot deleted");
+      refresh();
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function restore(b: Backup) {
     if (b.vmid == null) return;
     if (
@@ -298,7 +317,7 @@ export default function BackupsPage() {
                 <TableHead>Storage</TableHead>
                 <TableHead>Notes</TableHead>
                 <TableHead className="text-right">Size</TableHead>
-                <TableHead className="text-right">Restore</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -319,16 +338,28 @@ export default function BackupsPage() {
                     {bytes(b.size)}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-8"
-                      disabled={busy || b.vmid == null}
-                      onClick={() => restore(b)}
-                      title="Restore this snapshot (overwrites the container)"
-                    >
-                      <RotateCcw className="h-4 w-4" /> Restore
-                    </Button>
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-8"
+                        disabled={busy || b.vmid == null}
+                        onClick={() => restore(b)}
+                        title="Restore this snapshot (overwrites the container)"
+                      >
+                        <RotateCcw className="h-4 w-4" /> Restore
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 text-destructive hover:text-destructive"
+                        disabled={busy}
+                        onClick={() => delBackup(b)}
+                        title="Delete this snapshot"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

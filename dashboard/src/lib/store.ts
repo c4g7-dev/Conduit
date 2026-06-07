@@ -38,6 +38,8 @@ export type Task = {
   seed?: Seed;
   /** optional per-task software/version override (e.g. a different MC version) */
   software?: Software;
+  /** server list MOTD (supports & colour codes); applied to this task's instances */
+  motd?: string;
   createdAt: number;
 };
 

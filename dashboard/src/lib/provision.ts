@@ -156,7 +156,8 @@ function seedShell(seed: Seed): string {
 
 function paperScript(task: Task, secret: string, seed: Seed, build: Resolved): string {
   const mem = heap(task.memory, 1024, 1024);
-  const motd = `Conduit \\u00b7 ${task.name}`;
+  // properties parser reads \n as a newline; keep it literal in the file
+  const motd = colorize(task.motd || defaultMotd(task.name)).replace(/\n/g, "\\n");
   const maxPlayers = Math.max(20, task.playersPerInstance);
   const baseProps: Record<string, string> = {
     "server-port": "25565",
@@ -259,15 +260,63 @@ export async function installVelocity(
   await ctExec(vmid, velocityScript(task, secret, build));
 }
 
+/** Default MOTD for a task when none is set. */
+export const defaultMotd = (name: string) => `Conduit §b${name}`;
+
+/** Translate '&' colour codes to the section sign Paper/legacy servers expect. */
+const colorize = (s: string) => s.replace(/&([0-9a-fk-or])/gi, "§$1");
+
+// '&' code → MiniMessage tag (Velocity 3.x parses its MOTD as MiniMessage, not legacy).
+const MINI: Record<string, string> = {
+  "0": "black", "1": "dark_blue", "2": "dark_green", "3": "dark_aqua",
+  "4": "dark_red", "5": "dark_purple", "6": "gold", "7": "gray",
+  "8": "dark_gray", "9": "blue", a: "green", b: "aqua", c: "red",
+  d: "light_purple", e: "yellow", f: "white",
+  l: "bold", o: "italic", n: "underlined", m: "strikethrough", k: "obfuscated", r: "reset",
+};
+/** Convert a legacy '&'-coded string to MiniMessage for Velocity. */
+function miniMessage(s: string): string {
+  return s
+    .replace(/&([0-9a-fk-or])/gi, (_, c) => `<${MINI[c.toLowerCase()]}>`)
+    .replace(/\n/g, "<newline>");
+}
+
+/**
+ * Update a running server's MOTD without a full reinstall, then restart it.
+ * Paper → server.properties `motd=`; Velocity → velocity.toml `motd =`.
+ */
+export async function setMotd(vmid: number, role: string, motd: string): Promise<void> {
+  // Files want a LITERAL \n for line breaks; but GNU sed turns \n in its replacement
+  // into a real newline, so we feed sed \\n (which it emits as the literal \n we want).
+  const m = colorize(motd).replace(/\n/g, "\\\\n");
+  if (role === "proxy") {
+    const v = m.replace(/"/g, '\\"');
+    await ctExec(
+      vmid,
+      `sed -i 's#^motd = .*#motd = "${v}"#' /opt/mc/velocity.toml && systemctl restart mc`,
+      60_000,
+    );
+  } else {
+    const p = m.replace(/#/g, "\\#");
+    await ctExec(
+      vmid,
+      `sed -i 's#^motd=.*#motd=${p}#' /opt/mc/server.properties && systemctl restart mc`,
+      60_000,
+    );
+  }
+}
+
 export type ProxyServer = { name: string; ip: string; port: number };
 
 function velocityToml(task: Task, servers: ProxyServer[]): string {
   const list = servers.map((s) => `${s.name} = "${s.ip}:${s.port}"`).join("\n");
   const tryList = servers.map((s) => `"${s.name}"`).join(", ");
+  // Velocity parses its MOTD as MiniMessage; <newline> handles line breaks.
+  const motd = miniMessage(task.motd || defaultMotd(task.name)).replace(/"/g, '\\"');
   return `# Managed by Conduit — regenerated on backend changes.
 config-version = "2.7"
 bind = "0.0.0.0:25565"
-motd = "Conduit · ${task.name}"
+motd = "${motd}"
 show-max-players = 1000
 online-mode = false
 player-info-forwarding-mode = "modern"
