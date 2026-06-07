@@ -12,6 +12,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { MessageSquare, Server } from "lucide-react";
 
 // Minecraft legacy colour + format codes.
@@ -90,8 +91,12 @@ export function MotdDialog({
   taskId: string; taskName: string; current: string; players: number; max: number; onSaved: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  // custom MOTD is "enabled" when the task has a non-empty stored MOTD
+  const [enabled, setEnabled] = useState(!!current);
   const [motd, setMotd] = useState(current || `Conduit &b${taskName}\n&7Powered by Proxmox`);
   const [busy, setBusy] = useState(false);
+
+  const defaultPreview = `Conduit &b${taskName}`;
 
   function insert(code: string) {
     setMotd((m) => m + `&${code}`);
@@ -100,10 +105,11 @@ export function MotdDialog({
   async function save() {
     setBusy(true);
     try {
+      // disabled → send empty so the server falls back to the default MOTD
       const res = await fetch(`/api/tasks/${taskId}/motd`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ motd }),
+        body: JSON.stringify({ motd: enabled ? motd : "" }),
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error);
@@ -132,14 +138,25 @@ export function MotdDialog({
         </DialogHeader>
 
         <div className="space-y-3 py-2">
-          {/* live preview */}
+          {/* enable / disable */}
+          <div className="flex items-center justify-between rounded-md border border-border/60 px-3 py-2">
+            <div>
+              <div className="text-sm">Custom MOTD</div>
+              <div className="text-xs text-muted-foreground">
+                Off = use the default ({`Conduit ${taskName}`}).
+              </div>
+            </div>
+            <Switch checked={enabled} onCheckedChange={setEnabled} />
+          </div>
+
+          {/* live preview (shows default when disabled) */}
           <div>
             <div className="mb-1 text-xs text-muted-foreground">Live preview</div>
-            <MotdPreview motd={motd} name={taskName} players={players} max={max} />
+            <MotdPreview motd={enabled ? motd : defaultPreview} name={taskName} players={players} max={max} />
           </div>
 
           {/* colour palette */}
-          <div className="flex flex-wrap gap-1">
+          <div className={`flex flex-wrap gap-1 ${enabled ? "" : "pointer-events-none opacity-40"}`}>
             {SWATCHES.map((c) => (
               <button key={c} type="button" onClick={() => insert(c)} title={`&${c}`}
                 className="h-6 w-6 rounded border border-black/30" style={{ backgroundColor: COLORS[c] }} />
@@ -156,7 +173,8 @@ export function MotdDialog({
             value={motd}
             onChange={(e) => setMotd(e.target.value)}
             rows={2}
-            className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            disabled={!enabled}
+            className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-40"
             placeholder="&aWelcome!&r\n&7line two"
           />
           <p className="text-[11px] text-muted-foreground">Two lines max. Use a newline for the second line.</p>
