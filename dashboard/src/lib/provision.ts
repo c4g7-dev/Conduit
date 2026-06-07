@@ -19,24 +19,36 @@ const SSH_PASS = process.env.PROXMOX_SSH_PASS ?? process.env.PROXMOX_PASS ?? "";
 // Prefer key auth (no password on the wire). Falls back to sshpass+password.
 const SSH_KEY = process.env.PROXMOX_SSH_KEY ?? "";
 
-/** Minecraft version → required Java major. ≤1.20.4 → 17, ≥1.20.5 / 1.21+ → 21. */
-function javaForMc(v: string): 17 | 21 {
-  const [a, b, c] = v.split(/[.\-+]/).map((n) => parseInt(n, 10) || 0);
-  if (a > 1 || (a === 1 && b >= 21)) return 21;
-  if (a === 1 && b === 20 && c >= 5) return 21;
-  return 17;
+/** Path to the JRE installed by javaInstall() — referenced by the systemd unit. */
+const JAVA_BIN = "/opt/jre/bin/java";
+
+/**
+ * Shell to install a JRE of any major via the Adoptium binary API (works for 8…25+,
+ * unlike the apt repo which lags new releases). Extracted to /opt/jre.
+ */
+function javaInstall(major: number): string {
+  return `apt-get install -y -qq curl ca-certificates >/dev/null
+mkdir -p /opt/jre
+curl -fsSL "https://api.adoptium.net/v3/binary/latest/${major}/ga/linux/x64/jre/hotspot/normal/eclipse" -o /tmp/jre.tgz
+tar xzf /tmp/jre.tgz -C /opt/jre --strip-components=1
+rm -f /tmp/jre.tgz
+${JAVA_BIN} -version 2>&1 | head -1`;
 }
 
-/** Shell to install the right JRE. 17 from Debian; 21 from Adoptium (Temurin). */
-function javaInstall(major: 17 | 21): string {
-  if (major === 21)
-    return `apt-get install -y -qq curl ca-certificates gpg >/dev/null
-mkdir -p /etc/apt/keyrings
-curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg
-echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb bookworm main" > /etc/apt/sources.list.d/adoptium.list
-apt-get update -qq
-apt-get install -y -qq temurin-21-jre >/dev/null`;
-  return `apt-get install -y -qq openjdk-17-jre-headless curl ca-certificates >/dev/null`;
+/**
+ * Resolve a Paper/Velocity version to its newest build's jar URL + required Java major,
+ * via the PaperMC v3 "Fill" API (the v2 API is frozen and misses newer MC versions).
+ */
+type Resolved = { javaMajor: number; jarUrl: string };
+async function resolveBuild(project: "paper" | "velocity", version: string): Promise<Resolved> {
+  const base = `https://fill.papermc.io/v3/projects/${project}`;
+  const meta = await fetch(`${base}/versions/${version}`).then((r) => r.json());
+  const javaMajor: number = meta?.version?.java?.version?.minimum ?? 21;
+  const builds = await fetch(`${base}/versions/${version}/builds`).then((r) => r.json());
+  const first = Array.isArray(builds) ? builds[0] : builds?.builds?.[0];
+  const jarUrl: string | undefined = first?.downloads?.["server:default"]?.url;
+  if (!jarUrl) throw new Error(`no ${project} build for ${version}`);
+  return { javaMajor, jarUrl };
 }
 
 /** Run a command on the Proxmox node over SSH (key auth if configured, else password). */
@@ -142,7 +154,7 @@ function seedShell(seed: Seed): string {
   return lines.join("\n");
 }
 
-function paperScript(task: Task, secret: string, seed: Seed, version: string): string {
+function paperScript(task: Task, secret: string, seed: Seed, build: Resolved): string {
   const mem = heap(task.memory, 1024, 1024);
   const motd = `Conduit \\u00b7 ${task.name}`;
   const maxPlayers = Math.max(20, task.playersPerInstance);
@@ -168,7 +180,7 @@ proxies:
 `;
   const unit = sysdUnit(
     `Conduit Paper (${task.name})`,
-    `/usr/bin/java -Xms${mem}M -Xmx${mem}M -XX:+UseG1GC -jar server.jar --nogui`,
+    `${JAVA_BIN} -Xms${mem}M -Xmx${mem}M -XX:+UseG1GC -jar server.jar --nogui`,
   );
   return `set -e
 MCDIR=/opt/mc
@@ -176,12 +188,9 @@ mkdir -p "$MCDIR/config"
 if [ -f "$MCDIR/.conduit-ready" ]; then echo "already-provisioned"; exit 0; fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-${javaInstall(javaForMc(version))}
-VER=${version}
-BUILD=$(curl -fsSL "https://api.papermc.io/v2/projects/paper/versions/$VER/builds" | tr ',' '\\n' | grep -o '"build":[0-9]*' | grep -o '[0-9]*' | tail -1)
-if [ -z "$BUILD" ]; then echo "no paper build for $VER" >&2; exit 1; fi
-echo "paper $VER build $BUILD (java ${javaForMc(version)})"
-curl -fsSL -o "$MCDIR/server.jar" "https://api.papermc.io/v2/projects/paper/versions/$VER/builds/$BUILD/downloads/paper-$VER-$BUILD.jar"
+${javaInstall(build.javaMajor)}
+echo "paper jar (java ${build.javaMajor})"
+curl -fsSL -o "$MCDIR/server.jar" '${build.jarUrl}'
 echo "eula=true" > "$MCDIR/eula.txt"
 cat > "$MCDIR/server.properties" <<'PROP'
 ${props}
@@ -208,16 +217,17 @@ export async function installPaper(
   seed: Seed = {},
   version = "1.20.4",
 ): Promise<void> {
-  await ctExec(vmid, paperScript(task, secret, seed, version));
+  const build = await resolveBuild("paper", version);
+  await ctExec(vmid, paperScript(task, secret, seed, build));
 }
 
 /* ---- Velocity (proxy) ---------------------------------------------------- */
 
-function velocityScript(task: Task, secret: string, version: string): string {
+function velocityScript(task: Task, secret: string, build: Resolved): string {
   const mem = heap(task.memory, 512, 512);
   const unit = sysdUnit(
     `Conduit Velocity (${task.name})`,
-    `/usr/bin/java -Xms256M -Xmx${mem}M -jar velocity.jar`,
+    `${JAVA_BIN} -Xms256M -Xmx${mem}M -jar velocity.jar`,
   );
   return `set -e
 MCDIR=/opt/mc
@@ -225,12 +235,9 @@ mkdir -p "$MCDIR"
 if [ -f "$MCDIR/.conduit-ready" ]; then echo "already-provisioned"; exit 0; fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-${javaInstall(17)}
-VER=${version}
-BUILD=$(curl -fsSL "https://api.papermc.io/v2/projects/velocity/versions/$VER/builds" | tr ',' '\\n' | grep -o '"build":[0-9]*' | grep -o '[0-9]*' | tail -1)
-if [ -z "$BUILD" ]; then echo "no velocity build for $VER" >&2; exit 1; fi
-echo "velocity $VER build $BUILD"
-curl -fsSL -o "$MCDIR/velocity.jar" "https://api.papermc.io/v2/projects/velocity/versions/$VER/builds/$BUILD/downloads/velocity-$VER-$BUILD.jar"
+${javaInstall(build.javaMajor)}
+echo "velocity jar (java ${build.javaMajor})"
+curl -fsSL -o "$MCDIR/velocity.jar" '${build.jarUrl}'
 printf '%s' '${secret}' > "$MCDIR/forwarding.secret"
 cat > /etc/systemd/system/mc.service <<'UNIT'
 ${unit}
@@ -248,7 +255,8 @@ export async function installVelocity(
   secret: string,
   version = "3.3.0-SNAPSHOT",
 ): Promise<void> {
-  await ctExec(vmid, velocityScript(task, secret, version));
+  const build = await resolveBuild("velocity", version);
+  await ctExec(vmid, velocityScript(task, secret, build));
 }
 
 export type ProxyServer = { name: string; ip: string; port: number };

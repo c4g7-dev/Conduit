@@ -45,9 +45,10 @@ This is the honest status against the factors that matter for the c4g7 network.
   with a persistent world. Scaling is one click (or one API call) today.
 - Each blueprint declares its **software + version** (`{kind, version}`), and the
   version is **selectable per task** in the New Task dialog — the list is pulled live
-  from the PaperMC API (`/api/versions`). The right **Java is auto-installed** (17 for
-  MC ≤1.20.4, 21 via Adoptium for 1.20.5+), so a `1.21.x` task just works. `kind` is the
-  extension seam — paper/velocity today; nginx/Hytale/etc. slot in later.
+  from the **PaperMC v3 "Fill" API** (`/api/versions`), so the newest releases show up
+  (e.g. 26.x). The required **Java is read from the API and installed automatically**
+  (any major, via the Adoptium binary API → `/opt/jre`), so a latest-version task just
+  works. `kind` is the extension seam — paper/velocity today; nginx/Hytale/etc. later.
 - Blueprints (and individual tasks) carry a **`seed`**: a world (`tar.gz` URL,
   extracted in-container), extra `server.properties`, a `server-icon.png`, and plugin
   jar URLs — all applied before first boot, so instances come up **game-ready** rather

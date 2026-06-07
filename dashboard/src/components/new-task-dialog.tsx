@@ -217,9 +217,9 @@ export function NewTaskDialog({
                   {bp.software.kind} · {bp.software.version}
                 </p>
               )}
-              {kind === "paper" && (
+              {versioned && (
                 <p className="text-[11px] text-muted-foreground">
-                  Java is auto-selected (17 for ≤1.20.4, 21 for 1.20.5+).
+                  The required Java is installed automatically per version (from the PaperMC API).
                 </p>
               )}
             </div>

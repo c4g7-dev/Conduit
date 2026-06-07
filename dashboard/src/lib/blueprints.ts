@@ -77,7 +77,7 @@ export const BLUEPRINTS: Blueprint[] = [
     description:
       "Player-facing edge on :25565. Routes players to backend lobbies/SMP, holds slot limits & maintenance.",
     provision: "openjdk-17 + Velocity + modern-forwarding secret, servers pushed live",
-    software: { kind: "velocity", version: "3.3.0-SNAPSHOT" },
+    software: { kind: "velocity", version: "3.4.0" },
   },
   {
     id: "paper-lobby",

@@ -364,6 +364,21 @@ export async function reconcileAll(): Promise<string[]> {
       }
     }
 
+    // GC orphans: conduit instances whose task no longer exists (e.g. a failed
+    // decommission left the container running). Only ever our own tagged instances.
+    const taskIds = new Set(db.tasks.map((t) => t.id));
+    const pendingVmids = new Set(db.tasks.flatMap((t) => recentVmids(t.id)));
+    for (const inst of all) {
+      if (inst.taskId && !taskIds.has(inst.taskId) && !pendingVmids.has(inst.vmid)) {
+        try {
+          await destroy(inst);
+          log.push(`gc orphan ${inst.vmid} (task ${inst.taskId} gone)`);
+        } catch (e) {
+          log.push(`! gc ${inst.vmid} failed: ${String(e)}`);
+        }
+      }
+    }
+
     // software provisioning (background) + proxy routing config push
     provisionPass(db, all, log);
     await velocityPass(db, all, log);
