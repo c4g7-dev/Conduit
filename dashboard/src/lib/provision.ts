@@ -157,14 +157,14 @@ const heap = (mem: number, reserve: number, floor: number) =>
  * NOTE: the exact tmux/systemd incantation is to be live-verified during
  * integration — this is the clean, plausible baseline.
  */
-const sysdUnit = (desc: string, exec: string) => `[Unit]
+const sysdUnit = (desc: string, exec: string, workDir = "/opt/mc") => `[Unit]
 Description=${desc}
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=forking
-WorkingDirectory=/opt/mc
+WorkingDirectory=${workDir}
 ExecStart=/usr/bin/tmux -L mc new-session -d -s mc -x 220 -y 50 '${exec}'
 ExecStop=/usr/bin/tmux -L mc send-keys -t mc 'stop' Enter
 Restart=always
@@ -436,7 +436,7 @@ const HYTALE_DIR = "/opt/hytale";
 
 function hytaleScript(task: Task): string {
   const mem = heap(task.memory, 1024, 2048);
-  const unit = sysdUnit(`Conduit Hytale (${task.name})`, `${HYTALE_DIR}/start.sh`);
+  const unit = sysdUnit(`Conduit Hytale (${task.name})`, `${HYTALE_DIR}/start.sh`, HYTALE_DIR);
   return `set -e
 DIR=${HYTALE_DIR}
 mkdir -p "$DIR/data/backups" "$DIR/logs"
