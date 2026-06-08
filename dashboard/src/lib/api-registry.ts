@@ -22,6 +22,7 @@ export const API_GROUPS = [
   "Conduit",
   "Servers",
   "Players & Connector",
+  "Automation",
   "Infrastructure",
   "Console & Files",
   "Backups",
@@ -50,7 +51,16 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
   { method: "GET", path: "/api/connector/servers", group: "Players & Connector", safe: true, desc: "Live connector-registered servers + flattened players." },
   { method: "POST", path: "/api/connector/action", group: "Players & Connector", desc: "Queue a player action for the proxy: move/message/broadcast/kick.", sampleBody: { kind: "message", player: "Notch", text: "hello" } },
   { method: "POST", path: "/api/connector/register", group: "Players & Connector", desc: "(plugin) Register a service. Token-auth.", sampleBody: { id: "Lobby-1", task: "lobby", group: "Network", env: "server" } },
-  { method: "POST", path: "/api/connector/heartbeat", group: "Players & Connector", desc: "(plugin) Heartbeat with players/counts/tps; proxy gets pending actions. Token-auth.", sampleBody: { id: "Lobby-1", online: 0, max: 50, players: [] } },
+  { method: "POST", path: "/api/connector/heartbeat", group: "Players & Connector", desc: "(plugin) Heartbeat with players/counts/tps; proxy gets pending actions + routing/MOTD config. Token-auth.", sampleBody: { id: "Lobby-1", online: 0, max: 50, players: [] } },
+  { method: "POST", path: "/api/connector/event", group: "Players & Connector", desc: "(plugin) join/quit/switch event → Activity feed. Token-auth.", sampleBody: { type: "join", player: "Notch", server: "lobby" } },
+
+  // ── Automation ───────────────────────────────────────────────────────
+  { method: "GET", path: "/api/activity", group: "Automation", safe: true, desc: "Engine event feed + derived health alerts." },
+  { method: "GET", path: "/api/schedules", group: "Automation", safe: true, desc: "Scheduled restarts/broadcasts." },
+  { method: "POST", path: "/api/schedules", group: "Automation", desc: "Create a schedule (restart/broadcast, daily HH:MM, warnings).", sampleBody: { name: "Nightly", groupId: "network", action: "restart", at: "04:00", warnMins: [5, 1] } },
+  { method: "PATCH", path: "/api/schedules/:id", group: "Automation", desc: "Update/toggle a schedule.", params: [{ name: "id", example: "nightly-ab12" }], sampleBody: { enabled: false } },
+  { method: "DELETE", path: "/api/schedules/:id", group: "Automation", destructive: true, desc: "Delete a schedule.", params: [{ name: "id", example: "nightly-ab12" }] },
+  { method: "POST", path: "/api/groups/:id/broadcast", group: "Automation", desc: "Broadcast a console command to every running server in a group.", params: [{ name: "id", example: "network" }], sampleBody: { command: "say hello" } },
 
   // ── Infrastructure ───────────────────────────────────────────────────
   { method: "GET", path: "/api/containers", group: "Infrastructure", safe: true, desc: "All LXC instances across the cluster." },
@@ -64,7 +74,12 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
 
   // ── Console & Files ──────────────────────────────────────────────────
   { method: "GET", path: "/api/services/:vmid/agent", group: "Console & Files", safe: true, desc: "Resolve which node agent + console port serves a container.", params: [{ name: "vmid", example: "202" }] },
-  { method: "GET", path: "/api/services/:vmid/files", group: "Console & Files", safe: true, query: "path=/opt/mc", desc: "List a directory inside a container (sandboxed to /opt).", params: [{ name: "vmid", example: "202" }] },
+  { method: "GET", path: "/api/services/:vmid/files", group: "Console & Files", safe: true, query: "path=/opt/mc", desc: "List a dir inside a container (?file=1 read, ?download=1 download).", params: [{ name: "vmid", example: "202" }] },
+  { method: "POST", path: "/api/services/:vmid/files", group: "Console & Files", desc: "Container file op: mkdir|delete|move|copy|upload|archive|extract.", params: [{ name: "vmid", example: "202" }], sampleBody: { action: "mkdir", path: "/opt/mc/newdir" } },
+  { method: "POST", path: "/api/services/:vmid/share", group: "Console & Files", desc: "Bind the service's config/plugins onto the shared store (/opt/shared); reboots the CT once.", params: [{ name: "vmid", example: "202" }] },
+  { method: "GET", path: "/api/files", group: "Console & Files", safe: true, query: "path=overlays", desc: "Shared store: list (?file=1 read, ?download=1 download a file/dir-as-zip)." },
+  { method: "PUT", path: "/api/files", group: "Console & Files", desc: "Shared store: write a file.", sampleBody: { path: "overlays/demo.txt", content: "hello" } },
+  { method: "POST", path: "/api/files", group: "Console & Files", desc: "Shared store file op: mkdir|delete|move|copy|upload|archive|extract.", sampleBody: { action: "mkdir", path: "overlays/demo" } },
   { method: "POST", path: "/api/services/:vmid/console", group: "Console & Files", desc: "Send a command line to the server console.", params: [{ name: "vmid", example: "202" }], sampleBody: { command: "list" } },
   { method: "GET", path: "/api/services/:vmid/console/stream", group: "Console & Files", stream: true, desc: "SSE: live console output stream.", params: [{ name: "vmid", example: "202" }] },
   { method: "GET", path: "/api/services/:vmid/install-log", group: "Console & Files", stream: true, desc: "SSE: provisioning install log stream.", params: [{ name: "vmid", example: "203" }] },
@@ -73,5 +88,6 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
   { method: "GET", path: "/api/backups", group: "Backups", safe: true, desc: "Snapshots on the backup store." },
   { method: "POST", path: "/api/backups", group: "Backups", desc: "Create an on-demand backup.", sampleBody: { vmid: 202, node: "skdCore01" } },
   { method: "POST", path: "/api/backups/jobs", group: "Backups", desc: "Schedule a recurring backup job.", sampleBody: { schedule: "03:00", vmid: 202 } },
+  { method: "DELETE", path: "/api/backups/jobs/:id", group: "Backups", destructive: true, desc: "Delete a scheduled backup job.", params: [{ name: "id", example: "backup-202" }] },
   { method: "POST", path: "/api/backups/restore", group: "Backups", destructive: true, desc: "Restore a container from a snapshot.", sampleBody: { volid: "…", vmid: 202, node: "skdCore01" } },
 ];
