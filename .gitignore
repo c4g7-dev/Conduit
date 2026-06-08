@@ -20,3 +20,5 @@ dashboard/data/
 *.log
 .vercel
 .claude/worktrees/
+plugin/lib/
+plugin/out/

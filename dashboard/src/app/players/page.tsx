@@ -210,7 +210,7 @@ export default function PlayersPage() {
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-[11px] text-muted-foreground/60">Player names come from Minecraft server-list-ping samples (capped at ~12 per server by the protocol).</p>
+      <p className="mt-2 text-[11px] text-muted-foreground/60">{connActive ? "Full player list via the Conduit connector plugin (live)." : "Player names from Minecraft server-list-ping samples (capped at ~12 per server)."}</p>
     </>
   );
 }

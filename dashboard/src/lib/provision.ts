@@ -157,7 +157,29 @@ const heap = (mem: number, reserve: number, floor: number) =>
  * NOTE: the exact tmux/systemd incantation is to be live-verified during
  * integration — this is the clean, plausible baseline.
  */
-const sysdUnit = (desc: string, exec: string, workDir = "/opt/mc") => `[Unit]
+/** Env vars the Conduit connector plugin reads (endpoint/token/identity). */
+function connectorEnv(vmid: number, task: Task, envKind: "proxy" | "server"): Record<string, string> {
+  const vip = process.env.CONDUIT_VIP || process.env.PROXMOX_HOST || "10.27.27.50";
+  const token = process.env.CONDUIT_CONNECTOR_TOKEN || process.env.CONDUIT_AGENT_TOKEN || "";
+  return {
+    CONDUIT_ENDPOINT: `http://${vip}:3001`,
+    CONDUIT_TOKEN: token,
+    CONDUIT_SERVICE_ID: `${task.id}-${vmid}`,
+    CONDUIT_TASK: task.name,
+    CONDUIT_GROUP: task.groupId,
+  };
+}
+
+/** Push the connector jar (from the shared store) into a container's plugins dir. */
+export async function installConnector(vmid: number, host?: string): Promise<void> {
+  const jar = "/var/lib/conduit/connector/conduit-connector.jar";
+  await nodeExec(
+    `if [ -f '${jar}' ]; then pct exec ${vmid} -- mkdir -p /opt/mc/plugins && pct push ${vmid} '${jar}' /opt/mc/plugins/conduit-connector.jar; fi`,
+    60_000, host,
+  );
+}
+
+const sysdUnit = (desc: string, exec: string, workDir = "/opt/mc", env: Record<string, string> = {}) => `[Unit]
 Description=${desc}
 After=network-online.target
 Wants=network-online.target
@@ -165,6 +187,7 @@ Wants=network-online.target
 [Service]
 Type=forking
 WorkingDirectory=${workDir}
+${Object.entries(env).map(([k, v]) => `Environment="${k}=${v}"`).join("\n")}
 ExecStart=/usr/bin/tmux -L mc new-session -d -s mc -x 220 -y 50 '${exec}'
 ExecStop=/usr/bin/tmux -L mc send-keys -t mc 'stop' Enter
 Restart=always
@@ -208,7 +231,7 @@ function seedShell(seed: Seed): string {
   return lines.join("\n");
 }
 
-function paperScript(task: Task, secret: string, seed: Seed, build: Resolved): string {
+function paperScript(task: Task, secret: string, seed: Seed, build: Resolved, vmid: number): string {
   const mem = heap(task.memory, 1024, 1024);
   // properties parser reads \n as a newline; keep it literal in the file
   const motd = colorize(task.motd || defaultMotd(task.name)).replace(/\n/g, "\\n");
@@ -236,6 +259,8 @@ proxies:
   const unit = sysdUnit(
     `Conduit Paper (${task.name})`,
     `${JAVA_BIN} -Xms${mem}M -Xmx${mem}M -XX:+UseG1GC -jar server.jar --nogui`,
+    "/opt/mc",
+    connectorEnv(vmid, task, "server"),
   );
   return `set -e
 MCDIR=/opt/mc
@@ -275,7 +300,7 @@ export async function installPaper(
   host?: string,
 ): Promise<void> {
   const build = await resolveBuild("paper", version);
-  await ctExec(vmid, paperScript(task, secret, seed, build), 360_000, host);
+  await ctExec(vmid, paperScript(task, secret, seed, build, vmid), 360_000, host);
 }
 
 /* ---- Hytale (shared-asset mount) ----------------------------------------- */
@@ -531,11 +556,13 @@ export async function installNginx(vmid: number, host?: string): Promise<void> {
 
 /* ---- Velocity (proxy) ---------------------------------------------------- */
 
-function velocityScript(task: Task, secret: string, build: Resolved): string {
+function velocityScript(task: Task, secret: string, build: Resolved, vmid: number): string {
   const mem = heap(task.memory, 512, 512);
   const unit = sysdUnit(
     `Conduit Velocity (${task.name})`,
     `${JAVA_BIN} -Xms256M -Xmx${mem}M -jar velocity.jar`,
+    "/opt/mc",
+    connectorEnv(vmid, task, "proxy"),
   );
   return `set -e
 MCDIR=/opt/mc
@@ -567,7 +594,7 @@ export async function installVelocity(
   host?: string,
 ): Promise<void> {
   const build = await resolveBuild("velocity", version);
-  await ctExec(vmid, velocityScript(task, secret, build), 360_000, host);
+  await ctExec(vmid, velocityScript(task, secret, build, vmid), 360_000, host);
 }
 
 /** Default MOTD for a task when none is set (MiniMessage format for Velocity). */
