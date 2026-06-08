@@ -5,8 +5,11 @@ import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
 import { RoleDot } from "@/components/role-dot";
+import {
+  ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
-import { Users, Send, UserX, Radio, Loader2 } from "lucide-react";
+import { Users, Send, UserX, Radio, Loader2, MoveRight, MessageSquare } from "lucide-react";
 
 type MetricRow = {
   vmid: number; taskName: string; role: string; reachable: boolean;
@@ -102,16 +105,31 @@ export default function PlayersPage() {
     }
   }
 
-  async function kick(p: PlayerRow) {
+  // Player actions: prefer the connector (network-wide via the proxy); fall back to console.
+  async function playerAction(kind: "kick" | "move" | "message", p: PlayerRow, extra?: string) {
     setKicking(p.name);
     try {
-      const res = await fetch(`/api/services/${p.vmid}/console`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: `kick ${p.name}` }),
-      });
-      const j = await res.json();
-      if (j.error) throw new Error(j.error);
-      toast.success(`Kicked ${p.name}`);
+      if (connActive) {
+        const body: Record<string, string> = { kind, player: p.name };
+        if (kind === "move") body.target = extra!;
+        if (kind === "message") body.text = extra!;
+        if (kind === "kick" && extra) body.reason = extra;
+        const res = await fetch("/api/connector/action", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        const j = await res.json();
+        if (j.error) throw new Error(j.error);
+      } else if (kind === "kick") {
+        // SLP fallback: kick via the backend console
+        const res = await fetch(`/api/services/${p.vmid}/console`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: `kick ${p.name}` }),
+        });
+        const j = await res.json();
+        if (j.error) throw new Error(j.error);
+      } else {
+        throw new Error("connector required for that action");
+      }
+      toast.success(`${kind} → ${p.name}`);
       setTimeout(refresh, 800);
     } catch (e) {
       toast.error(String(e));
@@ -183,22 +201,30 @@ export default function PlayersPage() {
           </thead>
           <tbody>
             {players.map((p) => (
-              <tr key={`${p.vmid}-${p.name}`} className="group border-b border-hairline transition-colors last:border-0 hover:bg-accent/40">
-                <td className="px-4 py-2.5">
-                  <span className="flex items-center gap-2.5">
-                    <span className="flex h-6 w-6 items-center justify-center rounded bg-accent text-[11px] font-semibold uppercase text-muted-foreground">{p.name.slice(0, 2)}</span>
-                    <span className="font-medium">{p.name}</span>
-                  </span>
-                </td>
-                <td className="px-4 py-2.5"><span className="flex items-center gap-2"><RoleDot role={p.role} /> {p.server}</span></td>
-                <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">#{p.vmid}</td>
-                <td className="px-4 py-2.5 text-right">
-                  <button onClick={() => kick(p)} disabled={kicking === p.name}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-hairline px-2.5 py-1 text-xs text-muted-foreground opacity-0 transition-all hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 disabled:opacity-50">
-                    {kicking === p.name ? <Loader2 className="h-3 w-3 animate-spin" /> : <UserX className="h-3 w-3" />} Kick
-                  </button>
-                </td>
-              </tr>
+              <ContextMenu key={`${p.vmid}-${p.name}`}>
+                <ContextMenuTrigger render={<tr className="group cursor-default border-b border-hairline transition-colors last:border-0 hover:bg-accent/40" />}>
+                  <td className="px-4 py-2.5">
+                    <span className="flex items-center gap-2.5">
+                      <span className="flex h-6 w-6 items-center justify-center rounded bg-accent text-[11px] font-semibold uppercase text-muted-foreground">{p.name.slice(0, 2)}</span>
+                      <span className="font-medium">{p.name}</span>
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5"><span className="flex items-center gap-2"><RoleDot role={p.role} /> {p.server}</span></td>
+                  <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">#{p.vmid}</td>
+                  <td className="px-4 py-2.5 text-right">
+                    {kicking === p.name
+                      ? <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                      : <span className="text-[11px] text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100">right-click ⋯</span>}
+                  </td>
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuLabel>{p.name}{p.uuid ? ` · ${p.uuid.slice(0, 8)}` : ""}</ContextMenuLabel>
+                  <ContextMenuItem disabled={!connActive} onClick={() => { const t = prompt(`Move ${p.name} to which server/task?`); if (t?.trim()) playerAction("move", p, t.trim()); }}><MoveRight /> Move to…</ContextMenuItem>
+                  <ContextMenuItem disabled={!connActive} onClick={() => { const m = prompt(`Message to ${p.name}:`); if (m?.trim()) playerAction("message", p, m.trim()); }}><MessageSquare /> Message…</ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem variant="destructive" onClick={() => { const r = connActive ? prompt(`Kick ${p.name} — reason (optional):`) ?? "" : ""; playerAction("kick", p, r || undefined); }}><UserX /> Kick</ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
             ))}
             {players.length === 0 && (
               <tr><td colSpan={4} className="px-4 py-16 text-center text-sm text-muted-foreground">
@@ -210,7 +236,7 @@ export default function PlayersPage() {
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-[11px] text-muted-foreground/60">{connActive ? "Full player list via the Conduit connector plugin (live)." : "Player names from Minecraft server-list-ping samples (capped at ~12 per server)."}</p>
+      <p className="mt-2 text-[11px] text-muted-foreground/60">{connActive ? "Full player list via the Conduit connector — right-click a player for move/message/kick · in-game: /ct." : "Player names from Minecraft server-list-ping samples (capped at ~12 per server)."}</p>
     </>
   );
 }

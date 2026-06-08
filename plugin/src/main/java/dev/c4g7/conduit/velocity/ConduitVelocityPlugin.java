@@ -28,6 +28,7 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 import dev.c4g7.conduit.ConduitClient;
+import dev.c4g7.conduit.ConduitCommands;
 
 /**
  * Conduit connector for Velocity — proxy side of the CloudNet-Bridge/SyncProxy equivalent.
@@ -62,6 +63,18 @@ public class ConduitVelocityPlugin {
         for (String name : new String[]{"hub", "lobby", "leave"}) {
             proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder(name).build(), hub);
         }
+
+        // /ct (alias /conduit) → network control, permission-gated
+        SimpleCommand ct = new SimpleCommand() {
+            @Override public void execute(Invocation inv) {
+                if (!inv.source().hasPermission("conduit.admin")) {
+                    inv.source().sendMessage(LEGACY.deserialize("&cNo permission.")); return;
+                }
+                ConduitCommands.run(client, inv.arguments(), line -> inv.source().sendMessage(LEGACY.deserialize(line)));
+            }
+            @Override public boolean hasPermission(Invocation inv) { return inv.source().hasPermission("conduit.admin"); }
+        };
+        proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder("ct").aliases("conduit").build(), ct);
 
         proxy.getScheduler().buildTask(this, this::tick)
                 .repeat(3, TimeUnit.SECONDS).delay(2, TimeUnit.SECONDS).schedule();

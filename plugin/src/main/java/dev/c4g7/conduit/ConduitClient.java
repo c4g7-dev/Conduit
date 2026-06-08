@@ -110,6 +110,30 @@ public final class ConduitClient {
         return out;
     }
 
+    /** GET a panel endpoint, returning the parsed JSON object (or null on failure). */
+    public JsonObject apiGet(String path) {
+        try {
+            HttpRequest req = HttpRequest.newBuilder(URI.create(endpoint + path))
+                    .timeout(Duration.ofSeconds(6)).header("Authorization", "Bearer " + token).GET().build();
+            HttpResponse<String> r = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (r.statusCode() == 200) return GSON.fromJson(r.body(), JsonObject.class);
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /** Queue a player action via the panel (network-wide). Returns true on success. */
+    public boolean queueAction(String kind, String player, String target, String text, String reason) {
+        try {
+            JsonObject o = new JsonObject();
+            o.addProperty("kind", kind);
+            if (player != null) o.addProperty("player", player);
+            if (target != null) o.addProperty("target", target);
+            if (text != null) o.addProperty("text", text);
+            if (reason != null) o.addProperty("reason", reason);
+            return post("/api/connector/action", o).statusCode() == 200;
+        } catch (Exception e) { return false; }
+    }
+
     public void event(String type, String player, String server) {
         try {
             JsonObject o = new JsonObject();

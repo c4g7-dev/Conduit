@@ -1,12 +1,17 @@
 package dev.c4g7.conduit.paper;
 
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
+
+import dev.c4g7.conduit.ConduitCommands;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -54,6 +59,16 @@ public class ConduitPaperPlugin extends JavaPlugin implements Listener {
         final double ftps = tps;
         getServer().getScheduler().runTaskAsynchronously(this, () ->
                 client.heartbeat(players.size(), max, ftps, players));
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
+        if (!sender.hasPermission("conduit.admin")) { sender.sendMessage(ChatColor.RED + "No permission."); return true; }
+        // Run the command core async (it does HTTP); reply on the main thread.
+        getServer().getScheduler().runTaskAsynchronously(this, () ->
+                ConduitCommands.run(client, args, line ->
+                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', line))));
+        return true;
     }
 
     @EventHandler
