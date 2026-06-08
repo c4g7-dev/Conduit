@@ -1,11 +1,19 @@
 /**
- * Tiny JSON-file store for Conduit's desired state (groups + tasks).
+ * Store for Conduit's desired state (groups + tasks).
  * The controller reconciles Proxmox reality towards what's written here.
+ *
+ * Two backends, same public API (getDB/saveDB/mutate/getNetwork):
+ *   - "file" (default): local JSON at cwd/data/conduit.json — dev on a workstation.
+ *   - "agent": read/write via a node agent's /v1/state, which persists to the
+ *     corosync-replicated /etc/pve/conduit/conduit.json so every panel LXC shares
+ *     one consistent, quorum-backed copy. Enabled with CONDUIT_STATE_BACKEND=agent
+ *     + CONDUIT_STATE_AGENT=<host>.
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Seed, Software, Blueprint } from "./blueprints";
+import { agentGetState, agentPutState } from "./agent";
 
 export type Group = {
   id: string; // kebab, also the Proxmox pool id
@@ -40,11 +48,26 @@ export type Task = {
   software?: Software;
   /** server list MOTD (supports & colour codes); applied to this task's instances */
   motd?: string;
+  /** for dynamic tasks: the golden template CT (stopped) that scale-ups clone from */
+  templateVmid?: number;
   createdAt: number;
 };
 
 /** Network-wide settings shared by all instances (e.g. proxy↔backend secret). */
 export type Network = { forwardingSecret: string };
+
+/** A recurring scheduled action against a group (run by the leader controller). */
+export type Schedule = {
+  id: string;
+  name: string;
+  groupId: string;
+  action: "restart" | "broadcast";
+  at: string; // "HH:MM" 24h, daily
+  command?: string; // for broadcast
+  warnMins: number[]; // pre-action `say` warnings (restart), e.g. [5, 1]
+  enabled: boolean;
+  lastRun?: string; // "YYYY-MM-DD HH:MM" of the last action run (dedup)
+};
 
 export type DB = {
   groups: Group[];
@@ -52,29 +75,53 @@ export type DB = {
   network?: Network;
   /** user-created templates, merged with the built-in blueprints */
   blueprints?: Blueprint[];
+  /** recurring scheduled actions (restarts, broadcasts) */
+  schedules?: Schedule[];
 };
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const FILE = path.join(DATA_DIR, "conduit.json");
 
+const STATE_BACKEND = process.env.CONDUIT_STATE_BACKEND ?? "file";
+const STATE_AGENT = process.env.CONDUIT_STATE_AGENT ?? "";
+const useAgentState = STATE_BACKEND === "agent" && STATE_AGENT.length > 0;
+
 let cache: DB | null = null;
 let writing: Promise<void> = Promise.resolve();
 
+function normalize(db: Partial<DB> | null | undefined): DB {
+  return {
+    groups: db?.groups ?? [],
+    tasks: db?.tasks ?? [],
+    network: db?.network,
+    blueprints: db?.blueprints,
+  };
+}
+
 /**
- * Always read the JSON from disk. Next.js can run instrumentation (the controller
- * loop) and route handlers in separate module instances, so an in-memory cache
- * goes stale across them — e.g. the controller GC-ing a container for a task that
- * a route just created. Reading the small file each call keeps every instance
- * consistent. `cache` is kept only as a last-resort fallback on read error.
+ * Always read fresh state. Next.js can run instrumentation (the controller loop)
+ * and route handlers in separate module instances, so an in-memory cache goes stale
+ * across them. Reading the source each call keeps every instance consistent;
+ * `cache` is only a last-resort fallback when the source is unreachable.
  */
 async function ensure(): Promise<DB> {
+  if (useAgentState) {
+    try {
+      cache = normalize(await agentGetState<Partial<DB>>(STATE_AGENT));
+      return cache;
+    } catch {
+      if (cache) return cache;
+      cache = normalize(null);
+      return cache;
+    }
+  }
   try {
     const raw = await fs.readFile(FILE, "utf8");
     cache = JSON.parse(raw) as DB;
     return cache;
   } catch {
     if (cache) return cache;
-    cache = { groups: [], tasks: [] };
+    cache = normalize(null);
     await fs.mkdir(DATA_DIR, { recursive: true });
     await fs.writeFile(FILE, JSON.stringify(cache, null, 2));
     return cache;
@@ -89,6 +136,10 @@ export async function saveDB(db: DB): Promise<void> {
   cache = db;
   // serialize writes so concurrent reconciles don't clobber each other
   writing = writing.then(async () => {
+    if (useAgentState) {
+      await agentPutState(STATE_AGENT, db);
+      return;
+    }
     await fs.mkdir(DATA_DIR, { recursive: true });
     await fs.writeFile(FILE, JSON.stringify(db, null, 2));
   });

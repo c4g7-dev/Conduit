@@ -1,0 +1,17 @@
+[Unit]
+Description=Conduit Web Panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/conduit/panel.env
+WorkingDirectory=/opt/conduit-panel
+# Next.js standalone entrypoint.
+ExecStart=/usr/bin/node /opt/conduit-panel/server.js
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target

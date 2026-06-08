@@ -55,6 +55,18 @@ export async function POST(req: NextRequest) {
       if (!db.groups.some((g) => g.id === groupId)) throw new Error("group not found");
       if (db.tasks.some((t) => t.id === id)) throw new Error("task exists");
       db.tasks.push(task);
+
+      // Auto-register this backend with every proxy in the same group so new backends
+      // are immediately routable without a manual edit of each proxy task.
+      // Only applies to non-proxy roles (proxy tasks route backends, not other proxies).
+      if (bp.role !== "proxy") {
+        for (const t of db.tasks) {
+          if (t.groupId === groupId && blueprint(t.blueprintId)?.role === "proxy") {
+            if (!t.fronts.includes(id)) t.fronts = [...t.fronts, id];
+          }
+        }
+      }
+
       return task;
     });
 

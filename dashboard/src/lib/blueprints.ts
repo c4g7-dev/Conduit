@@ -19,8 +19,13 @@ export type Role = "proxy" | "lobby" | "smp" | "db" | "generic";
  * `version` is what gets pulled — e.g. the Minecraft version for paper, the Velocity
  * version for velocity. Selectable per-task in the UI.
  */
-export type SoftwareKind = "paper" | "velocity" | "mariadb" | "hytale" | "generic";
-export type Software = { kind: SoftwareKind; version: string };
+export type SoftwareKind = "paper" | "velocity" | "mariadb" | "hytale" | "nginx" | "generic";
+export type Software = {
+  kind: SoftwareKind;
+  version: string;
+  /** Direct download URL for the primary binary (used by hytale/generic recipes). */
+  downloadUrl?: string;
+};
 
 /** Declarative "game-ready" content applied in-container at first provision. */
 export type Seed = {
@@ -157,6 +162,22 @@ export const BLUEPRINTS: Blueprint[] = [
     provision: "TBD — Hytale server + shared assets",
     software: { kind: "hytale", version: "latest" },
     sharedAssets: true,
+  },
+  {
+    id: "nginx",
+    name: "Nginx Web",
+    role: "generic",
+    mode: "static",
+    persistent: true,
+    base: DEBIAN,
+    cores: 1,
+    memory: 512,
+    disk: 8,
+    port: 80,
+    description:
+      "Nginx web server. Serves /opt/www — editable via the file manager or the egg template. Use as a static host or reverse proxy.",
+    provision: "nginx + /opt/www document root",
+    software: { kind: "nginx", version: "stable" },
   },
 ];
 

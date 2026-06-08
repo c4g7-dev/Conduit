@@ -1,12 +1,13 @@
 /**
- * Read-only file browser for a service's `/opt/mc` tree.
+ * Read-only file browser for a service's `/opt` tree.
  *
  * Runs `ls`/`cat` inside the container from the Proxmox node:
  *   - GET ?path=/opt/mc           → directory listing [{name,type,size,mtime}]
  *   - GET ?path=...&file=1        → file contents (capped at ~256KB) for text view
  *
- * Sandboxed to within /opt/mc — any path that escapes (via `..`, or not rooted at
- * /opt/mc) is rejected. No write/delete (read-only for now).
+ * Sandboxed to within /opt — covers every template's service dir (/opt/mc,
+ * /opt/hytale, …). Any path that escapes (via `..`, or not rooted at /opt) is
+ * rejected. No write/delete restrictions beyond the sandbox.
  */
 import { NextRequest, NextResponse } from "next/server";
 import path from "node:path";
@@ -16,12 +17,13 @@ import { vmidHost } from "@/lib/proxmox";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const ROOT = "/opt/mc";
+const ROOT = "/opt";
+const DEFAULT_PATH = "/opt/mc";
 const MAX_BYTES = 256 * 1024;
 
-/** Normalise + sandbox a requested path to within /opt/mc. Returns null if it escapes. */
+/** Normalise + sandbox a requested path to within /opt. Returns null if it escapes. */
 function safePath(raw: string | null): string | null {
-  const p = path.posix.normalize(raw && raw.trim() ? raw.trim() : ROOT);
+  const p = path.posix.normalize(raw && raw.trim() ? raw.trim() : DEFAULT_PATH);
   if (p !== ROOT && !p.startsWith(`${ROOT}/`)) return null;
   if (p.split("/").includes("..")) return null;
   return p;
@@ -53,6 +55,38 @@ function parseLs(out: string): Entry[] {
   return entries;
 }
 
+export async function PUT(
+  req: NextRequest,
+  ctx: { params: Promise<{ vmid: string }> },
+) {
+  try {
+    const { vmid } = await ctx.params;
+    const id = Number(vmid);
+    if (!Number.isInteger(id) || id < 200 || id > 999)
+      return NextResponse.json({ error: "invalid vmid" }, { status: 400 });
+
+    const body = (await req.json()) as { path?: string; content?: string };
+    const target = safePath(body.path ?? null);
+    if (!target)
+      return NextResponse.json({ error: "path outside /opt" }, { status: 400 });
+    if (typeof body.content !== "string")
+      return NextResponse.json({ error: "content required" }, { status: 400 });
+
+    const b64Path = Buffer.from(target, "utf8").toString("base64");
+    const b64Content = Buffer.from(body.content, "utf8").toString("base64");
+    const host = await vmidHost(id);
+
+    await nodeExec(
+      `pct exec ${id} -- bash -c 'p="$(echo ${b64Path} | base64 -d)"; echo ${b64Content} | base64 -d > "$p"'`,
+      30_000,
+      host,
+    );
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 502 });
+  }
+}
+
 export async function GET(
   req: NextRequest,
   ctx: { params: Promise<{ vmid: string }> },
@@ -66,7 +100,7 @@ export async function GET(
 
     const target = safePath(req.nextUrl.searchParams.get("path"));
     if (!target) {
-      return NextResponse.json({ error: "path outside /opt/mc" }, { status: 400 });
+      return NextResponse.json({ error: "path outside /opt" }, { status: 400 });
     }
     const wantFile = req.nextUrl.searchParams.get("file") === "1";
     const b64Path = Buffer.from(target, "utf8").toString("base64");

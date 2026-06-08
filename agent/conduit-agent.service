@@ -1,0 +1,17 @@
+[Unit]
+Description=Conduit Node Agent
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/conduit/agent.env
+WorkingDirectory=/opt/conduit-agent
+ExecStart=/usr/bin/node /opt/conduit-agent/src/index.mjs
+Restart=always
+RestartSec=3
+# Agent needs root for `pct exec`.
+User=root
+
+[Install]
+WantedBy=multi-user.target

@@ -15,13 +15,19 @@ import { getDB, saveDB, getNetwork, type Task, type Group } from "./store";
 import {
   installPaper,
   installVelocity,
+  installHytale,
+  installNginx,
   syncVelocity,
   forgetVelocity,
   nodeExec,
+  pushInstallLog,
+  ctExec,
   type ProxyServer,
 } from "./provision";
 import { pingMc } from "./mcping";
+import { applyTemplate, serviceDir } from "./templates";
 import { assetNodePath } from "./assets";
+import { recordReconcile } from "./events";
 
 export const CONDUIT_TAG = "conduit";
 export const READY_TAG = "ready";
@@ -84,23 +90,44 @@ export function endRestore() {
 async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
   const net = await getNetwork();
   const version = task.software?.version ?? bp.software.version;
-  const host = await nodeIp(inst.node); // SSH to the node that hosts this instance
-  if (bp.role === "proxy") {
+  const host = await nodeIp(inst.node);
+  const kind = bp.software.kind;
+
+  if (kind === "velocity") {
     await installVelocity(inst.vmid, task, net.forwardingSecret, version, host);
-  } else if (bp.role === "lobby" || bp.role === "smp") {
-    // task seed overrides/extends the blueprint's default seed
+  } else if (kind === "paper") {
     const merged = {
       ...bp.seed,
       ...task.seed,
       properties: { ...bp.seed?.properties, ...task.seed?.properties },
       plugins: [...(bp.seed?.plugins ?? []), ...(task.seed?.plugins ?? [])],
     };
-    // uploaded assets (conduit-asset: refs) → pct push into the CT, rewrite to local path
     const seed = await resolveSeedAssets(inst, merged);
     await installPaper(inst.vmid, task, net.forwardingSecret, seed, version, host);
+  } else if (kind === "hytale") {
+    // Hytale uses the shared /assets mount (sharedAssets: true on the blueprint).
+    // ensureHytaleAssets runs first: auto-downloads the binary when downloadUrl is set,
+    // or warns + waits if it's missing and no URL is configured.
+    const sw = { ...bp.software, ...task.software };
+    await installHytale(inst.vmid, task, sw, host);
+  } else if (kind === "mariadb") {
+    pushInstallLog(inst.vmid, `[conduit] MariaDB install recipe not yet implemented — container is a bare OS.`);
+    await ctExec(inst.vmid, `echo "[conduit] MariaDB placeholder." > /opt/conduit-info.txt`, 30_000, host);
+  } else if (kind === "nginx") {
+    await installNginx(inst.vmid, host);
   } else {
-    return; // db/generic: container lifecycle only, no MC software (yet)
+    // generic / unknown — bare OS, show in UI, configure manually
+    pushInstallLog(inst.vmid, `[conduit] Blueprint "${bp.name}" (${kind}) — no install recipe. Bare Debian container.`);
+    await ctExec(inst.vmid, `echo "[conduit] Container provisioned at $(date)." > /opt/conduit-info.txt`, 30_000, host);
   }
+
+  // CloudNet-style overlay: copy templates/<egg>/ + tasks/<task>/ into the service dir.
+  try {
+    await applyTemplate(inst.vmid, bp.id, task.id, serviceDir(kind), host);
+  } catch (e) {
+    pushInstallLog(inst.vmid, `[conduit] template overlay skipped: ${String(e)}`);
+  }
+
   const tags = inst.tags ? `${inst.tags};${READY_TAG}` : READY_TAG;
   await api.setLxcConfig(inst.vmid, { tags }, inst.node);
 }
@@ -146,7 +173,7 @@ function provisionPass(db: Awaited<ReturnType<typeof getDB>>, all: Instance[], l
     if (provisioning.has(inst.vmid)) continue;
     const task = db.tasks.find((t) => t.id === inst.taskId);
     const bp = task ? blueprint(task.blueprintId) : undefined;
-    if (!task || !bp || bp.role === "db" || bp.role === "generic") continue;
+    if (!task || !bp) continue;
 
     provisioning.add(inst.vmid);
     log.push(`~ ${task.id}: installing ${bp.role} on ${inst.vmid}`);
@@ -172,9 +199,16 @@ async function velocityPass(
       if (!ft || !fbp) return [];
       return instancesOf(all, fid)
         .filter(ready)
-        .map((i) => ({ name: `${ft.name}-${i.vmid}`, ip: i.ip!, port: fbp.port }));
+        .map((i) => ({
+          name: `${ft.name.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "")}-${i.vmid}`,
+          ip: i.ip!,
+          port: fbp.port,
+        }));
     });
-    if (servers.length === 0) continue;
+    // Always push velocity.toml to every ready proxy — even with zero backends.
+    // Without this, a fresh proxy runs with Velocity's auto-generated placeholder config
+    // (lobby = "127.0.0.1:30066", etc.) which causes connection failures until backends
+    // arrive. An empty servers list produces a valid toml that Velocity accepts cleanly.
 
     for (const p of instancesOf(all, proxy.id).filter(ready)) {
       try {
@@ -249,7 +283,12 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(n, hi
 /** Autoscale target for a dynamic task: one spare joinable server above current load. */
 export function autoscaleTarget(players: number, perInstance: number, min: number, max: number) {
   const per = Math.max(1, perInstance);
-  const loadBased = Math.ceil(players / per) + 1; // +1 keeps a fresh lobby ready
+  const needed = Math.ceil(players / per);
+  // Add a spare only when we are scaling ABOVE the minimum floor — the min instances
+  // already act as the always-available baseline, so no extra spare is needed on top of them.
+  // This prevents a 2nd lobby from spawning when 1 player joins a min=1 setup.
+  const spare = needed > min ? 1 : 0;
+  const loadBased = Math.max(min, needed + spare);
   const cap = max > 0 ? max : loadBased;
   return clamp(loadBased, min, cap);
 }
@@ -363,6 +402,15 @@ export async function reconcileAll(): Promise<string[]> {
     const db = await getDB();
     const all = await discoverInstances();
 
+    // SAFETY: never act on a suspiciously-empty desired state while real conduit
+    // instances exist. An empty store almost always means a state-load failure
+    // (agent unreachable → {} fallback, or a not-yet-seeded shared file), NOT an
+    // intent to tear down the whole network. Acting here would GC every container.
+    if (db.tasks.length === 0 && db.groups.length === 0 && all.length > 0) {
+      busy = false;
+      return [`skip: empty desired state but ${all.length} live conduit instance(s) — refusing to GC (likely state-load failure)`];
+    }
+
     // Gather live player counts once if any task autoscales (drives desired + safe drain).
     const autoTasks = db.tasks.filter((t) => t.autoscale);
     const portOf = (i: Instance) => {
@@ -398,6 +446,20 @@ export async function reconcileAll(): Promise<string[]> {
           log.push(`autoscale ${task.id}: ${load}p → want ${desired} (have ${have})`);
       } else {
         desired = clamp(task.desired, task.min, task.max > 0 ? task.max : task.desired);
+      }
+
+      // Restart any stopped containers that should be running — a crash or manual
+      // stop leaves the CT in Proxmox but the controller previously ignored it,
+      // counting it against `have` while leaving it offline.
+      for (const inst of live) {
+        if (inst.status === "stopped") {
+          try {
+            await api.lxcAction(inst.vmid, "start", inst.node);
+            log.push(`~ ${task.id}: restarted stopped instance ${inst.vmid}`);
+          } catch (e) {
+            log.push(`! ${task.id}: failed to start ${inst.vmid}: ${String(e)}`);
+          }
+        }
       }
 
       if (have < desired) {
@@ -456,8 +518,13 @@ export async function reconcileAll(): Promise<string[]> {
   } finally {
     busy = false;
   }
+  recordReconcile(log); // surface acted lines in the Activity feed
   return log;
 }
+
+// The periodic reconcile loop lives in src/instrumentation.ts (the Next.js bootstrap
+// hook), which is leader-gated on the VIP for the HA panel-per-node deployment.
+// Keeping a single loop there avoids double reconciles on the leader.
 
 /** Proxy routing tables: for each proxy task, its fronted backends + IPs. */
 export async function routingTables() {
