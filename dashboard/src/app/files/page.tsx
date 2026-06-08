@@ -7,28 +7,38 @@ import { PageHeader } from "@/components/page-header";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { bytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { FilesPanel } from "@/components/files-panel";
 import {
   Folder, FileText, ChevronRight, CornerLeftUp, Save, X, Trash2, FolderPlus, Box, ServerCog, Loader2,
 } from "lucide-react";
+
+// In-container roots per service kind (mirrors the service detail page).
+function serviceRoots(kind: string): { label: string; path: string }[] {
+  if (kind === "hytale") return [{ label: "Server data", path: "/opt/hytale/data" }, { label: "Launcher", path: "/opt/hytale" }];
+  if (kind === "nginx") return [{ label: "Web root", path: "/opt/www" }];
+  return [{ label: "Server", path: "/opt/mc" }, { label: "Shared", path: "/opt/shared" }];
+}
 
 type Entry = { name: string; type: "dir" | "file"; size: number; mtime: number };
 type ConduitState = { groups: { tasks: { id: string; name: string; softwareKind: string; instances: { vmid: number; status: string }[] }[] }[] };
 
 // The CloudNet-style roots on the shared store.
 const ROOTS = [
-  { id: "templates", label: "Templates", hint: "base file trees copied into new services" },
+  { id: "overlays", label: "Overlays", hint: "file trees layered onto services" },
   { id: "tasks", label: "Tasks", hint: "per-task config overlays" },
   { id: "assets", label: "Assets", hint: "worlds · plugins · configs" },
 ];
 
 export default function FilesPage() {
-  const [root, setRoot] = useState("templates");
-  const [path, setPath] = useState("templates");
+  const [root, setRoot] = useState("overlays");
+  const [path, setPath] = useState("overlays");
   const { data, error, loading, refresh } = usePoll<{ path: string; entries: Entry[] }>(
     `/api/files?path=${encodeURIComponent(path)}`, 15000,
   );
   const { data: state } = usePoll<ConduitState>("/api/conduit/state", 10000);
   const [viewing, setViewing] = useState<string | null>(null);
+  // When a live service is selected, the right pane shows its in-container files inline.
+  const [svc, setSvc] = useState<{ vmid: number; name: string; kind: string } | null>(null);
 
   const segs = path.split("/").filter(Boolean);
   const parent = segs.length > 1 ? segs.slice(0, -1).join("/") : null;
@@ -59,9 +69,9 @@ export default function FilesPage() {
           <div className="panel p-2">
             <div className="eyebrow px-2 py-1">Shared store</div>
             {ROOTS.map((r) => (
-              <button key={r.id} onClick={() => { setRoot(r.id); setPath(r.id); }}
-                className={cn("flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors", root === r.id ? "bg-accent" : "hover:bg-accent/50")}>
-                <Box className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", root === r.id ? "text-brand" : "text-muted-foreground")} />
+              <button key={r.id} onClick={() => { setRoot(r.id); setPath(r.id); setSvc(null); }}
+                className={cn("flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors", !svc && root === r.id ? "bg-accent" : "hover:bg-accent/50")}>
+                <Box className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", !svc && root === r.id ? "text-brand" : "text-muted-foreground")} />
                 <span><span className="block text-[13px]">{r.label}</span><span className="block text-[10px] text-muted-foreground/70">{r.hint}</span></span>
               </button>
             ))}
@@ -69,15 +79,27 @@ export default function FilesPage() {
           <div className="panel p-2">
             <div className="eyebrow px-2 py-1">Live services</div>
             {services.map((s) => (
-              <a key={s.vmid} href={`/services/${s.vmid}`} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground">
-                <ServerCog className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{s.name}</span><span className="ml-auto text-[10px] text-muted-foreground/50">#{s.vmid}</span>
-              </a>
+              <button key={s.vmid} onClick={() => setSvc(s)}
+                className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors", svc?.vmid === s.vmid ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground")}>
+                <ServerCog className={cn("h-3.5 w-3.5 shrink-0", svc?.vmid === s.vmid && "text-brand")} /> <span className="truncate">{s.name}</span><span className="ml-auto text-[10px] text-muted-foreground/50">#{s.vmid}</span>
+              </button>
             ))}
             {services.length === 0 && <p className="px-2 py-1 text-[11px] text-muted-foreground/60">none running</p>}
           </div>
         </div>
 
         {/* Browser */}
+        {svc ? (
+          <div className="min-w-0 flex-1">
+            <div className="mb-2 flex items-center gap-2 text-[13px] text-muted-foreground">
+              <ServerCog className="h-3.5 w-3.5 text-brand" />
+              <span className="text-foreground">{svc.name}</span>
+              <span className="font-mono text-[11px] text-muted-foreground/60">#{svc.vmid} · {svc.kind}</span>
+              <span className="text-[11px]">· live container files</span>
+            </div>
+            <FilesPanel vmid={svc.vmid} roots={serviceRoots(svc.kind)} />
+          </div>
+        ) : (
         <div className="min-w-0 flex-1 overflow-hidden rounded-lg border border-hairline bg-panel">
           <div className="flex flex-wrap items-center gap-1 border-b border-hairline px-4 py-2.5">
             <Folder className="h-3.5 w-3.5 shrink-0 text-brand" />
@@ -114,6 +136,7 @@ export default function FilesPage() {
             )}
           </div>
         </div>
+        )}
       </div>
 
       {viewing && <FileEditor path={viewing} onClose={() => setViewing(null)} />}

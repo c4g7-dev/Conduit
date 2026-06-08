@@ -1,19 +1,21 @@
 /**
- * CloudNet-style file templates on the shared (GlusterFS) store at /var/lib/conduit.
+ * CloudNet-style file "overlays" on the shared (GlusterFS) store at /var/lib/conduit.
+ * (Named "overlays" to avoid clashing with egg install-definitions, which the UI calls
+ * "Templates".)
  *
- *   templates/<eggId>/   base file tree for an egg (jars overlay, plugins, configs, www…)
- *   tasks/<taskId>/      per-task overlay applied on top of the egg template
+ *   overlays/<eggId>/   base file tree for an egg (plugins, configs, www…)
+ *   tasks/<taskId>/     per-task overlay applied on top of the egg overlay
  *
- * At provision the engine copies templates/<eggId>/ then overlays tasks/<taskId>/ into the
- * service's working dir inside the container. Because the store is the gluster mount on the
- * host, we tar on the host and `pct push` into the container (same hop as asset seeding).
- * Editing these trees in the file manager / SFTP therefore changes what new (and re-seeded)
+ * At provision the engine copies overlays/<eggId>/ then tasks/<taskId>/ into the service's
+ * working dir inside the container. Because the store is the gluster mount on the host, we
+ * tar on the host and `pct push` into the container (same hop as asset seeding). Editing
+ * these trees in the file manager / SFTP therefore changes what new (and re-seeded)
  * services get — exactly the CloudNet model.
  */
 import { nodeExec } from "./provision";
 
 export const CONDUIT_ROOT = "/var/lib/conduit";
-export const TEMPLATES_DIR = `${CONDUIT_ROOT}/templates`;
+export const OVERLAYS_DIR = `${CONDUIT_ROOT}/overlays`;
 export const TASKS_DIR = `${CONDUIT_ROOT}/tasks`;
 
 /** The in-container working dir a service's files live in, by software kind. */
@@ -25,7 +27,7 @@ export function serviceDir(kind: string): string {
 
 /** Ensure an egg's template dir exists (optionally seeding default files on first create). */
 export async function ensureTemplate(eggId: string, seed?: Record<string, string>, host?: string): Promise<void> {
-  const dir = `${TEMPLATES_DIR}/${eggId}`;
+  const dir = `${OVERLAYS_DIR}/${eggId}`;
   let script = `mkdir -p '${dir}'`;
   for (const [rel, content] of Object.entries(seed ?? {})) {
     const b64 = Buffer.from(content, "utf8").toString("base64");
@@ -56,6 +58,6 @@ export async function applyTemplate(
       120_000, host,
     );
   };
-  await one(`${TEMPLATES_DIR}/${eggId}`);
+  await one(`${OVERLAYS_DIR}/${eggId}`);
   await one(`${TASKS_DIR}/${taskId}`);
 }
