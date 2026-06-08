@@ -21,6 +21,7 @@ export type ApiEndpoint = {
 export const API_GROUPS = [
   "Conduit",
   "Servers",
+  "Players & Connector",
   "Infrastructure",
   "Console & Files",
   "Backups",
@@ -43,6 +44,13 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
   { method: "PATCH", path: "/api/tasks/:id", group: "Servers", desc: "Update a server: scale (delta/desired), resources, fronts, seed, software.", params: [{ name: "id", example: "time-smp-smp" }], sampleBody: { delta: 0 } },
   { method: "DELETE", path: "/api/tasks/:id", group: "Servers", destructive: true, desc: "Delete a server and destroy its instances.", params: [{ name: "id", example: "time-smp-smp" }] },
   { method: "POST", path: "/api/tasks/:id/motd", group: "Servers", desc: "Set the MOTD (live velocity reload for proxies).", params: [{ name: "id", example: "time-smp-proxy" }], sampleBody: { motd: "Conduit &bnetwork" } },
+
+  // ── Players & Connector ──────────────────────────────────────────────
+  { method: "GET", path: "/api/players", group: "Players & Connector", safe: true, desc: "Network player list (connector full list w/ UUIDs, else SLP sample)." },
+  { method: "GET", path: "/api/connector/servers", group: "Players & Connector", safe: true, desc: "Live connector-registered servers + flattened players." },
+  { method: "POST", path: "/api/connector/action", group: "Players & Connector", desc: "Queue a player action for the proxy: move/message/broadcast/kick.", sampleBody: { kind: "message", player: "Notch", text: "hello" } },
+  { method: "POST", path: "/api/connector/register", group: "Players & Connector", desc: "(plugin) Register a service. Token-auth.", sampleBody: { id: "Lobby-1", task: "lobby", group: "Network", env: "server" } },
+  { method: "POST", path: "/api/connector/heartbeat", group: "Players & Connector", desc: "(plugin) Heartbeat with players/counts/tps; proxy gets pending actions. Token-auth.", sampleBody: { id: "Lobby-1", online: 0, max: 50, players: [] } },
 
   // ── Infrastructure ───────────────────────────────────────────────────
   { method: "GET", path: "/api/containers", group: "Infrastructure", safe: true, desc: "All LXC instances across the cluster." },
