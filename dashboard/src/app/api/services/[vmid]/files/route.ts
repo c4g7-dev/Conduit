@@ -87,6 +87,60 @@ export async function PUT(
   }
 }
 
+const DOWNLOAD_MAX = 100 * 1024 * 1024; // base64-over-exec cap for per-service downloads
+const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+
+/** File operations inside a container (mkdir/delete/move/copy/upload/archive/extract). */
+export async function POST(
+  req: NextRequest,
+  ctx: { params: Promise<{ vmid: string }> },
+) {
+  try {
+    const { vmid } = await ctx.params;
+    const id = Number(vmid);
+    if (!Number.isInteger(id) || id < 200 || id > 999)
+      return NextResponse.json({ error: "invalid vmid" }, { status: 400 });
+    const b = (await req.json()) as Record<string, unknown>;
+    const action = String(b.action ?? "");
+    const host = await vmidHost(id);
+    const sp = (v: unknown) => safePath(String(v ?? ""));
+
+    let cmd: string | null = null;
+    if (action === "mkdir") { const p = sp(b.path); if (p) cmd = `mkdir -p ${q(p)}`; }
+    else if (action === "delete") {
+      const list = Array.isArray(b.paths) ? b.paths : [b.path];
+      const safe = list.map(sp).filter((p): p is string => !!p && p !== ROOT);
+      if (safe.length) cmd = `rm -rf ${safe.map(q).join(" ")}`;
+    }
+    else if (action === "move" || action === "copy") {
+      const from = sp(b.from), to = sp(b.to);
+      if (from && to) cmd = `mkdir -p "$(dirname ${q(to)})" && ${action === "move" ? "mv" : "cp -r"} ${q(from)} ${q(to)}`;
+    }
+    else if (action === "upload") {
+      const dir = sp(b.dir); const name = String(b.name ?? "").replace(/[/\\]/g, "");
+      if (dir && name) {
+        const cb64 = Buffer.from(String(b.content ?? ""), "base64").toString("base64"); // already b64 from client
+        cmd = `mkdir -p ${q(dir)} && echo ${cb64} | base64 -d > ${q(`${dir}/${name}`)}`;
+      }
+    }
+    else if (action === "archive") {
+      const dir = sp(b.dir), dest = sp(b.dest); const names = (b.names as string[]) ?? [];
+      if (dir && dest && names.length) cmd = `cd ${q(dir)} && zip -r -q ${q(dest)} ${names.map((n) => q(String(n).replace(/[/\\]/g, ""))).join(" ")}`;
+    }
+    else if (action === "extract") {
+      const p = sp(b.path);
+      if (p) cmd = /\.zip$/i.test(p) ? `unzip -o -q ${q(p)} -d "$(dirname ${q(p)})"` : `tar xf ${q(p)} -C "$(dirname ${q(p)})"`;
+    }
+    if (!cmd) return NextResponse.json({ error: `bad action/args: ${action}` }, { status: 400 });
+
+    const b64 = Buffer.from(cmd, "utf8").toString("base64");
+    await nodeExec(`pct exec ${id} -- bash -c 'echo ${b64} | base64 -d | bash'`, 300_000, host);
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 502 });
+  }
+}
+
 export async function GET(
   req: NextRequest,
   ctx: { params: Promise<{ vmid: string }> },
@@ -103,6 +157,27 @@ export async function GET(
       return NextResponse.json({ error: "path outside /opt" }, { status: 400 });
     }
     const wantFile = req.nextUrl.searchParams.get("file") === "1";
+    const wantDownload = req.nextUrl.searchParams.get("download") === "1";
+
+    if (wantDownload) {
+      const host = await vmidHost(id);
+      const tb64 = Buffer.from(target, "utf8").toString("base64");
+      // file → base64 it; dir → zip then base64 (capped). Heavy but fine for configs/plugins.
+      const out = await nodeExec(
+        `pct exec ${id} -- bash -c 'p="$(echo ${tb64} | base64 -d)"; if [ -d "$p" ]; then (cd "$(dirname "$p")" && zip -r -q - "$(basename "$p")") | base64; else head -c ${DOWNLOAD_MAX + 1} "$p" | base64; fi'`,
+        300_000, host,
+      );
+      const buf = Buffer.from(out.replace(/\s+/g, ""), "base64");
+      if (buf.length > DOWNLOAD_MAX) return NextResponse.json({ error: "file too large to download here — use SFTP" }, { status: 413 });
+      const isDir = !target.includes(".") || false;
+      const fname = target.split("/").pop() || "download";
+      return new NextResponse(new Uint8Array(buf), {
+        headers: {
+          "Content-Type": isDir ? "application/zip" : "application/octet-stream",
+          "Content-Disposition": `attachment; filename="${fname}${isDir ? ".zip" : ""}"`,
+        },
+      });
+    }
     const b64Path = Buffer.from(target, "utf8").toString("base64");
     const host = await vmidHost(id);
 

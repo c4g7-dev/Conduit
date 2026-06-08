@@ -19,6 +19,14 @@ if [ -z "${CONDUIT_AGENT_TOKEN:-}" ]; then
 fi
 
 echo "[install] checking for Node.js…"
+# File-manager helpers (archive/extract). Debian repos work even when the PVE enterprise
+# repo 401s, so tolerate update failures.
+if ! command -v zip >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq 2>/dev/null || true
+  apt-get install -y -qq zip unzip >/dev/null 2>&1 || true
+fi
+
 # Install from the official binary tarball (no apt — PVE enterprise repos are
 # often unsubscribed/401 and would break apt-get update).
 NODE_VERSION="${NODE_VERSION:-v20.18.1}"

@@ -1,0 +1,157 @@
+- generic [active] [ref=e1]:
+  - complementary [ref=e2]:
+    - generic [ref=e3]:
+      - img [ref=e5]
+      - generic [ref=e9]:
+        - generic [ref=e10]:
+          - text: Conduit
+          - generic [ref=e11]: live
+        - generic [ref=e13]: c4g7 network
+    - navigation [ref=e14]:
+      - generic [ref=e15]:
+        - button "Orchestration" [ref=e16]:
+          - img [ref=e17]
+          - text: Orchestration
+        - generic [ref=e19]:
+          - link "Overview" [ref=e20] [cursor=pointer]:
+            - /url: /
+            - img [ref=e21]
+            - generic [ref=e26]: Overview
+          - link "Servers" [ref=e27] [cursor=pointer]:
+            - /url: /groups
+            - img [ref=e28]
+            - generic [ref=e39]: Servers
+          - link "Players" [ref=e40] [cursor=pointer]:
+            - /url: /players
+            - img [ref=e41]
+            - generic [ref=e46]: Players
+          - link "Activity" [ref=e47] [cursor=pointer]:
+            - /url: /activity
+            - img [ref=e48]
+            - generic [ref=e50]: Activity
+          - link "Schedules" [ref=e51] [cursor=pointer]:
+            - /url: /schedules
+            - img [ref=e52]
+            - generic [ref=e56]: Schedules
+      - generic [ref=e57]:
+        - button "Infrastructure" [ref=e58]:
+          - img [ref=e59]
+          - text: Infrastructure
+        - generic [ref=e61]:
+          - link "Containers" [ref=e62] [cursor=pointer]:
+            - /url: /containers
+            - img [ref=e63]
+            - generic [ref=e73]: Containers
+          - link "Templates" [ref=e74] [cursor=pointer]:
+            - /url: /templates
+            - img [ref=e75]
+            - generic [ref=e79]: Templates
+          - link "Files" [ref=e80] [cursor=pointer]:
+            - /url: /files
+            - img [ref=e82]
+            - generic [ref=e87]: Files
+          - link "Backups" [ref=e88] [cursor=pointer]:
+            - /url: /backups
+            - img [ref=e89]
+            - generic [ref=e92]: Backups
+      - generic [ref=e93]:
+        - button "Developer" [ref=e94]:
+          - img [ref=e95]
+          - text: Developer
+        - link "API" [ref=e98] [cursor=pointer]:
+          - /url: /apis
+          - img [ref=e99]
+          - generic [ref=e103]: API
+      - generic [ref=e104]:
+        - button "Settings" [ref=e105]:
+          - img [ref=e106]
+          - text: Settings
+        - link "Settings" [ref=e109] [cursor=pointer]:
+          - /url: /settings
+          - img [ref=e110]
+          - generic [ref=e111]: Settings
+    - generic [ref=e113]:
+      - img [ref=e115]
+      - generic [ref=e118]:
+        - generic [ref=e119]: conduit cluster
+        - generic [ref=e120]: VIP 10.27.27.50
+  - main [ref=e124]:
+    - generic [ref=e125]:
+      - generic [ref=e127]:
+        - heading "Files" [level=1] [ref=e128]
+        - paragraph [ref=e129]: Shared store (replicated across all nodes) + live service files
+      - generic [ref=e130]:
+        - generic [ref=e131]:
+          - generic [ref=e132]:
+            - generic [ref=e133]: Shared store
+            - button "Overlays file trees layered onto services" [ref=e134]:
+              - img [ref=e135]
+              - generic [ref=e138]:
+                - generic [ref=e139]: Overlays
+                - generic [ref=e140]: file trees layered onto services
+            - button "Tasks per-task config + task.yaml" [ref=e141]:
+              - img [ref=e142]
+              - generic [ref=e145]:
+                - generic [ref=e146]: Tasks
+                - generic [ref=e147]: per-task config + task.yaml
+            - button "Assets worlds · plugins · configs" [ref=e148]:
+              - img [ref=e149]
+              - generic [ref=e152]:
+                - generic [ref=e153]: Assets
+                - generic [ref=e154]: worlds · plugins · configs
+            - button "Services per-service shared config" [ref=e155]:
+              - img [ref=e156]
+              - generic [ref=e159]:
+                - generic [ref=e160]: Services
+                - generic [ref=e161]: per-service shared config
+          - generic [ref=e162]:
+            - generic [ref=e163]: Live services
+            - 'button "proxy #200" [ref=e207]':
+              - img [ref=e208]
+              - generic [ref=e219]: proxy
+              - generic [ref=e220]: "#200"
+            - 'button "lobby #201" [ref=e221]':
+              - img [ref=e222]
+              - generic [ref=e233]: lobby
+              - generic [ref=e234]: "#201"
+            - 'button "world #202" [ref=e235]':
+              - img [ref=e236]
+              - generic [ref=e247]: world
+              - generic [ref=e248]: "#202"
+            - 'button "hytale #203" [ref=e249]':
+              - img [ref=e250]
+              - generic [ref=e261]: hytale
+              - generic [ref=e262]: "#203"
+            - 'button "web #205" [ref=e263]':
+              - img [ref=e264]
+              - generic [ref=e275]: web
+              - generic [ref=e276]: "#205"
+        - generic [ref=e166]:
+          - generic [ref=e167]:
+            - button "Upload" [ref=e168]:
+              - img [ref=e169]
+              - text: Upload
+            - button "New folder" [ref=e172]:
+              - img [ref=e173]
+              - text: New folder
+            - button "Select" [ref=e175]:
+              - img [ref=e176]
+              - text: Select
+          - generic [ref=e180]:
+            - img [ref=e181]
+            - button "overlays" [disabled] [ref=e184]
+          - generic [ref=e338]:
+            - button "hytale" [ref=e340]:
+              - img [ref=e341]
+              - generic [ref=e343]: hytale
+            - button "paper-lobby" [ref=e345]:
+              - img [ref=e346]
+              - generic [ref=e348]: paper-lobby
+            - button "paper-smp" [ref=e350]:
+              - img [ref=e351]
+              - generic [ref=e353]: paper-smp
+            - button "velocity-proxy" [ref=e355]:
+              - img [ref=e356]
+              - generic [ref=e358]: velocity-proxy
+  - region "Notifications alt+T"
+  - alert [ref=e206]
