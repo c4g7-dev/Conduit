@@ -27,6 +27,7 @@ import {
 import { pingMc } from "./mcping";
 import { applyTemplate, serviceDir } from "./templates";
 import { ensureServiceShare } from "./serviceshare";
+import { syncTaskFiles } from "./taskfile";
 import { assetNodePath } from "./assets";
 import { recordReconcile } from "./events";
 
@@ -417,6 +418,17 @@ export async function reconcileAll(): Promise<string[]> {
     if (db.tasks.length === 0 && db.groups.length === 0 && all.length > 0) {
       busy = false;
       return [`skip: empty desired state but ${all.length} live conduit instance(s) — refusing to GC (likely state-load failure)`];
+    }
+
+    // Two-way sync each task ⇄ tasks/<id>/task.yaml on the shared store. If a YAML was
+    // edited externally, apply it into the store before reconciling so changes take effect.
+    if (db.tasks.length) {
+      try {
+        const imported = await syncTaskFiles(db, log);
+        if (imported) Object.assign(db, await getDB()); // pick up the mutate() result
+      } catch (e) {
+        log.push(`! task file sync failed: ${String(e)}`);
+      }
     }
 
     // Gather live player counts once if any task autoscales (drives desired + safe drain).

@@ -246,12 +246,15 @@ function ConsolePanel({
         cursorBlink: true,
         scrollback: 5000,
         theme: {
-          background: "#16191e",
-          foreground: "#c9d1d9",
-          cursor: "#f6821f",
-          selectionBackground: "#2d4f67",
+          background: "#1a1b1e",          // neutral dark grey, matches the page panels
+          foreground: "#d4d4d8",
+          cursor: "#a1a1aa",              // neutral grey caret (no blue/amber tint)
+          cursorAccent: "#1a1b1e",
+          selectionBackground: "#3f3f46", // neutral grey selection
         },
       });
+      // tmux/pipe-pane emits bare "\n"; xterm needs "\r\n" or lines staircase to the right.
+      const crlf = (s: string) => s.replace(/\r?\n/g, "\r\n");
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(termHostRef.current);
@@ -322,8 +325,8 @@ function ConsolePanel({
           ws.onmessage = (e) => {
             try {
               const f = JSON.parse(e.data);
-              if (f.type === "history") { term.clear(); term.write(String(f.data ?? "")); }
-              else if (f.type === "output") term.write(String(f.data ?? ""));
+              if (f.type === "history") { term.clear(); term.write(crlf(String(f.data ?? ""))); }
+              else if (f.type === "output") term.write(crlf(String(f.data ?? "")));
             } catch { /* ignore */ }
           };
           ws.onclose = () => {
@@ -349,8 +352,8 @@ function ConsolePanel({
         es.onmessage = (e) => {
           try {
             const text = atob(e.data);
-            if (text.startsWith(last)) term.write(text.slice(last.length));
-            else { term.clear(); term.write(text); }
+            if (text.startsWith(last)) term.write(crlf(text.slice(last.length)));
+            else { term.clear(); term.write(crlf(text)); }
             last = text;
           } catch { /* ignore */ }
         };
@@ -372,7 +375,7 @@ function ConsolePanel({
   if (!isReady) return <InstallLogPanel vmid={vmid} />;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-hairline" style={{ background: "#16191e" }}>
+    <div className="overflow-hidden rounded-lg border border-hairline" style={{ background: "#1a1b1e" }}>
       {/* Terminal title bar */}
       <div className="flex items-center justify-between border-b border-hairline px-4 py-2">
         <div className="flex items-center gap-2.5">
@@ -397,7 +400,7 @@ function ConsolePanel({
         ref={termHostRef}
         onClick={() => termRef.current?.focus()}
         className="h-[64vh] cursor-text p-2"
-        style={{ background: "#16191e" }}
+        style={{ background: "#1a1b1e" }}
       />
     </div>
   );
