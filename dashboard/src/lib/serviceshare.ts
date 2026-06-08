@@ -44,7 +44,14 @@ export async function ensureServiceShare(vmid: number, kind: string, host?: stri
   const hostShare = `${SERVICES_DIR}/${vmid}`;
   const svcDir = serviceDir(kind);
 
-  await nodeExec(`mkdir -p '${hostShare}'`, 15_000, host);
+  // Create the host share dir and fix ownership for the container's user namespace.
+  // Unprivileged LXCs map container-root → host uid 100000, so the bind-mounted dir must
+  // be owned by that mapped id for the container to write; 0777 also lets the host-side
+  // SFTP user write (homelab — per-service config dir, acceptable). Privileged CTs (no
+  // offset) get root-owned, which already works.
+  const unpriv = (await nodeExec(`pct config ${vmid} | grep -q 'unprivileged: 1' && echo y || echo n`, 10_000, host)).trim();
+  const owner = unpriv === "y" ? "100000:100000" : "0:0";
+  await nodeExec(`mkdir -p '${hostShare}' && chown ${owner} '${hostShare}' && chmod 0777 '${hostShare}'`, 15_000, host);
 
   // Add the bind mount if absent (find a free mp index; reboot to apply).
   const added = await nodeExec(
@@ -54,8 +61,11 @@ export async function ensureServiceShare(vmid: number, kind: string, host?: stri
     60_000, host,
   );
   if (added.includes("added")) {
-    // wait for the CT to come back after reboot
-    await nodeExec(`for n in $(seq 1 30); do pct exec ${vmid} -- true 2>/dev/null && break; sleep 2; done`, 90_000, host);
+    // wait for the CT to fully come back after reboot (true must succeed twice, 3s apart)
+    await nodeExec(
+      `for n in $(seq 1 40); do if pct exec ${vmid} -- true 2>/dev/null; then sleep 3; pct exec ${vmid} -- true 2>/dev/null && break; fi; sleep 2; done`,
+      120_000, host,
+    );
   }
 
   // Relocate each shareable path into /opt/shared and symlink it back (idempotent).
