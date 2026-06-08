@@ -26,6 +26,7 @@ import {
 } from "./provision";
 import { pingMc } from "./mcping";
 import { applyTemplate, serviceDir } from "./templates";
+import { ensureServiceShare } from "./serviceshare";
 import { assetNodePath } from "./assets";
 import { recordReconcile } from "./events";
 
@@ -121,11 +122,18 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
     await ctExec(inst.vmid, `echo "[conduit] Container provisioned at $(date)." > /opt/conduit-info.txt`, 30_000, host);
   }
 
-  // CloudNet-style overlay: copy templates/<egg>/ + tasks/<task>/ into the service dir.
+  // CloudNet-style overlay: copy overlays/<egg>/ + tasks/<task>/ into the service dir.
   try {
     await applyTemplate(inst.vmid, bp.id, task.id, serviceDir(kind), host);
   } catch (e) {
-    pushInstallLog(inst.vmid, `[conduit] template overlay skipped: ${String(e)}`);
+    pushInstallLog(inst.vmid, `[conduit] file overlay skipped: ${String(e)}`);
+  }
+
+  // Bind the service's config/plugins onto the shared store (SFTP/file-manager editable).
+  try {
+    await ensureServiceShare(inst.vmid, kind, host);
+  } catch (e) {
+    pushInstallLog(inst.vmid, `[conduit] service share skipped: ${String(e)}`);
   }
 
   const tags = inst.tags ? `${inst.tags};${READY_TAG}` : READY_TAG;

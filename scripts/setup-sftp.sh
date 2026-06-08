@@ -28,8 +28,8 @@ id $SFTP_USER >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin $SFTP_USER
 # ChrootDirectory + all parents must be root-owned & not group/other-writable.
 chown root:root $ROOT && chmod 755 $ROOT
 # Writable working areas inside the chroot (owned by the sftp user).
-mkdir -p $ROOT/templates $ROOT/tasks $ROOT/assets
-chown $SFTP_USER:$SFTP_USER $ROOT/templates $ROOT/tasks $ROOT/assets
+mkdir -p $ROOT/overlays $ROOT/tasks $ROOT/assets $ROOT/services
+chown $SFTP_USER:$SFTP_USER $ROOT/overlays $ROOT/tasks $ROOT/assets $ROOT/services
 
 # Authorized key lives OUTSIDE the chroot (sshd reads it as root before chrooting).
 install -d -m700 -o $SFTP_USER -g $SFTP_USER /etc/conduit/sftp/$SFTP_USER
