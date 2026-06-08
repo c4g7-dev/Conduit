@@ -128,7 +128,7 @@ export default function ServiceDetailPage({
           <MetricsPanel vmid={id} />
         </TabsContent>
         <TabsContent value="files">
-          <FilesPanel vmid={id} roots={filePanelRoots(owner?.task.softwareKind)} />
+          <FilesPanel backend={{ kind: "service", vmid: id }} roots={filePanelRoots(owner?.task.softwareKind)} />
         </TabsContent>
       </Tabs>
     </>

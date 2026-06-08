@@ -50,6 +50,7 @@ function ContextMenuTrigger({
     {
       onContextMenu: (e: React.MouseEvent) => {
         e.preventDefault();
+        e.stopPropagation(); // don't also trigger a parent (nested) context menu
         ctx.openAt({ x: e.clientX, y: e.clientY });
         el.props.onContextMenu?.(e);
       },

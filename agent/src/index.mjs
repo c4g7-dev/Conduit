@@ -21,8 +21,9 @@
  */
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { readFile, writeFile, mkdir, rename, readdir, stat, rm } from "node:fs/promises";
-import { resolve as pathResolve } from "node:path";
+import { createReadStream } from "node:fs";
+import { readFile, writeFile, mkdir, rename, readdir, stat, rm, cp } from "node:fs/promises";
+import { resolve as pathResolve, dirname, basename } from "node:path";
 import os from "node:os";
 import { WebSocketServer } from "ws";
 
@@ -146,11 +147,71 @@ async function handleFs(req, res, url) {
       return json(res, 200, { ok: true });
     }
     if (req.method === "POST" && sub === "/delete") {
+      // Accept a single path or a list of paths (batch delete).
+      const body = JSON.parse(await readBody(req));
+      const list = Array.isArray(body.paths) ? body.paths : [body.path];
+      for (const rel of list) {
+        const p = safePath(rel);
+        if (!p || p === FS_ROOT) continue;
+        await rm(p, { recursive: true, force: true });
+      }
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === "POST" && (sub === "/move" || sub === "/copy")) {
+      const { from, to } = JSON.parse(await readBody(req));
+      const a = safePath(from), b = safePath(to);
+      if (!a || !b || a === FS_ROOT) return json(res, 400, { error: "bad path" });
+      await mkdir(dirname(b), { recursive: true });
+      if (sub === "/move") await rename(a, b);
+      else await cp(a, b, { recursive: true });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === "POST" && sub === "/upload") {
+      // body: { dir, name, content (base64) }
+      const { dir, name, content } = JSON.parse(await readBody(req));
+      const safeName = String(name || "").replace(/[/\\]/g, "");
+      const d = safePath(dir);
+      if (!d || !safeName) return json(res, 400, { error: "bad path" });
+      await mkdir(d, { recursive: true });
+      await writeFile(pathResolve(d, safeName), Buffer.from(String(content || ""), "base64"));
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === "POST" && sub === "/archive") {
+      // body: { dir, names[], dest } → zip names (relative to dir) into dest
+      const { dir, names, dest } = JSON.parse(await readBody(req));
+      const d = safePath(dir), z = safePath(dest);
+      if (!d || !z || !Array.isArray(names) || !names.length) return json(res, 400, { error: "bad args" });
+      const r = await run("bash", ["-c", `cd ${JSON.stringify(d)} && zip -r -q ${JSON.stringify(z)} ${names.map((n) => JSON.stringify(String(n).replace(/[/\\]/g, ""))).join(" ")}`], { timeoutMs: 300_000 });
+      if (r.code !== 0) return json(res, 500, { error: r.stderr || "zip failed" });
+      return json(res, 200, { ok: true, dest: z });
+    }
+    if (req.method === "POST" && sub === "/extract") {
       const { path } = JSON.parse(await readBody(req));
       const p = safePath(path);
-      if (!p || p === FS_ROOT) return json(res, 400, { error: "bad path" });
-      await rm(p, { recursive: true, force: true });
+      if (!p) return json(res, 400, { error: "bad path" });
+      const into = dirname(p);
+      const cmd = /\.zip$/i.test(p) ? `unzip -o -q ${JSON.stringify(p)} -d ${JSON.stringify(into)}`
+        : /\.(tar\.gz|tgz)$/i.test(p) ? `tar xzf ${JSON.stringify(p)} -C ${JSON.stringify(into)}`
+        : `tar xf ${JSON.stringify(p)} -C ${JSON.stringify(into)}`;
+      const r = await run("bash", ["-c", cmd], { timeoutMs: 300_000 });
+      if (r.code !== 0) return json(res, 500, { error: r.stderr || "extract failed" });
       return json(res, 200, { ok: true });
+    }
+    if (req.method === "GET" && sub === "/download") {
+      const p = safePath(url.searchParams.get("path") || "");
+      if (!p) return json(res, 400, { error: "bad path" });
+      const s = await stat(p);
+      if (s.isDirectory()) {
+        // stream a zip of the directory
+        res.writeHead(200, { "Content-Type": "application/zip", "Content-Disposition": `attachment; filename="${basename(p)}.zip"` });
+        const zip = spawn("bash", ["-c", `cd ${JSON.stringify(dirname(p))} && zip -r -q - ${JSON.stringify(basename(p))}`]);
+        zip.stdout.pipe(res);
+        zip.stderr.on("data", () => {});
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${basename(p)}"`, "Content-Length": String(s.size) });
+      createReadStream(p).pipe(res);
+      return;
     }
     return json(res, 404, { error: "not found" });
   } catch (e) {

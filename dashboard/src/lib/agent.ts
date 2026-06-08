@@ -121,8 +121,30 @@ export async function fsWrite(path: string, content: string): Promise<void> {
 export async function fsMkdir(path: string): Promise<void> {
   await fsFetch(`/mkdir`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
 }
-export async function fsDelete(path: string): Promise<void> {
-  await fsFetch(`/delete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+export async function fsDelete(paths: string | string[]): Promise<void> {
+  const body = Array.isArray(paths) ? { paths } : { path: paths };
+  await fsFetch(`/delete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+export async function fsMove(from: string, to: string): Promise<void> {
+  await fsFetch(`/move`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from, to }) });
+}
+export async function fsCopy(from: string, to: string): Promise<void> {
+  await fsFetch(`/copy`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from, to }) });
+}
+export async function fsUpload(dir: string, name: string, contentB64: string): Promise<void> {
+  await fsFetch(`/upload`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir, name, content: contentB64 }) });
+}
+export async function fsArchive(dir: string, names: string[], dest: string): Promise<void> {
+  await fsFetch(`/archive`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir, names, dest }) });
+}
+export async function fsExtract(path: string): Promise<void> {
+  await fsFetch(`/extract`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+}
+/** Server-side: stream a download from the agent (panel proxies it; token stays server-side). */
+export async function fsDownloadResponse(path: string): Promise<Response> {
+  return fetch(`${base(fsAgentHost())}/v1/fs/download?path=${encodeURIComponent(path)}`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
 }
 
 export type ConsoleFrame = { type: "history" | "output" | "ready" | "pong"; data: unknown };
