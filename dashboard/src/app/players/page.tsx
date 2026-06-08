@@ -16,29 +16,41 @@ type Metrics = { instances: MetricRow[]; totals: { players: number; capacity: nu
 type StTask = { softwareKind: string; name: string; instances: { vmid: number; status: string; ready: boolean }[] };
 type State = { groups: { id: string; name: string; tasks: StTask[] }[] };
 
-type PlayerRow = { name: string; server: string; vmid: number; role: string };
+type PlayerRow = { name: string; server: string; vmid: number; role: string; uuid?: string };
 
 // Software kinds that represent a game/player service (vs db/web/generic).
 const GAME_KINDS = new Set(["paper", "velocity", "hytale"]);
 // Kinds we can enumerate live players for (Minecraft SLP). Hytale has no public query yet.
 const QUERYABLE = new Set(["paper", "velocity"]);
 
+type Conn = { active: boolean; players: { uuid: string; name: string; server?: string }[]; servers: { task: string; group: string; env: string }[] };
+
 export default function PlayersPage() {
   const { data: metrics, loading, refresh } = usePoll<Metrics>("/api/metrics", 5000);
   const { data: state } = usePoll<State>("/api/conduit/state", 10000);
+  const { data: conn } = usePoll<Conn>("/api/connector/servers", 5000);
   const [cmd, setCmd] = useState("");
   const [groupId, setGroupId] = useState("__all");
   const [busy, setBusy] = useState(false);
   const [kicking, setKicking] = useState<string | null>(null);
 
-  // Build the player → server map from backend SLP samples (backends attribute a player
-  // to a specific server; the proxy sample would only give the network total).
+  const connActive = !!conn?.active;
+
+  // Prefer the connector's FULL player list (name+uuid, accurate per-server). Fall back to
+  // backend SLP samples (capped ~12/server) when no connector is reporting.
   const players = useMemo<PlayerRow[]>(() => {
+    if (connActive) {
+      // map server task name → a vmid for the kick/console fallback
+      const vmidByTask = new Map<string, number>();
+      for (const r of metrics?.instances ?? []) vmidByTask.set(r.taskName, r.vmid);
+      return (conn!.players ?? []).map((p) => ({ name: p.name, uuid: p.uuid, server: p.server ?? "?", vmid: vmidByTask.get(p.server ?? "") ?? 0, role: "smp" }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
     const rows = (metrics?.instances ?? []).filter((r) => r.role !== "proxy" && r.reachable);
     const out: PlayerRow[] = [];
     for (const r of rows) for (const name of r.sample ?? []) out.push({ name, server: r.taskName, vmid: r.vmid, role: r.role });
     return out.sort((a, b) => a.name.localeCompare(b.name));
-  }, [metrics]);
+  }, [metrics, conn, connActive]);
 
   const groups = state?.groups ?? [];
   const total = metrics?.totals.players ?? 0;
@@ -112,7 +124,7 @@ export default function PlayersPage() {
     <>
       <PageHeader
         title="Players"
-        subtitle={`${total}/${capacity} online · ${gameServices.length} game service(s) running`}
+        subtitle={`${connActive ? players.length : total}/${capacity} online · ${gameServices.length} game service(s)${connActive ? " · connector live" : " · SLP (sample)"}`}
         onRefresh={refresh}
         loading={loading}
       />
