@@ -1,0 +1,70 @@
+package dev.c4g7.conduit.paper;
+
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.plugin.java.JavaPlugin;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import dev.c4g7.conduit.ConduitClient;
+
+/**
+ * Conduit connector for Paper — the backend side. Registers the server, heartbeats its
+ * player list (name+UUID), count, and TPS, and reports join/quit. Actions are proxy-only,
+ * so backends just report.
+ */
+public class ConduitPaperPlugin extends JavaPlugin implements Listener {
+    private ConduitClient client;
+    private String selfTask;
+
+    @Override
+    public void onEnable() {
+        String endpoint = ConduitClient.envOr("CONDUIT_ENDPOINT", "http://10.27.27.50:3001");
+        String token = ConduitClient.envOr("CONDUIT_TOKEN", "");
+        String id = ConduitClient.envOr("CONDUIT_SERVICE_ID", Bukkit.getServer().getName());
+        selfTask = ConduitClient.envOr("CONDUIT_TASK", "server");
+        String group = ConduitClient.envOr("CONDUIT_GROUP", "Network");
+        client = new ConduitClient(endpoint, token, id, selfTask, group, "server");
+        client.register();
+
+        getServer().getPluginManager().registerEvents(this, this);
+        // heartbeat every 3s on the main scheduler
+        getServer().getScheduler().runTaskTimer(this, this::tick, 40L, 60L);
+    }
+
+    private void tick() {
+        List<Map<String, String>> players = new ArrayList<>();
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            Map<String, String> m = new LinkedHashMap<>();
+            m.put("uuid", p.getUniqueId().toString());
+            m.put("name", p.getName());
+            players.add(m);
+        }
+        double tps = 20.0;
+        try { double[] t = Bukkit.getTPS(); if (t.length > 0) tps = Math.min(20.0, t[0]); } catch (Throwable ignored) {}
+        int max = Bukkit.getMaxPlayers();
+        // backends don't receive actions; run on an async thread to avoid blocking the tick
+        final double ftps = tps;
+        getServer().getScheduler().runTaskAsynchronously(this, () ->
+                client.heartbeat(players.size(), max, ftps, players));
+    }
+
+    @EventHandler
+    public void onJoin(PlayerJoinEvent e) {
+        getServer().getScheduler().runTaskAsynchronously(this, () ->
+                client.event("join", e.getPlayer().getName(), selfTask));
+    }
+
+    @EventHandler
+    public void onQuit(PlayerQuitEvent e) {
+        getServer().getScheduler().runTaskAsynchronously(this, () ->
+                client.event("quit", e.getPlayer().getName(), selfTask));
+    }
+}

@@ -1,0 +1,6 @@
+name: ConduitConnector
+version: "1.0"
+main: dev.c4g7.conduit.paper.ConduitPaperPlugin
+api-version: "1.20"
+author: c4g7
+description: Conduit network connector (backend reporter).

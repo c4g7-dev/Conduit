@@ -17,6 +17,7 @@ import {
   installVelocity,
   installHytale,
   installNginx,
+  installConnector,
   syncVelocity,
   forgetVelocity,
   nodeExec,
@@ -135,6 +136,15 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
     await ensureServiceShare(inst.vmid, kind, host);
   } catch (e) {
     pushInstallLog(inst.vmid, `[conduit] service share skipped: ${String(e)}`);
+  }
+
+  // Install the Conduit connector plugin into Paper/Velocity (CloudNet-Bridge equivalent).
+  if (kind === "paper" || kind === "velocity") {
+    try {
+      await installConnector(inst.vmid, host);
+    } catch (e) {
+      pushInstallLog(inst.vmid, `[conduit] connector install skipped: ${String(e)}`);
+    }
   }
 
   const tags = inst.tags ? `${inst.tags};${READY_TAG}` : READY_TAG;
