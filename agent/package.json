@@ -1,0 +1,17 @@
+{
+  "name": "conduit-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Conduit node agent — runs on each Proxmox host, exposes pct exec + real-time console over HTTP/WebSocket.",
+  "main": "src/index.mjs",
+  "scripts": {
+    "start": "node src/index.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

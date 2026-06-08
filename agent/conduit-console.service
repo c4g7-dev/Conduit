@@ -1,0 +1,16 @@
+[Unit]
+Description=Conduit Console Proxy (browser ⇄ agent WebSocket bridge)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/conduit/panel.env
+WorkingDirectory=/opt/conduit-panel
+ExecStart=/usr/bin/node /opt/conduit-panel/console-proxy.mjs
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target

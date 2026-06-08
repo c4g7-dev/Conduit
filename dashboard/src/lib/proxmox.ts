@@ -165,8 +165,13 @@ export type Template = {
   format?: string;
 };
 
+/** Stable node ordering by name (numeric + case-insensitive): skdCore01 < SkdCore02 < SkdCore03. */
+export const byNodeName = (a: { node: string }, b: { node: string }) =>
+  a.node.localeCompare(b.node, undefined, { numeric: true, sensitivity: "base" });
+
 export const api = {
-  nodes: () => pmx<PveNode[]>("/nodes"),
+  // Sorted so the UI node list never reshuffles between polls (PVE returns arbitrary order).
+  nodes: async () => (await pmx<PveNode[]>("/nodes")).sort(byNodeName),
   clusterResources: () => pmx<ClusterResource[]>("/cluster/resources"),
   clusterStatus: () =>
     pmx<{ type: string; name?: string; ip?: string; online?: number; local?: number }[]>(
@@ -191,6 +196,12 @@ export const api = {
     pmx<string>(`/nodes/${node}/lxc`, { method: "POST", params }),
   deleteLxc: (vmid: number, node = NODE) =>
     pmx<string>(`/nodes/${node}/lxc/${vmid}?purge=1&force=1`, { method: "DELETE" }),
+  /** Full-clone a (stopped) container to a new vmid on the same node. */
+  cloneLxc: (vmid: number, newid: number, params: Record<string, string | number>, node = NODE) =>
+    pmx<string>(`/nodes/${node}/lxc/${vmid}/clone`, {
+      method: "POST",
+      params: { newid, full: 1, ...params },
+    }),
   /** Restore an LXC from a backup archive (overwrites the target vmid). */
   restoreLxc: (vmid: number, archive: string, storage = "local-lvm", node = NODE) =>
     pmx<string>(`/nodes/${node}/lxc`, {

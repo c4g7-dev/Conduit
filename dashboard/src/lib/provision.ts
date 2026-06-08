@@ -10,8 +10,9 @@
  *   Paper 1.20.4 · Velocity 3.3.0-SNAPSHOT  (1.20.5+/Velocity 3.4+ need Java 21)
  */
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import type { Task } from "./store";
-import type { Seed } from "./blueprints";
+import type { Seed, Software } from "./blueprints";
 
 const SSH_HOST = process.env.PROXMOX_SSH_HOST ?? process.env.PROXMOX_HOST ?? "10.27.27.126";
 const SSH_USER = process.env.PROXMOX_SSH_USER ?? "root";
@@ -56,13 +57,41 @@ async function resolveBuild(project: "paper" | "velocity", version: string): Pro
  * `host` targets a specific node (its IP) for multi-node clusters; defaults to the
  * configured node. The dashboard host must be able to reach every node's IP.
  */
-function ssh(remote: string, timeoutMs = 360_000, host = SSH_HOST): Promise<string> {
+// Per-VMID install log buffer — streamed to the UI during provisioning.
+const installLogs = new Map<number, string[]>();
+const MAX_LOG_LINES = 600;
+
+function appendInstallLog(vmid: number, text: string) {
+  if (!installLogs.has(vmid)) installLogs.set(vmid, []);
+  const buf = installLogs.get(vmid)!;
+  buf.push(...text.split("\n").filter((l) => l.length > 0));
+  if (buf.length > MAX_LOG_LINES) buf.splice(0, buf.length - MAX_LOG_LINES);
+}
+
+export function getInstallLog(vmid: number): string[] {
+  return [...(installLogs.get(vmid) ?? [])];
+}
+
+export function clearInstallLog(vmid: number) {
+  installLogs.delete(vmid);
+}
+
+export function pushInstallLog(vmid: number, line: string) {
+  appendInstallLog(vmid, line);
+}
+
+function ssh(remote: string, timeoutMs = 360_000, host = SSH_HOST, logVmid?: number): Promise<string> {
   return new Promise((resolve, reject) => {
+    // ControlMaster reuses an existing SSH connection so subsequent calls skip
+    // the key-exchange handshake (~5 ms instead of ~80 ms — critical for console polling).
     const sshOpts = [
       "-o", "StrictHostKeyChecking=no",
       "-o", "UserKnownHostsFile=/dev/null",
       "-o", "ConnectTimeout=10",
       "-o", "LogLevel=ERROR",
+      "-o", "ControlMaster=auto",
+      "-o", `ControlPath=/tmp/conduit_ssh_${host.replace(/[^a-z0-9]/gi, "_")}`,
+      "-o", "ControlPersist=60",
     ];
     let cmd: string;
     let args: string[];
@@ -77,7 +106,11 @@ function ssh(remote: string, timeoutMs = 360_000, host = SSH_HOST): Promise<stri
     let out = "";
     let err = "";
     const timer = setTimeout(() => p.kill("SIGKILL"), timeoutMs);
-    p.stdout.on("data", (d) => (out += d));
+    p.stdout.on("data", (d) => {
+      const text = String(d);
+      out += text;
+      if (logVmid !== undefined) appendInstallLog(logVmid, text);
+    });
     p.stderr.on("data", (d) => (err += d));
     p.on("error", reject);
     p.on("close", (code) => {
@@ -93,10 +126,11 @@ export async function nodeExec(cmd: string, timeoutMs = 60_000, host?: string): 
   return ssh(cmd, timeoutMs, host ?? SSH_HOST);
 }
 
-/** Run a bash script inside an LXC (base64-piped to dodge quoting), on the CT's node. */
+/** Run a bash script inside an LXC (base64-piped to dodge quoting), on the CT's node.
+ *  stdout is also streamed into the per-vmid install log for the UI console. */
 export async function ctExec(vmid: number, script: string, timeoutMs = 360_000, host?: string): Promise<string> {
   const b64 = Buffer.from(script, "utf8").toString("base64");
-  return ssh(`pct exec ${vmid} -- bash -c 'echo ${b64} | base64 -d | bash'`, timeoutMs, host ?? SSH_HOST);
+  return ssh(`pct exec ${vmid} -- bash -c 'echo ${b64} | base64 -d | bash'`, timeoutMs, host ?? SSH_HOST, vmid);
 }
 
 /** Write a file inside an LXC. */
@@ -244,6 +278,257 @@ export async function installPaper(
   await ctExec(vmid, paperScript(task, secret, seed, build), 360_000, host);
 }
 
+/* ---- Hytale (shared-asset mount) ----------------------------------------- */
+
+/*
+ * Actual game distribution (from hytale-downloader.zip):
+ *   Server/HytaleServer.jar        — main server JAR
+ *   Server/HytaleServer.aot.config — JVM AOT config (alongside JAR)
+ *   Assets.zip                     — ~3.4 GB shared asset bundle
+ *
+ * Node-side paths (bind-mounted read-only into containers at /assets):
+ *   /var/lib/conduit/assets/hytale/HytaleServer.jar
+ *   /var/lib/conduit/assets/hytale/HytaleServer.aot.config
+ *   /var/lib/conduit/assets/hytale/Assets.zip
+ *   /var/lib/conduit/assets/hytale/.version
+ *   /var/lib/conduit/assets/hytale/downloader      ← hytale-downloader binary
+ *   /var/lib/conduit/.hytale-downloader-credentials.json
+ *
+ * Per-instance writable data: /opt/mc/data/ (inside CT).
+ * The server is invoked:
+ *   java @jvm.options -jar /assets/hytale/HytaleServer.jar \
+ *     --assets /assets/hytale/Assets.zip \
+ *     --backup --backup-dir /opt/mc/data/backups --backup-frequency 30
+ */
+
+const HYTALE_ASSETS_NODE = "/var/lib/conduit/assets/hytale";
+const HYTALE_WORKDIR_NODE = "/var/lib/conduit"; // downloader saves creds relative to cwd
+const HYTALE_DOWNLOADER_NODE = `${HYTALE_ASSETS_NODE}/downloader`;
+const HYTALE_CREDS_NODE = `${HYTALE_WORKDIR_NODE}/.hytale-downloader-credentials.json`;
+const HYTALE_DOWNLOADER_ZIP_URL = "https://downloader.hytale.com/hytale-downloader.zip";
+// Local credentials file written by the downloader on this machine (next to where it ran)
+const HYTALE_CREDS_LOCAL =
+  process.env.HYTALE_CREDENTIALS_PATH ?? "/tmp/.hytale-downloader-credentials.json";
+
+/** Upload a local file to a remote path via base64-over-SSH (works for files up to ~50 MB). */
+async function sshUpload(localPath: string, remotePath: string, host: string): Promise<void> {
+  const content = await readFile(localPath);
+  const b64 = content.toString("base64");
+  await ssh(
+    `mkdir -p "$(dirname '${remotePath}')" && ` +
+    `printf '%s' '${b64}' | base64 -d > '${remotePath}.tmp' && ` +
+    `mv '${remotePath}.tmp' '${remotePath}'`,
+    60_000, host,
+  );
+}
+
+/** Bootstrap the downloader binary on the node if missing. */
+async function ensureDownloaderOnNode(vmid: number, host: string): Promise<void> {
+  const ok = (await ssh(`[ -x '${HYTALE_DOWNLOADER_NODE}' ] && echo yes || echo no`, 5_000, host)).trim();
+  if (ok === "yes") return;
+  pushInstallLog(vmid, `[conduit] uploading hytale-downloader to node ${host}`);
+  await ssh(
+    `apt-get install -y -qq unzip curl >/dev/null 2>&1 || true && ` +
+    `mkdir -p '${HYTALE_ASSETS_NODE}' && ` +
+    `cd /tmp && curl -fsSL -o hytale-dl.zip '${HYTALE_DOWNLOADER_ZIP_URL}' && ` +
+    `unzip -o hytale-dl.zip hytale-downloader-linux-amd64 && ` +
+    `chmod +x hytale-downloader-linux-amd64 && ` +
+    `mv hytale-downloader-linux-amd64 '${HYTALE_DOWNLOADER_NODE}' && ` +
+    `rm hytale-dl.zip`,
+    120_000, host, vmid,
+  );
+}
+
+/** Copy local OAuth credentials to the node if missing. */
+async function ensureCredsOnNode(vmid: number, host: string): Promise<void> {
+  const ok = (await ssh(`[ -f '${HYTALE_CREDS_NODE}' ] && echo yes || echo no`, 5_000, host)).trim();
+  if (ok === "yes") return;
+  let credsJson: string;
+  try {
+    credsJson = await readFile(HYTALE_CREDS_LOCAL, "utf8");
+  } catch {
+    pushInstallLog(vmid, `[conduit] WARNING: Hytale credentials not found at ${HYTALE_CREDS_LOCAL}`);
+    pushInstallLog(vmid, `[conduit] Authenticate once by running:`);
+    pushInstallLog(vmid, `[conduit]   cd /tmp && ./hytale-downloader-linux-amd64 -print-version`);
+    pushInstallLog(vmid, `[conduit] Then re-trigger provisioning to auto-upload credentials.`);
+    throw new Error("Hytale credentials not found — authenticate first");
+  }
+  const b64 = Buffer.from(credsJson).toString("base64");
+  await ssh(
+    `printf '%s' '${b64}' | base64 -d > '${HYTALE_CREDS_NODE}.tmp' && ` +
+    `mv '${HYTALE_CREDS_NODE}.tmp' '${HYTALE_CREDS_NODE}' && chmod 600 '${HYTALE_CREDS_NODE}'`,
+    10_000, host,
+  );
+  pushInstallLog(vmid, `[conduit] Hytale credentials uploaded to node`);
+}
+
+/**
+ * Ensures the Hytale JAR + Assets.zip are present on the host node, downloading
+ * (or upgrading) via the official hytale-downloader when the version is stale.
+ * Credentials are auto-bootstrapped from the local machine on first run.
+ */
+async function ensureHytaleAssets(vmid: number, sw: Software, host: string): Promise<void> {
+  await ssh(`mkdir -p '${HYTALE_ASSETS_NODE}'`, 10_000, host);
+
+  pushInstallLog(vmid, `[conduit] bootstrapping hytale-downloader on node ${host}`);
+  await ensureDownloaderOnNode(vmid, host);
+  await ensureCredsOnNode(vmid, host);
+
+  const patchline = sw.version === "pre-release" ? "pre-release" : "release";
+  const runDl = `cd '${HYTALE_WORKDIR_NODE}' && '${HYTALE_DOWNLOADER_NODE}' -skip-update-check`;
+
+  // Query latest available version via downloader on node.
+  pushInstallLog(vmid, `[conduit] querying latest hytale version (${patchline} patchline)`);
+  const latestVersion = (await ssh(
+    `${runDl} -print-version -patchline ${patchline} 2>/dev/null || echo ""`,
+    30_000, host,
+  )).trim();
+
+  const installedVersion = (await ssh(
+    `cat '${HYTALE_ASSETS_NODE}/.version' 2>/dev/null || echo ""`,
+    5_000, host,
+  )).trim();
+
+  const jarExists = (await ssh(
+    `[ -f '${HYTALE_ASSETS_NODE}/HytaleServer.jar' ] && echo yes || echo no`,
+    5_000, host,
+  )).trim() === "yes";
+
+  if (jarExists && installedVersion && installedVersion === latestVersion) {
+    pushInstallLog(vmid, `[conduit] hytale assets up-to-date — version ${installedVersion}`);
+    return;
+  }
+
+  if (!latestVersion) {
+    if (jarExists) {
+      pushInstallLog(vmid, `[conduit] hytale JAR present (version check failed, using existing ${installedVersion || "unknown"})`);
+      return;
+    }
+    throw new Error("Hytale: version check failed and no JAR present — cannot provision");
+  }
+
+  const action = installedVersion ? `upgrading ${installedVersion} → ${latestVersion}` : `downloading ${latestVersion}`;
+  pushInstallLog(vmid, `[conduit] hytale: ${action} (this may take several minutes — ~1.4 GB)`);
+
+  const GAME_ZIP = `/tmp/hytale-game.zip`;
+  await ssh(
+    `${runDl} -download-path '${GAME_ZIP}' -patchline ${patchline}`,
+    1_800_000, // 30 min for 1.4 GB
+    host, vmid,
+  );
+
+  pushInstallLog(vmid, `[conduit] extracting HytaleServer.jar + Assets.zip from downloaded zip`);
+  await ssh(
+    `cd /tmp && rm -rf hytale-extract && mkdir hytale-extract && ` +
+    `unzip -o '${GAME_ZIP}' 'Server/HytaleServer.jar' 'Server/HytaleServer.aot.config' 'Assets.zip' -d hytale-extract/ && ` +
+    `mv hytale-extract/Server/HytaleServer.jar '${HYTALE_ASSETS_NODE}/HytaleServer.jar' && ` +
+    `mv hytale-extract/Server/HytaleServer.aot.config '${HYTALE_ASSETS_NODE}/HytaleServer.aot.config' && ` +
+    `mv hytale-extract/Assets.zip '${HYTALE_ASSETS_NODE}/Assets.zip' && ` +
+    `printf '%s' '${latestVersion}' > '${HYTALE_ASSETS_NODE}/.version' && ` +
+    `rm -rf hytale-extract '${GAME_ZIP}'`,
+    600_000, host, vmid,
+  );
+
+  pushInstallLog(vmid, `[conduit] hytale assets ready — ${latestVersion}`);
+}
+
+const HYTALE_DIR = "/opt/hytale";
+
+function hytaleScript(task: Task): string {
+  const mem = heap(task.memory, 1024, 2048);
+  const unit = sysdUnit(`Conduit Hytale (${task.name})`, `${HYTALE_DIR}/start.sh`);
+  return `set -e
+DIR=${HYTALE_DIR}
+mkdir -p "$DIR/data/backups" "$DIR/logs"
+if [ -f "$DIR/.conduit-ready" ]; then echo "already-provisioned"; exit 0; fi
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq tmux >/dev/null
+${javaInstall(25)}
+
+echo "[conduit] Setting up Hytale instance: ${task.name}"
+
+# JVM memory (write once; operator can edit ${HYTALE_DIR}/jvm.options to tune)
+if [ ! -f "$DIR/jvm.options" ]; then
+cat > "$DIR/jvm.options" <<'EOF'
+-Xms512M
+-Xmx${mem}M
+EOF
+fi
+
+cat > "$DIR/start.sh" <<'STARTSCRIPT'
+#!/bin/bash
+JAR=/assets/hytale/HytaleServer.jar
+if [ ! -f "$JAR" ]; then
+  echo "[conduit] HytaleServer.jar not found at $JAR — waiting for assets to appear..."
+  sleep 30; exit 1
+fi
+cd ${HYTALE_DIR}/data
+JVM_OPTS=""
+[ -f ${HYTALE_DIR}/jvm.options ] && JVM_OPTS="@${HYTALE_DIR}/jvm.options"
+exec ${JAVA_BIN} $JVM_OPTS -jar "$JAR" \\
+  --assets /assets/hytale/Assets.zip \\
+  --backup --backup-dir ${HYTALE_DIR}/data/backups --backup-frequency 30
+STARTSCRIPT
+chmod +x "$DIR/start.sh"
+
+cat > /etc/systemd/system/mc.service <<'UNIT'
+${unit}
+UNIT
+systemctl daemon-reload
+systemctl enable mc >/dev/null 2>&1 || true
+systemctl start mc || true
+
+touch "$DIR/.conduit-ready"
+echo CONDUIT_PROVISIONED_HYTALE
+`;
+}
+
+export async function installHytale(vmid: number, task: Task, sw: Software, host?: string): Promise<void> {
+  const h = host ?? SSH_HOST;
+  await ensureHytaleAssets(vmid, sw, h);
+  await ctExec(vmid, hytaleScript(task), 180_000, host);
+}
+
+/* ---- nginx (web server) -------------------------------------------------- */
+
+function nginxScript(): string {
+  return `set -e
+if [ -f /opt/.conduit-ready ]; then echo already-provisioned; exit 0; fi
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq || true
+apt-get install -y -qq nginx >/dev/null
+mkdir -p /opt/www
+if [ ! -f /opt/www/index.html ]; then
+cat > /opt/www/index.html <<'HTML'
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Conduit · nginx</title>
+<style>body{background:#16191e;color:#c9d1d9;font-family:ui-monospace,monospace;display:grid;place-items:center;height:100vh;margin:0}
+.c{text-align:center}.b{color:#7c83ff;font-weight:700;font-size:28px}</style></head>
+<body><div class="c"><div class="b">Conduit · nginx</div>
+<p>Your web service is live. Edit <code>/opt/www</code> (or the egg template) to publish your site.</p></div></body></html>
+HTML
+fi
+cat > /etc/nginx/sites-available/default <<'NGINX'
+server {
+  listen 80 default_server;
+  listen [::]:80 default_server;
+  root /opt/www;
+  index index.html index.htm;
+  location / { try_files $uri $uri/ =404; }
+}
+NGINX
+systemctl enable nginx >/dev/null 2>&1 || true
+systemctl restart nginx
+touch /opt/.conduit-ready
+echo CONDUIT_PROVISIONED_NGINX
+`;
+}
+
+export async function installNginx(vmid: number, host?: string): Promise<void> {
+  await ctExec(vmid, nginxScript(), 240_000, host);
+}
+
 /* ---- Velocity (proxy) ---------------------------------------------------- */
 
 function velocityScript(task: Task, secret: string, build: Resolved): string {
@@ -268,6 +553,7 @@ ${unit}
 UNIT
 systemctl daemon-reload
 systemctl enable mc >/dev/null 2>&1 || true
+systemctl start mc
 touch "$MCDIR/.conduit-ready"
 echo CONDUIT_PROVISIONED_VELOCITY
 `;
@@ -284,13 +570,13 @@ export async function installVelocity(
   await ctExec(vmid, velocityScript(task, secret, build), 360_000, host);
 }
 
-/** Default MOTD for a task when none is set. */
-export const defaultMotd = (name: string) => `Conduit §b${name}`;
+/** Default MOTD for a task when none is set (MiniMessage format for Velocity). */
+export const defaultMotd = (name: string) => `Conduit <aqua>${name}</aqua>`;
 
 /** Translate '&' colour codes to the section sign Paper/legacy servers expect. */
 const colorize = (s: string) => s.replace(/&([0-9a-fk-or])/gi, "§$1");
 
-// '&' code → MiniMessage tag (Velocity 3.x parses its MOTD as MiniMessage, not legacy).
+// legacy code → MiniMessage tag (Velocity 3.x parses its MOTD as MiniMessage, not legacy).
 const MINI: Record<string, string> = {
   "0": "black", "1": "dark_blue", "2": "dark_green", "3": "dark_aqua",
   "4": "dark_red", "5": "dark_purple", "6": "gold", "7": "gray",
@@ -298,16 +584,42 @@ const MINI: Record<string, string> = {
   d: "light_purple", e: "yellow", f: "white",
   l: "bold", o: "italic", n: "underlined", m: "strikethrough", k: "obfuscated", r: "reset",
 };
-/** Convert a legacy '&'-coded string to MiniMessage for Velocity. */
+/** Convert legacy '&' or '§' coded strings to MiniMessage for Velocity 3.x. */
 function miniMessage(s: string): string {
   return s
-    .replace(/&([0-9a-fk-or])/gi, (_, c) => `<${MINI[c.toLowerCase()]}>`)
+    .replace(/[&§]([0-9a-fk-or])/gi, (_, c) => `<${MINI[c.toLowerCase()]}>`)
     .replace(/\n/g, "<newline>");
 }
 
 /**
- * Update a running server's MOTD without a full reinstall, then restart it.
- * Paper → server.properties `motd=`; Velocity → velocity.toml `motd =`.
+ * Reload a Velocity proxy's config live, WITHOUT disconnecting players.
+ *
+ * Velocity 3.4.0 ships the `velocity reload` console command (re-reads velocity.toml:
+ * MOTD, [servers], try-list, forced-hosts, …). We drive it through the tmux session.
+ * Falls back to a service restart only when the session isn't up yet (fresh CT).
+ */
+export async function velocityReload(vmid: number, host?: string): Promise<void> {
+  try {
+    const out = await ctExec(
+      vmid,
+      `if tmux -L mc has-session -t mc 2>/dev/null; then ` +
+        `tmux -L mc send-keys -t mc "velocity reload" Enter; echo RELOADED; ` +
+        `else echo NOSESSION; fi`,
+      30_000,
+      host,
+    );
+    if (out.includes("NOSESSION")) {
+      await ctExec(vmid, `systemctl restart mc`, 60_000, host);
+    }
+  } catch {
+    await ctExec(vmid, `systemctl restart mc`, 60_000, host);
+  }
+}
+
+/**
+ * Update a running server's MOTD without a full reinstall.
+ * Paper → server.properties `motd=` + restart; Velocity → velocity.toml `motd =`
+ * + live `velocity reload` (no player kicks).
  */
 export async function setMotd(vmid: number, role: string, motd: string, host?: string): Promise<void> {
   // Files want a LITERAL \n for line breaks; but GNU sed turns \n in its replacement
@@ -317,10 +629,11 @@ export async function setMotd(vmid: number, role: string, motd: string, host?: s
     const v = m.replace(/"/g, '\\"');
     await ctExec(
       vmid,
-      `sed -i 's#^motd = .*#motd = "${v}"#' /opt/mc/velocity.toml && systemctl restart mc`,
+      `sed -i 's#^motd = .*#motd = "${v}"#' /opt/mc/velocity.toml`,
       60_000,
       host,
     );
+    await velocityReload(vmid, host);
   } else {
     const p = m.replace(/#/g, "\\#");
     await ctExec(
@@ -364,9 +677,12 @@ enabled = false
 }
 
 // proxy vmid -> last pushed server signature, so we only restart on real changes.
-const lastSig = new Map<number, string>();
+// Stored on `global` so hot-reloads don't forget it and restart Velocity needlessly.
+declare global { var __conduitLastSig: Map<number, string> | undefined; }
+if (!global.__conduitLastSig) global.__conduitLastSig = new Map();
+const lastSig = global.__conduitLastSig;
 
-/** Push the live backend list into a proxy's velocity.toml; restart only if changed. */
+/** Push the live backend list into a proxy's velocity.toml and restart Velocity to apply it. */
 export async function syncVelocity(
   vmid: number,
   task: Task,
@@ -378,8 +694,30 @@ export async function syncVelocity(
     .sort()
     .join(",");
   if (lastSig.get(vmid) === sig) return false;
-  await ctWrite(vmid, "/opt/mc/velocity.toml", velocityToml(task, servers), host);
-  await ctExec(vmid, "systemctl restart mc", 60_000, host);
+
+  const newToml = velocityToml(task, servers);
+
+  // Before restarting Velocity (which disconnects players), check if the file on
+  // disk is already identical — handles hot-reload losing lastSig without kicking players.
+  let existing = "";
+  try {
+    existing = await ssh(
+      `pct exec ${vmid} -- cat /opt/mc/velocity.toml`,
+      10_000,
+      host ?? SSH_HOST,
+    );
+  } catch { /* CT not running yet, proceed */ }
+
+  if (existing.trim() === newToml.trim()) {
+    lastSig.set(vmid, sig); // re-cache so we don't check again next tick
+    return false;
+  }
+
+  await ctWrite(vmid, "/opt/mc/velocity.toml", newToml, host);
+  // Velocity 3.4.0 has a working `velocity reload` — apply the new backend list LIVE
+  // without disconnecting players. Falls back to a restart only if the session is down.
+  await velocityReload(vmid, host);
+
   lastSig.set(vmid, sig);
   return true;
 }

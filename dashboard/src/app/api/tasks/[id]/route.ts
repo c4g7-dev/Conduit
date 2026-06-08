@@ -30,6 +30,20 @@ export async function PATCH(
       if (typeof body.memory === "number") t.memory = body.memory;
       if (typeof body.disk === "number") t.disk = body.disk;
 
+      // seed: world URL + plugin list (applied on next fresh provision)
+      if (body.seed !== undefined) {
+        if (body.seed === null) {
+          t.seed = undefined;
+        } else {
+          t.seed = {
+            worldUrl: typeof body.seed.worldUrl === "string" ? body.seed.worldUrl || undefined : t.seed?.worldUrl,
+            plugins: Array.isArray(body.seed.plugins) ? body.seed.plugins.filter(Boolean) : t.seed?.plugins,
+            icon: typeof body.seed.icon === "string" ? body.seed.icon || undefined : t.seed?.icon,
+            properties: body.seed.properties && typeof body.seed.properties === "object" ? body.seed.properties : t.seed?.properties,
+          };
+        }
+      }
+
       // clamp desired into [min, max||∞] after any min/max change
       t.desired = Math.max(t.min, t.max > 0 ? Math.min(t.desired, t.max) : t.desired);
       return t;

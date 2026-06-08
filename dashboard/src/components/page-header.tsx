@@ -18,18 +18,18 @@ export function PageHeader({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="mb-6 flex items-start justify-between gap-4">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+    <div className="mb-5 flex items-center justify-between gap-4 border-b border-hairline pb-4">
+      <div className="min-w-0">
+        <h1 className="text-[19px] font-semibold leading-tight tracking-tight">{title}</h1>
         {subtitle && (
-          <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+          <p className="mt-0.5 truncate text-[13px] text-muted-foreground">{subtitle}</p>
         )}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         {children}
         {onRefresh && (
           <Button variant="outline" size="sm" onClick={onRefresh}>
-            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
             Refresh
           </Button>
         )}

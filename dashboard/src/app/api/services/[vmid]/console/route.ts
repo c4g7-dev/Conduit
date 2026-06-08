@@ -13,6 +13,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { nodeExec } from "@/lib/provision";
 import { vmidHost } from "@/lib/proxmox";
+import { consoleTriggers } from "@/lib/console-triggers";
+import { agentUp, agentExec } from "@/lib/agent";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -61,15 +63,20 @@ export async function POST(
       return NextResponse.json({ error: "command required" }, { status: 400 });
     }
     // Strip any literal newlines (one command per send) and base64-pipe the line
-    // so arbitrary quoting/special chars survive the SSH + pct exec hops safely.
+    // so arbitrary quoting/special chars survive the exec + pct exec hops safely.
     const line = command.replace(/[\r\n]+/g, " ").trim();
     const b64 = Buffer.from(line, "utf8").toString("base64");
-    // Decode inside the container into a tmux send-keys literal, then press Enter.
-    await nodeExec(
-      `pct exec ${id} -- bash -c 'tmux -L mc send-keys -t mc "$(echo ${b64} | base64 -d)" Enter'`,
-      20_000,
-      await vmidHost(id),
-    );
+    const host = await vmidHost(id);
+    const sendKeys = `tmux -L mc send-keys -t mc "$(echo ${b64} | base64 -d)" Enter`;
+
+    // Prefer the node agent (local pct exec, no SSH hop); fall back to SSH.
+    if (await agentUp(host)) {
+      await agentExec(host, sendKeys, { vmid: id, timeoutMs: 8_000 });
+    } else {
+      await nodeExec(`pct exec ${id} -- bash -c '${sendKeys}'`, 20_000, host);
+    }
+    // Signal the SSH-fallback SSE loop to poll immediately (no-op for agent path).
+    consoleTriggers.set(id, (consoleTriggers.get(id) ?? 0) + 1);
     return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 502 });
