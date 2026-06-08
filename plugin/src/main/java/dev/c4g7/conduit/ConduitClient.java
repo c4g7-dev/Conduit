@@ -30,6 +30,8 @@ public final class ConduitClient {
             .connectTimeout(Duration.ofSeconds(5)).build();
     private final String endpoint, token, id, task, group, env;
     public volatile long ackActionId = 0;
+    /** Latest proxy config pushed by the panel via the heartbeat response (routing/MOTD/tablist). */
+    public volatile JsonObject config = null;
 
     public ConduitClient(String endpoint, String token, String id, String task, String group, String env) {
         this.endpoint = endpoint.replaceAll("/+$", "");
@@ -88,6 +90,9 @@ public final class ConduitClient {
             HttpResponse<String> resp = post("/api/connector/heartbeat", o);
             if (resp.statusCode() == 200) {
                 JsonObject r = GSON.fromJson(resp.body(), JsonObject.class);
+                if (r != null && r.has("config") && r.get("config").isJsonObject()) {
+                    this.config = r.getAsJsonObject("config");
+                }
                 if (r != null && r.has("actions") && r.get("actions").isJsonArray()) {
                     for (var el : r.getAsJsonArray("actions")) {
                         JsonObject a = el.getAsJsonObject();

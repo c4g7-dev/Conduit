@@ -26,8 +26,11 @@ fetch "$MAVEN/net/kyori/adventure-api/4.14.0/adventure-api-4.14.0.jar" adventure
 fetch "$MAVEN/net/kyori/adventure-key/4.14.0/adventure-key-4.14.0.jar" adventure-key.jar
 fetch "$MAVEN/net/kyori/examination-api/1.3.0/examination-api-1.3.0.jar" examination-api.jar
 fetch "$MAVEN/com/google/guava/guava/32.1.3-jre/guava-32.1.3-jre.jar" guava.jar
+fetch "$MAVEN/net/kyori/adventure-text-serializer-legacy/4.14.0/adventure-text-serializer-legacy-4.14.0.jar" adventure-legacy.jar
+fetch "$MAVEN/org/jetbrains/annotations/24.0.1/annotations-24.0.1.jar" jb-annotations.jar
+fetch "https://libraries.minecraft.net/com/mojang/brigadier/1.0.18/brigadier-1.0.18.jar" brigadier.jar
 
-CP=$(printf "lib/%s:" paper-api.jar velocity-api.jar gson.jar guice.jar adventure-api.jar adventure-key.jar examination-api.jar guava.jar)
+CP=$(printf "lib/%s:" paper-api.jar velocity-api.jar gson.jar guice.jar adventure-api.jar adventure-key.jar examination-api.jar guava.jar adventure-legacy.jar jb-annotations.jar brigadier.jar)
 
 echo "==> compiling"
 rm -rf out; mkdir -p out
