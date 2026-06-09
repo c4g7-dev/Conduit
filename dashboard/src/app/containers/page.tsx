@@ -71,8 +71,8 @@ export default function ContainersPage() {
         </div>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-hairline bg-panel">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto rounded-lg border border-hairline bg-panel">
+        <table className="w-full min-w-[560px] text-sm">
           <thead>
             <tr className="border-b border-hairline">
               {["VMID", "Name", "Status", "Node", "IP", "Tags", "Memory", "Disk", "Uptime", ""].map((h, i) => (

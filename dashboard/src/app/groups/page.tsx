@@ -250,9 +250,9 @@ export default function ServersPage() {
       {data && groups.length === 0 ? (
         <EmptyState onCreated={refresh} />
       ) : (
-        <div className="flex min-h-[calc(100vh-9rem)] gap-4">
-          {/* ---- Left rail: groups → servers tree ---- */}
-          <div className="flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-hairline bg-panel">
+        <div className="flex flex-col gap-4 md:min-h-[calc(100vh-9rem)] md:flex-row">
+          {/* ---- Left rail: groups → servers tree (full-width + capped height on mobile, fixed column on desktop) ---- */}
+          <div className="flex max-h-[45vh] w-full shrink-0 flex-col overflow-hidden rounded-lg border border-hairline bg-panel md:max-h-none md:w-72">
             <div className="flex items-center gap-2 border-b border-hairline px-2.5 py-2">
               <Search className="h-3.5 w-3.5 text-muted-foreground" />
               <input
@@ -580,8 +580,8 @@ function InstancesTab({ task, metrics, pending, onAction, onMigrate, onDelete, n
     return <div className="py-16 text-center text-sm text-muted-foreground">No instances running.</div>;
   }
   return (
-    <div className="overflow-hidden rounded-md border border-hairline">
-      <table className="w-full text-[13px]">
+    <div className="overflow-x-auto rounded-md border border-hairline">
+      <table className="w-full min-w-[520px] text-[13px]">
         <thead>
           <tr className="border-b border-hairline text-left text-[11px] uppercase tracking-wider text-muted-foreground">
             <th className="px-3 py-2 font-medium">Instance</th>

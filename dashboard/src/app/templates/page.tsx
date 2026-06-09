@@ -199,8 +199,8 @@ export default function TemplatesPage() {
 
       {/* ── LXC base images ───────────────────────────────────────────── */}
       <SectionLabel>LXC base images</SectionLabel>
-      <div className="overflow-hidden rounded-lg border border-hairline bg-panel">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto rounded-lg border border-hairline bg-panel">
+        <table className="w-full min-w-[480px] text-sm">
           <thead>
             <tr className="border-b border-hairline">
               {["Image", "OS", "Format", "Size"].map((h, i) => (

@@ -25,8 +25,9 @@ export default function RootLayout({
       <body className={`${jetbrains.variable} font-sans antialiased`}>
         <HelpProvider>
           <SidebarNav />
-          <main className="md:pl-60">
-            <div className="mx-auto max-w-7xl px-5 py-6 md:px-8">{children}</div>
+          {/* pt-14 on mobile clears the fixed top bar; md+ uses the left sidebar offset */}
+          <main className="pt-14 md:pl-60 md:pt-0">
+            <div className="mx-auto max-w-7xl px-4 py-5 sm:px-5 sm:py-6 md:px-8">{children}</div>
           </main>
           <Toaster richColors position="bottom-right" />
         </HelpProvider>
