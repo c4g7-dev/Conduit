@@ -10,7 +10,6 @@ import org.bukkit.World;
 import org.bukkit.WorldBorder;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.util.Vector;
 
 import net.md_5.bungee.api.ChatMessageType;
 import net.md_5.bungee.api.chat.TextComponent;
@@ -210,14 +209,13 @@ final class ConduitSharding {
                     if (pd != null) redis.setex(PD_KEY + uuid, 60, pd);
                     client.transfer(p.getName(), target.target(), target.serverId(), locStr);
                 });
-                pushInward(p, world, x);
-            } else {
-                // Keep the player inside their strip while the connect lands, and re-post the
-                // transfer if it stalls (proxy drains moves ~3s; retry sooner so a fast flyer
-                // doesn't drift deep into the neighbour's territory before being moved).
-                pushInward(p, world, x);
-                if (now - tt > 1500) transferring.remove(key);
+            } else if (now - tt > 1500) {
+                transferring.remove(key); // re-post if the move stalled
             }
+            // No push while crossing — the player walks through cleanly into the neighbour's
+            // strip and is teleported at their exact position when the move lands. Only a HARD
+            // cap kicks in if the move is lagging and they've run too far past the seam.
+            hardCap(p, world, x);
         }
     }
 
@@ -233,28 +231,26 @@ final class ConduitSharding {
     }
 
     /**
-     * Keep a player from drifting deep into a neighbour's territory while their transfer lands:
-     * a velocity nudge back toward their own strip, and — if they've gone more than MARGIN past
-     * the boundary (e.g. a creative flyer that velocity can't stop) — a hard teleport clamp to the
-     * boundary. The transfer then connects them at the seam on the owning server.
+     * No-op until a player has run more than HARD_CAP blocks past their own strip boundary with
+     * the transfer still pending (i.e. the move is lagging). Up to that point they walk through
+     * the seam cleanly and get teleported at their exact position when the move lands — a smooth
+     * walk-through. Beyond the cap, snap them back to CAP_BACK blocks past the seam so they can't
+     * run indefinitely into a neighbour's terrain if the move is stuck.
      */
-    private static final double CLAMP_MARGIN = 80;
-    private void pushInward(Player p, String world, double x) {
+    private static final double HARD_CAP = 25;
+    private static final double CAP_BACK = 10;
+    private void hardCap(Player p, String world, double x) {
         Region me = selfRegion();
         if (me == null) return;
         Strip s = me.worlds().get(world);
         if (s == null) return;
         double over = x < s.min() ? s.min() - x : (x > s.max() ? x - s.max() : 0);
-        if (over <= 0) return; // inside our strip
+        if (over <= HARD_CAP) return; // walk freely up to the cap — no push
         double edge = x < s.min() ? s.min() : s.max();
-        double dir = x < s.min() ? 1 : -1; // push toward the strip interior
-        if (over > CLAMP_MARGIN) {
-            Location l = p.getLocation();
-            l.setX(edge + dir * 2); // just inside our boundary
-            p.teleport(l);
-        } else {
-            p.setVelocity(p.getVelocity().add(new Vector(dir * 0.25, 0.0, 0)));
-        }
+        double dir = x < s.min() ? -1 : 1; // sign of how far past (west = below min)
+        Location l = p.getLocation();
+        l.setX(edge + dir * CAP_BACK); // CAP_BACK blocks past the seam, no further
+        p.teleport(safeY(l));
     }
 
     private void applyPending(JsonArray pending) {
