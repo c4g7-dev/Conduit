@@ -24,6 +24,15 @@ export async function PATCH(
       if (typeof body.min === "number") t.min = body.min;
       if (typeof body.max === "number") t.max = body.max;
       if (Array.isArray(body.fronts)) t.fronts = body.fronts;
+      if (typeof body.autoscale === "boolean") t.autoscale = body.autoscale;
+      if (typeof body.playersPerInstance === "number") t.playersPerInstance = body.playersPerInstance;
+      // CloudNet Smart-style autoscaling knobs
+      if (typeof body.preparedPool === "number") t.preparedPool = body.preparedPool;
+      if (typeof body.scaleUpPercent === "number") t.scaleUpPercent = body.scaleUpPercent;
+      if (typeof body.scaleDownAfterSec === "number") t.scaleDownAfterSec = body.scaleDownAfterSec;
+      if (typeof body.spawnCooldownSec === "number") t.spawnCooldownSec = body.spawnCooldownSec;
+      if (typeof body.maxServices === "number") t.maxServices = body.maxServices;
+      if (typeof body.splitOverNodes === "boolean") t.splitOverNodes = body.splitOverNodes;
 
       // resources: only affect newly provisioned instances (existing LXCs aren't resized)
       if (typeof body.cores === "number") t.cores = body.cores;

@@ -157,8 +157,11 @@ const heap = (mem: number, reserve: number, floor: number) =>
  * NOTE: the exact tmux/systemd incantation is to be live-verified during
  * integration — this is the clean, plausible baseline.
  */
+/** Path the systemd unit sources connector identity from (rewritten per-clone). */
+export const CONNECTOR_ENV_FILE = "/etc/conduit/connector.env";
+
 /** Env vars the Conduit connector plugin reads (endpoint/token/identity). */
-function connectorEnv(vmid: number, task: Task, envKind: "proxy" | "server"): Record<string, string> {
+function connectorEnv(vmid: number, task: Task): Record<string, string> {
   const vip = process.env.CONDUIT_VIP || process.env.PROXMOX_HOST || "10.27.27.50";
   const token = process.env.CONDUIT_CONNECTOR_TOKEN || process.env.CONDUIT_AGENT_TOKEN || "";
   return {
@@ -170,6 +173,23 @@ function connectorEnv(vmid: number, task: Task, envKind: "proxy" | "server"): Re
   };
 }
 
+/** Shell that writes the connector EnvironmentFile inside a container (used at install + clone). */
+export function connectorEnvScript(vmid: number, task: Task): string {
+  const env = connectorEnv(vmid, task);
+  const body = Object.entries(env).map(([k, v]) => `${k}=${v}`).join("\n");
+  const b64 = Buffer.from(body, "utf8").toString("base64");
+  return `mkdir -p /etc/conduit && echo ${b64} | base64 -d > ${CONNECTOR_ENV_FILE}`;
+}
+
+/** Rewrite a clone's connector identity file + restart so it registers as itself. */
+export async function reidentifyConnector(vmid: number, task: Task, host?: string): Promise<void> {
+  const b64 = Buffer.from(connectorEnvScript(vmid, task), "utf8").toString("base64");
+  await nodeExec(
+    `pct exec ${vmid} -- bash -c 'echo ${b64} | base64 -d | bash' && pct exec ${vmid} -- systemctl restart mc 2>/dev/null || true`,
+    60_000, host,
+  );
+}
+
 /** Push the connector jar (from the shared store) into a container's plugins dir. */
 export async function installConnector(vmid: number, host?: string): Promise<void> {
   const jar = "/var/lib/conduit/connector/conduit-connector.jar";
@@ -179,7 +199,7 @@ export async function installConnector(vmid: number, host?: string): Promise<voi
   );
 }
 
-const sysdUnit = (desc: string, exec: string, workDir = "/opt/mc", env: Record<string, string> = {}) => `[Unit]
+const sysdUnit = (desc: string, exec: string, workDir = "/opt/mc", useConnectorEnv = false) => `[Unit]
 Description=${desc}
 After=network-online.target
 Wants=network-online.target
@@ -187,7 +207,7 @@ Wants=network-online.target
 [Service]
 Type=forking
 WorkingDirectory=${workDir}
-${Object.entries(env).map(([k, v]) => `Environment="${k}=${v}"`).join("\n")}
+${useConnectorEnv ? `EnvironmentFile=-${CONNECTOR_ENV_FILE}` : ""}
 ExecStart=/usr/bin/tmux -L mc new-session -d -s mc -x 220 -y 50 '${exec}'
 ExecStop=/usr/bin/tmux -L mc send-keys -t mc 'stop' Enter
 Restart=always
@@ -260,7 +280,7 @@ proxies:
     `Conduit Paper (${task.name})`,
     `${JAVA_BIN} -Xms${mem}M -Xmx${mem}M -XX:+UseG1GC -jar server.jar --nogui`,
     "/opt/mc",
-    connectorEnv(vmid, task, "server"),
+    true,
   );
   return `set -e
 MCDIR=/opt/mc
@@ -282,6 +302,7 @@ YML
 cat > /etc/systemd/system/mc.service <<'UNIT'
 ${unit}
 UNIT
+${connectorEnvScript(vmid, task)}
 ${seedShell(seed)}
 systemctl daemon-reload
 systemctl enable mc >/dev/null 2>&1 || true
@@ -562,7 +583,7 @@ function velocityScript(task: Task, secret: string, build: Resolved, vmid: numbe
     `Conduit Velocity (${task.name})`,
     `${JAVA_BIN} -Xms256M -Xmx${mem}M -jar velocity.jar`,
     "/opt/mc",
-    connectorEnv(vmid, task, "proxy"),
+    true,
   );
   return `set -e
 MCDIR=/opt/mc
@@ -578,6 +599,7 @@ printf '%s' '${secret}' > "$MCDIR/forwarding.secret"
 cat > /etc/systemd/system/mc.service <<'UNIT'
 ${unit}
 UNIT
+${connectorEnvScript(vmid, task)}
 systemctl daemon-reload
 systemctl enable mc >/dev/null 2>&1 || true
 systemctl start mc

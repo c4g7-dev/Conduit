@@ -50,7 +50,30 @@ export type Task = {
   motd?: string;
   /** for dynamic tasks: the golden template CT (stopped) that scale-ups clone from */
   templateVmid?: number;
+  /* ---- CloudNet Smart-style autoscaling knobs (optional; sane defaults applied) ---- */
+  /** pre-cloned, stopped instances kept ready for instant scale-up (CloudNet preparedServices) */
+  preparedPool?: number;
+  /** scale up when any live server exceeds this % of playersPerInstance (default 100) */
+  scaleUpPercent?: number;
+  /** only scale down an empty instance after it's been idle this long (seconds, default 60) */
+  scaleDownAfterSec?: number;
+  /** minimum seconds between spawning new instances (default 5) */
+  spawnCooldownSec?: number;
+  /** hard cap on instances (alias for max; 0 = unbounded) */
+  maxServices?: number;
+  /** spread instances across nodes rather than packing one node */
+  splitOverNodes?: boolean;
   createdAt: number;
+};
+
+/** Golden-image build status per egg: which node holds the template CT, version, timestamp. */
+export type ImageStatus = {
+  eggId: string;
+  templates: Record<string, number>; // node → template vmid
+  version: number;
+  builtAt: number;
+  building?: boolean;
+  error?: string;
 };
 
 /** Network-wide settings shared by all instances (e.g. proxy↔backend secret). */
@@ -77,6 +100,8 @@ export type DB = {
   blueprints?: Blueprint[];
   /** recurring scheduled actions (restarts, broadcasts) */
   schedules?: Schedule[];
+  /** golden-image build status per egg (for fast clone-based autoscaling) */
+  images?: ImageStatus[];
 };
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -95,6 +120,8 @@ function normalize(db: Partial<DB> | null | undefined): DB {
     tasks: db?.tasks ?? [],
     network: db?.network,
     blueprints: db?.blueprints,
+    schedules: db?.schedules,
+    images: db?.images,
   };
 }
 
