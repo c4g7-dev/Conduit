@@ -21,6 +21,7 @@ import {
   setRedisReplication,
   installConnector,
   installHytaleConnector,
+  installGenericCustom,
   regenWorldWithSeed,
   syncVelocity,
   forgetVelocity,
@@ -155,9 +156,11 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
   } else if (kind === "redis") {
     await installRedis(inst.vmid, await redisPassword(), host);
   } else {
-    // generic / unknown — bare OS, show in UI, configure manually
-    pushInstallLog(inst.vmid, `[conduit] Blueprint "${bp.name}" (${kind}) — no install recipe. Bare Debian container.`);
-    await ctExec(inst.vmid, `echo "[conduit] Container provisioned at $(date)." > /opt/conduit-info.txt`, 30_000, host);
+    // generic — run the custom provisioning recipe (packages/assets/install/start) if defined,
+    // else come up as a bare container.
+    if (bp.custom) pushInstallLog(inst.vmid, `[conduit] "${bp.name}" — running custom recipe (assets/install/start)…`);
+    else pushInstallLog(inst.vmid, `[conduit] Blueprint "${bp.name}" (${kind}) — bare container (no custom recipe).`);
+    await installGenericCustom(inst.vmid, bp, host);
   }
 
   // CloudNet-style overlay: copy overlays/<egg>/ + tasks/<task>/ into the service dir.

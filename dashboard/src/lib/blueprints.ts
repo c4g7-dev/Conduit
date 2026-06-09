@@ -63,6 +63,23 @@ export type Blueprint = {
   sharedAssets?: boolean;
   /** default game-ready content for instances of this blueprint */
   seed?: Seed;
+  /** longer human description shown in the egg detail view (the card uses `description`) */
+  longDescription?: string;
+  /** custom provisioning recipe for kind="generic" templates: pull assets, run an install
+   *  script, then keep a start command alive. Lets you define a server type without code. */
+  custom?: CustomProvision;
+};
+
+/** Declarative provisioning for a generic/custom template — executed in-container at provision. */
+export type CustomProvision = {
+  /** apt packages to install (space/newline separated) */
+  packages?: string;
+  /** files to download into the container before install (curl url → dest path) */
+  assets?: { url: string; dest: string }[];
+  /** bash run once at first provision (cwd /opt/app), after packages + assets */
+  installScript?: string;
+  /** long-running start command, supervised under tmux+systemd (cwd /opt/app); empty = no service */
+  startCommand?: string;
 };
 
 const DEBIAN = "local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst";

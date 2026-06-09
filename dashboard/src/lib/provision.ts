@@ -12,7 +12,7 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import type { Task } from "./store";
-import type { Seed, Software } from "./blueprints";
+import type { Seed, Software, Blueprint } from "./blueprints";
 
 const SSH_HOST = process.env.PROXMOX_SSH_HOST ?? process.env.PROXMOX_HOST ?? "10.27.27.126";
 const SSH_USER = process.env.PROXMOX_SSH_USER ?? "root";
@@ -255,6 +255,46 @@ SuccessExitStatus=0 143
 [Install]
 WantedBy=multi-user.target
 `;
+
+/* ---- Generic / custom template ------------------------------------------ */
+
+/**
+ * Provision a custom (kind="generic") template from its declarative recipe: install apt packages,
+ * curl assets to their destinations, run the install script once, then supervise the start command
+ * under tmux+systemd (so the Console tab attaches and it restarts on crash). Everything runs in
+ * /opt/app. A blueprint with no `custom` spec just comes up as a bare container (unchanged).
+ */
+export async function installGenericCustom(vmid: number, bp: Blueprint, host?: string): Promise<void> {
+  const c = bp.custom;
+  if (!c) {
+    await ctExec(vmid, `echo "[conduit] ${bp.name} — bare container (no custom recipe)." > /opt/conduit-info.txt`, 30_000, host);
+    return;
+  }
+  const pkgs = (c.packages ?? "").split(/[\s,]+/).filter(Boolean);
+  const assetLines = (c.assets ?? [])
+    .filter((a) => a.url && a.dest)
+    .map((a) => {
+      const dest = a.dest.startsWith("/") ? a.dest : `/opt/app/${a.dest}`;
+      return `mkdir -p "$(dirname '${dest}')" && curl -fsSL -o '${dest}' '${a.url}' || echo "asset failed: ${a.url}"`;
+    });
+  const unit = c.startCommand
+    ? sysdUnit(`Conduit ${bp.name}`, c.startCommand, "/opt/app", true)
+    : null;
+  const script = `set -e
+mkdir -p /opt/app
+if [ -f /opt/app/.conduit-ready ]; then echo already-provisioned; exit 0; fi
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq || true
+apt-get install -y -qq curl tmux ca-certificates ${pkgs.join(" ")} >/dev/null 2>&1 || true
+cd /opt/app
+${assetLines.join("\n")}
+${c.installScript ? `# --- install script ---\n${c.installScript}\n# --- end install ---` : ""}
+${unit ? `cat > /etc/systemd/system/mc.service <<'UNIT'\n${unit}\nUNIT\nsystemctl daemon-reload\nsystemctl enable mc >/dev/null 2>&1 || true\nsystemctl restart mc || true` : ""}
+touch /opt/app/.conduit-ready
+echo CONDUIT_PROVISIONED_GENERIC
+`;
+  await ctExec(vmid, script, 600_000, host);
+}
 
 /* ---- Paper (lobby / SMP) ------------------------------------------------- */
 
