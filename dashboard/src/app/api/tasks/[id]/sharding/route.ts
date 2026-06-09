@@ -7,9 +7,27 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDB } from "@/lib/store";
 import { gridForTask } from "@/lib/shard-state";
 import { liveServers } from "@/lib/connector";
+import { enableShardingWithSeed, reconcileAll } from "@/lib/engine";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+/**
+ * Enable sharding on the task: apply a shared seed to every region instance and regenerate their
+ * worlds (DESTRUCTIVE — operator-approved via the UI warning). Body: { seed?: string } (empty =
+ * auto-generate). Returns the seed used + how many instances were regenerated.
+ */
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await ctx.params;
+    const body = await req.json().catch(() => ({}));
+    const r = await enableShardingWithSeed(id, typeof body.seed === "string" ? body.seed : undefined);
+    reconcileAll().catch(() => {});
+    return NextResponse.json({ ok: true, ...r });
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 });
+  }
+}
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
