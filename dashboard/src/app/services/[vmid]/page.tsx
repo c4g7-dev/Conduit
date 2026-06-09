@@ -16,6 +16,7 @@ import {
   Activity,
 } from "lucide-react";
 import { Sparkline } from "@/components/sparkline";
+import { MetricsPanel as RrdMetricsPanel } from "@/components/metrics-panel";
 import { FilesPanel } from "@/components/files-panel";
 import AnsiToHtml from "ansi-to-html";
 import "@xterm/xterm/css/xterm.css";
@@ -446,23 +447,27 @@ function MetricsPanel({ vmid }: { vmid: number }) {
   ];
 
   return (
-    <div className="grid gap-3 sm:grid-cols-3">
-      {cards.map((card) => (
-        <div key={card.label} className="panel p-4">
-          <div className="flex items-center justify-between">
-            <span className="eyebrow">{card.label}</span>
-            <span className="text-base font-semibold tabular-nums">{card.value}</span>
+    <div className="space-y-5">
+      <div className="grid gap-3 sm:grid-cols-3">
+        {cards.map((card) => (
+          <div key={card.label} className="panel p-4">
+            <div className="flex items-center justify-between">
+              <span className="eyebrow">{card.label}</span>
+              <span className="text-base font-semibold tabular-nums">{card.value}</span>
+            </div>
+            <div className="mt-3">
+              {card.series.length < 2 ? (
+                <div className="flex h-12 items-center text-xs text-muted-foreground/60">Collecting…</div>
+              ) : (
+                <Sparkline data={card.series} color={card.color} max={card.max} height={48} label={card.label} />
+              )}
+            </div>
           </div>
-          <div className="mt-3">
-            {card.series.length < 2 ? (
-              <div className="flex h-12 items-center text-xs text-muted-foreground/60">Collecting…</div>
-            ) : (
-              <Sparkline data={card.series} color={card.color} max={card.max} height={48} label={card.label} />
-            )}
-          </div>
-        </div>
-      ))}
-      <p className="sm:col-span-3 text-[11px] text-muted-foreground/60">Live rolling metrics (last ~60 samples). CPU/RAM from Proxmox, players via Minecraft SLP.</p>
+        ))}
+        <p className="sm:col-span-3 text-[11px] text-muted-foreground/60">Live rolling metrics (this session). Players via the connector.</p>
+      </div>
+      {/* Historical Proxmox RRD metrics with a range selector — shows immediately. */}
+      <RrdMetricsPanel vmid={vmid} />
     </div>
   );
 }
