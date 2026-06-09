@@ -128,8 +128,9 @@ export default function TemplatesPage() {
                 </button>
               )}
 
-              {/* Spec strip */}
-              <div className="mt-3 flex items-center gap-3 px-4 font-mono text-[11px] text-muted-foreground">
+              {/* Spec strip — mt-auto pins this + the fast-image row + deploy button to the
+                  bottom, so cards in a row align regardless of description length. */}
+              <div className="mt-auto flex items-center gap-3 px-4 pt-3 font-mono text-[11px] text-muted-foreground">
                 <span className="flex items-center gap-1"><Cpu className="h-3 w-3" />{b.cores}c</span>
                 <span className="flex items-center gap-1"><MemoryStick className="h-3 w-3" />{b.memory}MB</span>
                 <span className="flex items-center gap-1"><HardDrive className="h-3 w-3" />{b.disk}GB</span>

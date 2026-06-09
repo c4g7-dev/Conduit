@@ -134,9 +134,17 @@ export const HELP_TOPICS: HelpTopic[] = [
   {
     id: "redis", category: "World sharding", title: "Redis (player sync)",
     body: (
-      <p>The store that carries player inventory/HP/XP across shard handoffs. Deploy a Redis task
-      (1 instance works; 2+ for redundancy with automatic primary→replica failover). It&apos;s
-      self-configuring — connectors discover the endpoint automatically; no manual address needed.</p>
+      <>
+        <p>Carries player inventory/HP/XP/effects across shard handoffs. Deploy a Redis task
+        (1 works; 2+ for redundancy).</p>
+        <p><b>Self-configuring:</b> the controller makes the lowest-vmid instance the primary and
+        auto-replicates the rest (failover down the list). The password is derived from the network
+        secret, so server and connectors agree with no setup.</p>
+        <p><b>How servers use it:</b> the panel hands each sharded backend the Redis endpoints +
+        password via its heartbeat config — no hardcoded address. On a boundary cross the source
+        writes the player&apos;s state to <code>conduit:pd:&lt;uuid&gt;</code> (short TTL); the
+        destination applies it on arrival and deletes it.</p>
+      </>
     ),
   },
 
