@@ -97,8 +97,16 @@ public class ConduitHytalePlugin extends JavaPlugin {
 
     private void execute(JsonObject a) {
         String kind = str(a, "kind");
+        // Only run actions scoped to THIS Hytale server. A player action carries the player's
+        // current serverId; without this check a kick for an MC player named "c4g7" (or a player
+        // on another Hytale instance) would also kick our local "c4g7". Broadcasts have no
+        // serverId and apply everywhere. Unscoped non-broadcast actions are NOT for us → skip.
+        String sid = str(a, "serverId");
+        if (!"broadcast".equals(kind)) {
+            if (sid == null || sid.isEmpty() || !sid.equals(id)) return;
+        }
         PlayerRef ref = byName(str(a, "player"));
-        if (ref == null) return; // not our player — another executor (proxy/other Hytale) handles it
+        if (ref == null) return; // not our player
         try {
             switch (kind) {
                 case "move" -> {

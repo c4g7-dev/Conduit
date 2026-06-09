@@ -199,3 +199,24 @@
   0% { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
 }
+
+/* Player-list transitions: rows slide+fade in as players join; rows fade+collapse out as they
+   leave; the empty state gently fades up when the last player goes. */
+@keyframes player-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes player-out {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(14px); }
+}
+@keyframes empty-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.player-row-in { animation: player-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.player-row-out { animation: player-out 0.22s ease-in forwards; pointer-events: none; }
+.player-empty-in { animation: empty-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .player-row-in, .player-row-out, .player-empty-in { animation: none; }
+}

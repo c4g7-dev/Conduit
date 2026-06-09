@@ -68,8 +68,9 @@ public final class ConduitClient {
         }
     }
 
-    /** A queued action the proxy must run, as returned by the heartbeat. */
-    public record Action(long id, String kind, String player, String target, String text, String group, String reason) {}
+    /** A queued action the proxy must run, as returned by the heartbeat. `serverId`/`env` scope it
+     *  to the player's current server so cross-platform same-name players aren't both hit. */
+    public record Action(long id, String kind, String player, String target, String text, String group, String reason, String serverId, String env) {}
 
     /**
      * Send a heartbeat with the current player list/counts. Returns actions to execute
@@ -111,7 +112,8 @@ public final class ConduitClient {
                         long aid = a.get("id").getAsLong();
                         out.add(new Action(aid,
                                 str(a, "kind"), str(a, "player"), str(a, "target"),
-                                str(a, "text"), str(a, "group"), str(a, "reason")));
+                                str(a, "text"), str(a, "group"), str(a, "reason"),
+                                str(a, "serverId"), str(a, "env")));
                         if (aid > ackActionId) ackActionId = aid;
                     }
                 }

@@ -22,11 +22,15 @@ export type ConnServer = {
   players: ConnPlayer[];
   lastSeen: number;
 };
+// `serverId` + `env` scope an action to the player's CURRENT server so the right executor runs
+// it. Without this, a player-name action (e.g. kick c4g7) was drained by BOTH the proxy and the
+// Hytale connector, kicking same-named players on both platforms. Now: env="hytale" actions are
+// executed only by the Hytale connector whose self id == serverId; all others by the proxy.
 export type ConnAction =
-  | { id: number; kind: "move"; player: string; target: string }
-  | { id: number; kind: "message"; player: string; text: string }
+  | { id: number; kind: "move"; player: string; target: string; serverId?: string; env?: string }
+  | { id: number; kind: "message"; player: string; text: string; serverId?: string; env?: string }
   | { id: number; kind: "broadcast"; group?: string; text: string }
-  | { id: number; kind: "kick"; player: string; reason?: string };
+  | { id: number; kind: "kick"; player: string; reason?: string; serverId?: string; env?: string };
 
 type Registry = {
   servers: Map<string, ConnServer>;

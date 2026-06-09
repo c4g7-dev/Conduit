@@ -232,6 +232,9 @@ public class ConduitVelocityPlugin {
 
     /* ---- queued actions ---- */
     private void execute(ConduitClient.Action a) {
+        // Hytale-scoped actions are handled by the Hytale connector, not the proxy — skip them so
+        // a kick/message/move for a Hytale player doesn't also hit a same-named MC player here.
+        if ("hytale".equals(a.env())) return;
         switch (a.kind()) {
             case "move" -> proxy.getPlayer(a.player()).ifPresent(p ->
                     Optional.ofNullable(bestByPrefix(a.target())).ifPresent(rs -> p.createConnectionRequest(rs).fireAndForget()));
