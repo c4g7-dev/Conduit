@@ -11,7 +11,7 @@
  */
 import { api, lxcIp, waitTask, nodeIp, NODE } from "./proxmox";
 import { blueprint, loadBlueprints, type Blueprint, type Seed } from "./blueprints";
-import { getDB, saveDB, getNetwork, type Task, type Group } from "./store";
+import { getDB, saveDB, getNetwork, type Task, type Group, type ImageStatus } from "./store";
 import {
   installPaper,
   installVelocity,
@@ -26,6 +26,7 @@ import {
   type ProxyServer,
 } from "./provision";
 import { connServersByVmid } from "./metrics-source";
+import { imageFor, cloneInstance, clonePrepared, promotePrepared, PREPARED_TAG } from "./images";
 import { applyTemplate, serviceDir } from "./templates";
 import { ensureServiceShare } from "./serviceshare";
 import { syncTaskFiles } from "./taskfile";
@@ -69,13 +70,20 @@ function recentVmids(taskId: string): number[] {
   const m = recent.get(taskId);
   if (!m) return [];
   const now = Date.now();
-  for (const [vmid, ts] of m) if (now - ts > 90_000) m.delete(vmid);
+  // 180s window — a clone/boot + cluster-cache lag can exceed 90s; expiring too early made
+  // the autoscaler re-provision a still-starting instance (runaway).
+  for (const [vmid, ts] of m) if (now - ts > 180_000) m.delete(vmid);
   return [...m.keys()];
 }
 
 // Instances whose software install is currently running (takes minutes — we kick
 // it in the background and let later ticks skip it until the `ready` tag lands).
 const provisioning = new Set<number>();
+
+// Smart-autoscale timers: spawn cooldown per task, and when an instance first went empty
+// (so we only scale it down after `scaleDownAfterSec` of idle, like CloudNet's auto-stop).
+const lastSpawn = new Map<string, number>(); // taskId -> ts of last provision
+const emptySince = new Map<number, number>(); // vmid -> ts it first appeared empty
 
 let busy = false;
 
@@ -291,14 +299,19 @@ function playerCounts(insts: Instance[]): Map<number, number> {
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(n, hi));
 
-/** Autoscale target for a dynamic task: one spare joinable server above current load. */
-export function autoscaleTarget(players: number, perInstance: number, min: number, max: number) {
+/**
+ * Autoscale target for a dynamic task (CloudNet Smart-style). Scale up a spare once any
+ * server would exceed `scaleUpPercent` of capacity; keep `min` as the always-on floor; cap
+ * at `max`/`maxServices`. Percent defaults to 100 (= "one spare above full").
+ */
+export function autoscaleTarget(
+  players: number, perInstance: number, min: number, max: number, scaleUpPercent = 100,
+) {
   const per = Math.max(1, perInstance);
-  const needed = Math.ceil(players / per);
-  // Add a spare only when we are scaling ABOVE the minimum floor — the min instances
-  // already act as the always-available baseline, so no extra spare is needed on top of them.
-  // This prevents a 2nd lobby from spawning when 1 player joins a min=1 setup.
-  const spare = needed > min ? 1 : 0;
+  const threshold = Math.max(1, Math.floor((per * Math.max(1, scaleUpPercent)) / 100));
+  // how many servers are needed so none exceeds the scale-up threshold
+  const needed = Math.ceil(players / threshold);
+  const spare = needed > min ? 1 : 0; // a spare joinable server above the floor
   const loadBased = Math.max(min, needed + spare);
   const cap = max > 0 ? max : loadBased;
   return clamp(loadBased, min, cap);
@@ -340,6 +353,22 @@ async function provision(task: Task, group: Group): Promise<number> {
   await ensurePool(group);
 
   const node = await pickNode();
+
+  // FAST PATH: if a golden image exists for this egg on the picked node, linked-clone it
+  // (seconds) instead of a from-scratch install (minutes). Software is already baked.
+  // On any clone failure, fall through to the from-scratch path so scaling never stalls.
+  const db = await getDB();
+  const tmpl = imageFor(db.images, task.blueprintId, node);
+  if (tmpl) {
+    try {
+      const cloned = await cloneInstance(task, group, node, tmpl);
+      noteCreate(task.id, cloned);
+      return cloned;
+    } catch (e) {
+      console.error(`[conduitd] clone ${task.id} from ${tmpl} failed, falling back to install:`, String(e));
+    }
+  }
+
   const vmid = await api.nextVmid(VMID_FROM, VMID_TO);
   noteCreate(task.id, vmid);
 
@@ -380,6 +409,22 @@ async function provision(task: Task, group: Group): Promise<number> {
     ).catch((e) => console.error(`[conduitd] assets mount ${vmid} failed:`, String(e)));
   }
   return vmid;
+}
+
+/** Keep `preparedPool` STOPPED, pre-cloned warm instances ready (golden image required). */
+async function maintainWarmPool(
+  task: Task, group: Group, prepared: Instance[], images: ImageStatus[] | undefined, log: string[],
+): Promise<void> {
+  const want = task.preparedPool ?? 0;
+  // include recently-created prepared clones not yet visible in the cluster cache
+  const have = prepared.length;
+  for (let i = have; i < want; i++) {
+    const node = await pickNode();
+    const tmpl = imageFor(images, task.blueprintId, node);
+    if (!tmpl) { log.push(`warmpool ${task.id}: no golden image on ${node} — skipping`); return; }
+    const vmid = await clonePrepared(task, group, node, tmpl);
+    log.push(`* ${task.id}: warm clone ${vmid} ready on ${node}`);
+  }
 }
 
 async function destroy(inst: Instance) {
@@ -443,16 +488,21 @@ export async function reconcileAll(): Promise<string[]> {
       const group = db.groups.find((g) => g.id === task.groupId);
       if (!group) continue;
 
-      const live = instancesOf(all, task.id);
+      // Prepared (warm-pool) instances are a separate pool — exclude them from live accounting.
+      const allOfTask = instancesOf(all, task.id);
+      const preparedInsts = allOfTask.filter((i) => i.tags?.includes(PREPARED_TAG));
+      const live = allOfTask.filter((i) => !i.tags?.includes(PREPARED_TAG));
       // count live + recently-created (not yet visible in cluster cache)
       const liveIds = new Set(live.map((i) => i.vmid));
       const pending = recentVmids(task.id).filter((v) => !liveIds.has(v));
       const have = live.length + pending.length;
 
+      // Effective cap: maxServices overrides max when set (CloudNet Smart parity).
+      const cap = task.maxServices && task.maxServices > 0 ? task.maxServices : task.max;
       let desired: number;
       if (task.autoscale) {
         const load = live.reduce((n, i) => n + (players.get(i.vmid) ?? 0), 0);
-        desired = autoscaleTarget(load, task.playersPerInstance, task.min, task.max);
+        desired = autoscaleTarget(load, task.playersPerInstance, task.min, cap, task.scaleUpPercent);
         if (desired !== task.desired) {
           task.desired = desired; // reflect the live target in the store/UI
           dirty = true;
@@ -460,7 +510,7 @@ export async function reconcileAll(): Promise<string[]> {
         if (desired !== have)
           log.push(`autoscale ${task.id}: ${load}p → want ${desired} (have ${have})`);
       } else {
-        desired = clamp(task.desired, task.min, task.max > 0 ? task.max : task.desired);
+        desired = clamp(task.desired, task.min, cap > 0 ? cap : task.desired);
       }
 
       // Restart any stopped containers that should be running — a crash or manual
@@ -477,34 +527,75 @@ export async function reconcileAll(): Promise<string[]> {
         }
       }
 
+      const now = Date.now();
       if (have < desired) {
-        for (let i = 0; i < desired - have; i++) {
-          try {
-            const vmid = await provision(task, group);
-            log.push(`+ ${task.id}: provisioned ${vmid}`);
-          } catch (e) {
-            log.push(`! ${task.id}: provision failed ${String(e)}`);
+        // Honor a spawn cooldown so a burst doesn't create a thundering herd of clones.
+        const cooldownMs = (task.spawnCooldownSec ?? 0) * 1000;
+        const lastTs = lastSpawn.get(task.id) ?? 0;
+        if (cooldownMs > 0 && now - lastTs < cooldownMs) {
+          log.push(`autoscale ${task.id}: spawn on cooldown (${Math.ceil((cooldownMs - (now - lastTs)) / 1000)}s)`);
+        } else {
+          const warm = preparedInsts.filter((i) => i.status === "stopped");
+          for (let i = 0; i < desired - have; i++) {
+            try {
+              const w = warm.shift();
+              if (w) {
+                await promotePrepared(w.vmid, w.node, task, group);
+                noteCreate(task.id, w.vmid);
+                log.push(`+ ${task.id}: promoted warm ${w.vmid}`);
+              } else {
+                const vmid = await provision(task, group);
+                log.push(`+ ${task.id}: provisioned ${vmid}`);
+              }
+            } catch (e) {
+              log.push(`! ${task.id}: scale-up failed ${String(e)}`);
+            }
           }
+          lastSpawn.set(task.id, now);
         }
       } else if (have > desired) {
         // scale down: prefer stopped, then highest vmid; never below min.
-        // For autoscale tasks, only drain EMPTY instances so we never kick players.
+        // For autoscale tasks, only drain EMPTY instances, and only after they've been idle
+        // for scaleDownAfterSec (CloudNet auto-stop) — so we never kick players or flap.
         let removable = [...live].sort(
           (a, b) =>
             Number(a.status === "running") - Number(b.status === "running") ||
             b.vmid - a.vmid,
         );
-        if (task.autoscale)
-          removable = removable.filter((i) => (players.get(i.vmid) ?? 0) === 0);
+        if (task.autoscale) {
+          const idleMs = (task.scaleDownAfterSec ?? 60) * 1000;
+          removable = removable.filter((i) => {
+            if ((players.get(i.vmid) ?? 0) !== 0) return false;
+            const since = emptySince.get(i.vmid) ?? now;
+            return now - since >= idleMs;
+          });
+        }
         for (let i = 0; i < have - desired && removable.length; i++) {
           const victim = removable.shift()!;
           try {
             await destroy(victim);
+            emptySince.delete(victim.vmid);
             log.push(`- ${task.id}: destroyed ${victim.vmid}`);
           } catch (e) {
             log.push(`! ${task.id}: destroy failed ${String(e)}`);
           }
         }
+      }
+
+      // Track empty-since timestamps for the idle-drain delay (autoscale tasks only).
+      if (task.autoscale) {
+        for (const inst of live) {
+          if ((players.get(inst.vmid) ?? 0) === 0) {
+            if (!emptySince.has(inst.vmid)) emptySince.set(inst.vmid, now);
+          } else emptySince.delete(inst.vmid);
+        }
+      }
+
+      // Warm pool: keep `preparedPool` pre-cloned, STOPPED instances ready for instant
+      // scale-up. Only meaningful when a golden image exists for the egg (clones are cheap).
+      if (task.autoscale && (task.preparedPool ?? 0) > 0) {
+        await maintainWarmPool(task, group, preparedInsts, db.images, log)
+          .catch((e) => log.push(`! warmpool ${task.id}: ${String(e)}`));
       }
     }
 

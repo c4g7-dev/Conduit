@@ -43,6 +43,13 @@ export async function POST(req: NextRequest) {
       disk: Number(body.disk ?? bp.disk),
       persistent: body.persistent ?? bp.persistent,
       fronts: Array.isArray(body.fronts) ? body.fronts : [],
+      // CloudNet Smart-style autoscaling knobs (optional)
+      preparedPool: body.preparedPool != null ? Number(body.preparedPool) : undefined,
+      scaleUpPercent: body.scaleUpPercent != null ? Number(body.scaleUpPercent) : undefined,
+      scaleDownAfterSec: body.scaleDownAfterSec != null ? Number(body.scaleDownAfterSec) : undefined,
+      spawnCooldownSec: body.spawnCooldownSec != null ? Number(body.spawnCooldownSec) : undefined,
+      maxServices: body.maxServices != null ? Number(body.maxServices) : undefined,
+      splitOverNodes: body.splitOverNodes != null ? Boolean(body.splitOverNodes) : undefined,
       seed: body.seed && typeof body.seed === "object" ? body.seed : undefined,
       software:
         body.software && body.software.version

@@ -37,6 +37,12 @@ function taskToObj(t: Task) {
     desired: t.desired,
     autoscale: t.autoscale,
     playersPerInstance: t.playersPerInstance,
+    preparedPool: t.preparedPool ?? 0,
+    scaleUpPercent: t.scaleUpPercent ?? 100,
+    scaleDownAfterSec: t.scaleDownAfterSec ?? 60,
+    spawnCooldownSec: t.spawnCooldownSec ?? 5,
+    maxServices: t.maxServices ?? 0,
+    splitOverNodes: t.splitOverNodes ?? false,
     cores: t.cores,
     memory: t.memory,
     disk: t.disk,
@@ -66,6 +72,13 @@ function applyObj(t: Task, o: Record<string, unknown>): boolean {
   set("max", Math.max(0, num(o.max, t.max)));
   set("autoscale", typeof o.autoscale === "boolean" ? o.autoscale : t.autoscale);
   set("playersPerInstance", Math.max(1, num(o.playersPerInstance, t.playersPerInstance)));
+  // Smart knobs (only set when present so omitting them keeps the default behaviour)
+  if (o.preparedPool != null) set("preparedPool", Math.max(0, num(o.preparedPool, t.preparedPool ?? 0)));
+  if (o.scaleUpPercent != null) set("scaleUpPercent", Math.max(1, num(o.scaleUpPercent, t.scaleUpPercent ?? 100)));
+  if (o.scaleDownAfterSec != null) set("scaleDownAfterSec", Math.max(0, num(o.scaleDownAfterSec, t.scaleDownAfterSec ?? 60)));
+  if (o.spawnCooldownSec != null) set("spawnCooldownSec", Math.max(0, num(o.spawnCooldownSec, t.spawnCooldownSec ?? 5)));
+  if (o.maxServices != null) set("maxServices", Math.max(0, num(o.maxServices, t.maxServices ?? 0)));
+  if (typeof o.splitOverNodes === "boolean") set("splitOverNodes", o.splitOverNodes);
   set("cores", Math.max(1, num(o.cores, t.cores)));
   set("memory", Math.max(128, num(o.memory, t.memory)));
   set("disk", Math.max(1, num(o.disk, t.disk)));

@@ -10,10 +10,11 @@ import { DeployEggDialog } from "@/components/deploy-egg-dialog";
 import { AssetsSection } from "@/components/assets-section";
 import { RoleDot, roleColor } from "@/components/role-dot";
 import { bytes, pct } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import {
   HardDrive, LayoutTemplate, Trash2, Cpu, MemoryStick,
   Cable, Gamepad2, Server, Database, Box,
-  Infinity as InfinityIcon, Pin,
+  Infinity as InfinityIcon, Pin, Zap,
 } from "lucide-react";
 
 type Blueprint = {
@@ -40,10 +41,20 @@ function SectionLabel({ children, action }: { children: React.ReactNode; action?
   );
 }
 
+type Img = { eggId: string; templates: Record<string, number>; version: number; builtAt: number; building?: boolean; error?: string };
+
 export default function TemplatesPage() {
   const { data, loading, refresh } = usePoll<Data>("/api/templates", 15000);
   const { data: bps, refresh: refreshBps } = usePoll<Bps>("/api/blueprints", 15000);
+  const { data: imgs, refresh: refreshImgs } = usePoll<{ images: Img[] }>("/api/images", 6000);
   const builtin = new Set(bps?.builtin ?? []);
+  const CLONEABLE = new Set(["paper", "velocity", "nginx"]);
+
+  async function buildImage(eggId: string) {
+    await fetch("/api/images/build", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ eggId }) });
+    toast.success(`Building fast-clone image for ${eggId}…`);
+    setTimeout(refreshImgs, 1000);
+  }
 
   async function delTemplate(id: string) {
     if (!confirm(`Delete egg "${id}"?`)) return;
@@ -115,8 +126,28 @@ export default function TemplatesPage() {
                 </span>
               </div>
 
+              {/* Fast-clone image status (for autoscaling) */}
+              {CLONEABLE.has(b.software.kind) && (() => {
+                const img = imgs?.images.find((x) => x.eggId === b.id);
+                const nodes = img ? Object.keys(img.templates).length : 0;
+                return (
+                  <div className="mt-3 flex items-center gap-2 px-4 text-[11px]">
+                    <Zap className={cn("h-3 w-3", img && nodes > 0 && !img.building ? "text-brand" : "text-muted-foreground/50")} />
+                    <span className="text-muted-foreground">
+                      {img?.building ? "building image…"
+                        : img && nodes > 0 ? `fast image · ${nodes} node(s) · v${img.version}`
+                        : "no fast image"}
+                    </span>
+                    <button onClick={() => buildImage(b.id)} disabled={img?.building}
+                      className="ml-auto rounded border border-hairline px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground disabled:opacity-50">
+                      {img && nodes > 0 ? "Rebuild" : "Build"}
+                    </button>
+                  </div>
+                );
+              })()}
+
               {/* Deploy CTA */}
-              <div className="mt-4 border-t border-hairline p-3">
+              <div className="mt-3 border-t border-hairline p-3">
                 <DeployEggDialog egg={b} onDeployed={refreshBps} />
               </div>
             </div>

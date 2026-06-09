@@ -67,6 +67,8 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
   { method: "POST", path: "/api/containers/:vmid/action", group: "Infrastructure", desc: "start | stop | shutdown | reboot a container.", params: [{ name: "vmid", example: "202" }], sampleBody: { action: "reboot", node: "skdCore01" } },
   { method: "GET", path: "/api/blueprints", group: "Infrastructure", safe: true, desc: "Server eggs (built-in + custom)." },
   { method: "POST", path: "/api/blueprints", group: "Infrastructure", desc: "Create a custom egg.", sampleBody: { name: "Custom", role: "smp", software: { kind: "paper", version: "1.20.4" } } },
+  { method: "GET", path: "/api/images", group: "Infrastructure", safe: true, desc: "Golden-image build status per egg (fast clone autoscaling)." },
+  { method: "POST", path: "/api/images/build", group: "Infrastructure", desc: "Build/refresh an egg's golden CT template on every node (async).", sampleBody: { eggId: "paper-smp" } },
   { method: "DELETE", path: "/api/blueprints/:id", group: "Infrastructure", destructive: true, desc: "Delete a custom egg.", params: [{ name: "id", example: "custom" }] },
   { method: "GET", path: "/api/templates", group: "Infrastructure", safe: true, desc: "Node storage + LXC base images." },
   { method: "GET", path: "/api/versions", group: "Infrastructure", safe: true, query: "kind=paper", desc: "Available software versions for a kind (paper/velocity)." },

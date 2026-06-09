@@ -54,6 +54,9 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
   const [min, setMin] = useState(1);
   const [max, setMax] = useState(egg.mode === "dynamic" ? 5 : 1);
   const [pps, setPps] = useState(egg.role === "lobby" ? 50 : 80);
+  const [preparedPool, setPreparedPool] = useState(0);
+  const [scaleUpPercent, setScaleUpPercent] = useState(100);
+  const [scaleDownAfterSec, setScaleDownAfterSec] = useState(60);
   const [cores, setCores] = useState(egg.cores);
   const [memory, setMemory] = useState(egg.memory);
   const [disk, setDisk] = useState(egg.disk);
@@ -102,6 +105,11 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
         min, max, desired: min, cores, memory, disk,
         autoscale: mode === "dynamic", playersPerInstance: pps,
       };
+      if (mode === "dynamic") {
+        body.preparedPool = preparedPool;
+        body.scaleUpPercent = scaleUpPercent;
+        body.scaleDownAfterSec = scaleDownAfterSec;
+      }
       if (versioned && version) body.software = { version };
       const res = await fetch("/api/tasks", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -200,11 +208,24 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
               ))}
             </div>
             {mode === "dynamic" ? (
-              <div className="grid grid-cols-3 gap-2">
-                <Field label="Min"><Num value={min} onChange={setMin} min={0} /></Field>
-                <Field label="Max (0=∞)"><Num value={max} onChange={setMax} min={0} /></Field>
-                <Field label="Players / inst"><Num value={pps} onChange={setPps} min={1} /></Field>
-              </div>
+              <>
+                <div className="grid grid-cols-3 gap-2">
+                  <Field label="Min"><Num value={min} onChange={setMin} min={0} /></Field>
+                  <Field label="Max (0=∞)"><Num value={max} onChange={setMax} min={0} /></Field>
+                  <Field label="Players / inst"><Num value={pps} onChange={setPps} min={1} /></Field>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  <Field label="Warm pool" hint="Pre-cloned instances kept ready for instant scale-up (needs a fast image).">
+                    <Num value={preparedPool} onChange={setPreparedPool} min={0} />
+                  </Field>
+                  <Field label="Scale-up %" hint="Spawn a spare once a server passes this % full.">
+                    <Num value={scaleUpPercent} onChange={setScaleUpPercent} min={1} suffix="%" />
+                  </Field>
+                  <Field label="Idle drain" hint="Reap an empty instance after this idle time.">
+                    <Num value={scaleDownAfterSec} onChange={setScaleDownAfterSec} min={0} suffix="s" />
+                  </Field>
+                </div>
+              </>
             ) : (
               <Field label="Instance count" hint="Fixed number of always-on instances.">
                 <Num value={min} onChange={(v) => { setMin(v); setMax(v); }} min={1} />
