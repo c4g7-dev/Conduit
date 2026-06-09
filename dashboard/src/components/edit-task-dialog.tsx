@@ -10,6 +10,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Pencil, Cpu, Users, Globe, Plug, Plus, X, Infinity as InfinityIcon, Pin, Package } from "lucide-react";
+import { HelpButton } from "@/components/help-center";
 import { cn } from "@/lib/utils";
 
 type Asset = { kind: string; name: string; ref: string; size: number };
@@ -24,10 +25,10 @@ const ROLE_COLOR: Record<string, string> = {
 
 type FrontCandidate = { id: string; name: string; role: string };
 
-function FieldLabel({ children }: { children: React.ReactNode }) {
+function FieldLabel({ children, help }: { children: React.ReactNode; help?: string }) {
   return (
-    <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-white/35">
-      {children}
+    <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-widest text-white/35">
+      {children}{help && <HelpButton topic={help} />}
     </div>
   );
 }
@@ -227,7 +228,7 @@ export function EditTaskDialog({
           {/* Mode (proxies are always static singletons) */}
           {isSeedable && (
             <div>
-              <FieldLabel>Scaling mode</FieldLabel>
+              <FieldLabel help="mode">Scaling mode</FieldLabel>
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" onClick={() => setMode("static")}
                   className={cn("flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
@@ -255,23 +256,23 @@ export function EditTaskDialog({
             </div>
             <div className="grid grid-cols-3 gap-2">
               <div>
-                <FieldLabel>Min</FieldLabel>
+                <FieldLabel help="min-max-desired">Min</FieldLabel>
                 <NumInput value={min} onChange={setMin} min={0} />
               </div>
               <div>
-                <FieldLabel>{mode === "dynamic" ? "Max (0=∞)" : "Count"}</FieldLabel>
+                <FieldLabel help="min-max-desired">{mode === "dynamic" ? "Max (0=∞)" : "Count"}</FieldLabel>
                 <NumInput value={mode === "dynamic" ? max : min} onChange={mode === "dynamic" ? setMax : (v) => { setMin(v); setMax(v); }} min={0} />
               </div>
               <div>
-                <FieldLabel>Players/inst</FieldLabel>
+                <FieldLabel help="players-per-instance">Players/inst</FieldLabel>
                 <NumInput value={pps} onChange={setPps} min={1} />
               </div>
             </div>
             {mode === "dynamic" && (
               <div className="mt-2 grid grid-cols-3 gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
-                <div><FieldLabel>Warm pool</FieldLabel><NumInput value={preparedPool} onChange={setPreparedPool} min={0} /></div>
-                <div><FieldLabel>Scale-up</FieldLabel><NumInput value={scaleUpPercent} onChange={setScaleUpPercent} min={1} suffix="%" /></div>
-                <div><FieldLabel>Idle drain</FieldLabel><NumInput value={scaleDownAfterSec} onChange={setScaleDownAfterSec} min={0} suffix="s" /></div>
+                <div><FieldLabel help="prepared-pool">Warm pool</FieldLabel><NumInput value={preparedPool} onChange={setPreparedPool} min={0} /></div>
+                <div><FieldLabel help="scale-up-percent">Scale-up</FieldLabel><NumInput value={scaleUpPercent} onChange={setScaleUpPercent} min={1} suffix="%" /></div>
+                <div><FieldLabel help="scale-down-after">Idle drain</FieldLabel><NumInput value={scaleDownAfterSec} onChange={setScaleDownAfterSec} min={0} suffix="s" /></div>
               </div>
             )}
           </div>
@@ -302,7 +303,7 @@ export function EditTaskDialog({
 
           {/* Node pinning */}
           <div>
-            <FieldLabel>Pinned node (new instances)</FieldLabel>
+            <FieldLabel help="node-pin">Pinned node (new instances)</FieldLabel>
             <select value={node} onChange={(e) => setNode(e.target.value)}
               className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm text-white/80 outline-none">
               <option value="">Auto (least-loaded)</option>
@@ -355,7 +356,7 @@ export function EditTaskDialog({
               </div>
 
               <div>
-                <FieldLabel>World URL (tar.gz or zip)</FieldLabel>
+                <FieldLabel help="seed-assets">World URL (tar.gz or zip)</FieldLabel>
                 <div className="flex overflow-hidden rounded-lg border border-white/[0.08] bg-white/[0.04]">
                   <input
                     type="url"

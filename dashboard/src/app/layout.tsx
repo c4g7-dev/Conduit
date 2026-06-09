@@ -3,6 +3,7 @@ import { JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { SidebarNav } from "@/components/sidebar-nav";
 import { Toaster } from "@/components/ui/sonner";
+import { HelpProvider } from "@/components/help-center";
 
 // Monospace UI font — gives the control plane an ops/terminal identity.
 const jetbrains = JetBrains_Mono({
@@ -22,11 +23,13 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className={`${jetbrains.variable} font-sans antialiased`}>
-        <SidebarNav />
-        <main className="md:pl-60">
-          <div className="mx-auto max-w-7xl px-5 py-6 md:px-8">{children}</div>
-        </main>
-        <Toaster richColors position="bottom-right" />
+        <HelpProvider>
+          <SidebarNav />
+          <main className="md:pl-60">
+            <div className="mx-auto max-w-7xl px-5 py-6 md:px-8">{children}</div>
+          </main>
+          <Toaster richColors position="bottom-right" />
+        </HelpProvider>
       </body>
     </html>
   );

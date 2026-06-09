@@ -220,3 +220,11 @@
 @media (prefers-reduced-motion: reduce) {
   .player-row-in, .player-row-out, .player-empty-in { animation: none; }
 }
+
+/* Help center — pulse-highlight the topic jumped to from a HelpButton. */
+@keyframes help-hl {
+  0% { box-shadow: 0 0 0 0 rgba(124, 131, 255, 0.0); border-color: rgba(124,131,255,0.7); }
+  30% { box-shadow: 0 0 0 3px rgba(124, 131, 255, 0.25); border-color: rgba(124,131,255,0.9); }
+  100% { box-shadow: 0 0 0 0 rgba(124, 131, 255, 0.0); }
+}
+.help-hl { animation: help-hl 1.6s ease-out; }
