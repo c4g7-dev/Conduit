@@ -11,8 +11,10 @@ export async function GET() {
       api.clusterResources(),
     ]);
 
-    const cts = resources.filter((r) => r.type === "lxc");
-    const vms = resources.filter((r) => r.type === "qemu");
+    // Exclude templates (golden images are stopped LXCs but not real servers) — they were
+    // inflating the "Containers running/total" tile (e.g. 11/14 when only 11 actually run).
+    const cts = resources.filter((r) => r.type === "lxc" && r.template !== 1);
+    const vms = resources.filter((r) => r.type === "qemu" && r.template !== 1);
     const guests = [...cts, ...vms];
 
     const sum = (xs: ClusterResource[], k: keyof ClusterResource) =>
