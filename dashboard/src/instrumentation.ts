@@ -10,6 +10,9 @@ export async function register() {
 
   const os = await import("node:os");
   const { reconcileAll } = await import("./lib/engine");
+  const { loadEvents, flushEvents } = await import("./lib/events");
+  // Restore the persisted audit log into memory on boot (survives restart/rebuild).
+  await loadEvents().catch(() => {});
 
   const INTERVAL = Number(process.env.CONDUIT_INTERVAL_MS ?? 10_000);
   // Leader election: when a VIP is configured (HA panel-per-node), only the instance
@@ -45,6 +48,8 @@ export async function register() {
       // Run due scheduled actions — leader-only, so they never double-fire.
       const { runSchedules } = await import("./lib/scheduler");
       await runSchedules().catch((e) => console.error("[conduitd] schedules:", e));
+      // Persist the audit log to the shared store (only flushes if it changed).
+      await flushEvents().catch(() => {});
     } catch (e) {
       console.error("[conduitd] tick failed:", e);
     } finally {
