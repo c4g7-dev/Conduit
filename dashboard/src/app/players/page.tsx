@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { useStream } from "@/hooks/use-stream";
@@ -21,7 +21,7 @@ type Metrics = { instances: MetricRow[]; totals: { players: number; capacity: nu
 type StTask = { softwareKind: string; name: string; instances: { vmid: number; status: string; ready: boolean }[] };
 type State = { groups: { id: string; name: string; tasks: StTask[] }[] };
 
-type PlayerRow = { name: string; server: string; vmid: number; role: string; uuid?: string; group?: string; env?: string };
+type PlayerRow = { name: string; server: string; vmid: number; role: string; uuid?: string; group?: string; env?: string; serverId?: string };
 type DialogState = { kind: "move" | "message" | "kick"; player: PlayerRow } | null;
 
 // Software kinds that represent a game/player service (vs db/web/generic).
@@ -58,9 +58,11 @@ export default function PlayersPage() {
       const vmidByTask = new Map<string, number>();
       const groupByTask = new Map<string, string>();
       const envByTask = new Map<string, string>();
+      const idByTask = new Map<string, string>(); // task → connector serverId (for scoped actions)
       for (const s of conn!.servers ?? []) {
         groupByTask.set(s.task, s.group);
         envByTask.set(s.task, s.env);
+        idByTask.set(s.task, s.id);
         const m = /-(\d+)$/.exec(s.id);
         if (m) vmidByTask.set(s.task, Number(m[1]));
       }
@@ -70,6 +72,7 @@ export default function PlayersPage() {
         name: p.name, uuid: p.uuid, server: p.server ?? "?",
         vmid: vmidByTask.get(p.server ?? "") ?? 0, role: "smp",
         group: groupByTask.get(p.server ?? ""), env: envByTask.get(p.server ?? "") ?? "server",
+        serverId: idByTask.get(p.server ?? ""),
       })).sort((a, b) => a.name.localeCompare(b.name));
     }
     const rows = (metrics?.instances ?? []).filter((r) => r.role !== "proxy" && r.reachable);
@@ -83,16 +86,15 @@ export default function PlayersPage() {
   const capacity = metrics?.totals.capacity ?? 0;
   const mByVmid = useMemo(() => new Map((metrics?.instances ?? []).map((r) => [r.vmid, r])), [metrics]);
 
-  // Drop optimistically-removed players (kick) until the stream confirms; for a move the player
-  // reappears under the new server, so we only keep `removed` entries that are still present.
-  const visible = useMemo(() => players.filter((p) => !removed.has(p.name.toLowerCase())), [players, removed]);
+  // Optimistic-removal key is name+serverId, so kicking MC c4g7 only hides THAT row, not a
+  // same-named Hytale player. Drop the hidden row until the stream confirms (kick → gone; move →
+  // reappears under the new serverId, which is a different key so it shows again).
+  const visible = useMemo(() => players.filter((p) => !removed.has(`${p.name.toLowerCase()}|${p.serverId ?? ""}`)), [players, removed]);
   useEffect(() => {
     if (removed.size === 0) return;
-    const live = new Set(players.map((p) => `${p.name.toLowerCase()}|${p.server}`));
+    const live = new Set(players.map((p) => `${p.name.toLowerCase()}|${p.serverId ?? ""}`));
     setRemoved((prev) => {
-      // keep a removal only while that exact name+server is still in the list (kick pending);
-      // once it's gone (kicked) or changed server (moved), clear it.
-      const next = new Set([...prev].filter((k) => [...live].some((l) => l.startsWith(k + "|"))));
+      const next = new Set([...prev].filter((k) => live.has(k))); // still present → keep hiding
       return next.size === prev.size ? prev : next;
     });
   }, [players, removed.size]);
@@ -153,10 +155,14 @@ export default function PlayersPage() {
 
   // Player actions: prefer the connector (network-wide via the proxy); fall back to console.
   async function playerAction(kind: "kick" | "move" | "message", p: PlayerRow, extra?: string) {
-    setKicking(p.name);
+    setKicking(`${p.name.toLowerCase()}|${p.serverId ?? ""}`);
     try {
       if (connActive) {
         const body: Record<string, string> = { kind, player: p.name };
+        // Scope to the player's current server so a same-name player on another platform
+        // (e.g. Hytale vs MC c4g7) isn't also hit.
+        if (p.serverId) body.serverId = p.serverId;
+        if (p.env) body.env = p.env;
         if (kind === "move") body.target = extra!;
         if (kind === "message") body.text = extra!;
         if (kind === "kick" && extra) body.reason = extra;
@@ -178,7 +184,7 @@ export default function PlayersPage() {
       toast.success(`${kind} → ${p.name}`);
       // Optimistic: hide the row immediately (kick → gone; move → reappears under the new
       // server). The SSE stream confirms within ~0.5s and clears the optimistic state.
-      if (kind === "kick" || kind === "move") setRemoved((s) => new Set(s).add(p.name.toLowerCase()));
+      if (kind === "kick" || kind === "move") setRemoved((s) => new Set(s).add(`${p.name.toLowerCase()}|${p.serverId ?? ""}`));
       setTimeout(refresh, 800);
     } catch (e) {
       toast.error(String(e));
@@ -261,12 +267,9 @@ export default function PlayersPage() {
             kicking={kicking}
             connActive={connActive}
             onOpenDialog={(kind, p) => setDlg({ kind, player: p })}
-            emptyHint="(Hytale connector reports players here once they join)"
           />
         </div>
       )}
-
-      <p className="mt-2 text-[11px] text-muted-foreground/60">{connActive ? "Live player lists via the Conduit connector — right-click a player for move/message/kick · in-game: /ct." : "Player names from Minecraft server-list-ping samples (capped at ~12 per server)."}</p>
 
       {/* player-action dialogs (styled message, compatible-service move picker, kick) */}
       {dlg?.kind === "message" && (
@@ -308,6 +311,39 @@ function PlayerHead({ player }: { player: PlayerRow }) {
   );
 }
 
+const rowKey = (p: PlayerRow) => `${p.vmid}-${p.name.toLowerCase()}-${p.serverId ?? ""}`;
+
+/** Keep just-removed rows rendered briefly with an exit class so leaving players animate out
+ *  instead of vanishing; new players get marked fresh so they animate in. */
+function useAnimatedRows(players: PlayerRow[]) {
+  const [rows, setRows] = useState<(PlayerRow & { _exiting?: boolean })[]>(players);
+  const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  useEffect(() => {
+    const incoming = new Map(players.map((p) => [rowKey(p), p]));
+    setRows((prev) => {
+      const merged: (PlayerRow & { _exiting?: boolean })[] = players.map((p) => ({ ...p }));
+      // any previously-shown row no longer present → keep as an exiting ghost for the animation
+      for (const r of prev) {
+        const k = rowKey(r);
+        if (!incoming.has(k) && !r._exiting) {
+          merged.push({ ...r, _exiting: true });
+          if (!timers.current.has(k)) {
+            timers.current.set(k, setTimeout(() => {
+              timers.current.delete(k);
+              setRows((cur) => cur.filter((x) => rowKey(x) !== k));
+            }, 230));
+          }
+        } else if (!incoming.has(k) && r._exiting) {
+          merged.push(r); // still animating out
+        }
+      }
+      return merged;
+    });
+  }, [players]);
+  useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
+  return rows;
+}
+
 function PlayerTable({
   icon, label, count, players, kicking, connActive, onOpenDialog, emptyHint,
 }: {
@@ -320,6 +356,7 @@ function PlayerTable({
   onOpenDialog: (kind: "kick" | "move" | "message", p: PlayerRow) => void;
   emptyHint?: string;
 }) {
+  const rows = useAnimatedRows(players);
   return (
     <div>
       <div className="mb-2 flex items-center gap-2 px-0.5">
@@ -337,9 +374,9 @@ function PlayerTable({
             </tr>
           </thead>
           <tbody>
-            {players.map((p) => (
-              <ContextMenu key={`${p.vmid}-${p.name}`}>
-                <ContextMenuTrigger render={<tr className="group cursor-default border-b border-hairline transition-colors last:border-0 hover:bg-accent/40" />}>
+            {rows.map((p) => (
+              <ContextMenu key={rowKey(p)}>
+                <ContextMenuTrigger render={<tr className={cn("group cursor-default border-b border-hairline transition-colors last:border-0 hover:bg-accent/40", p._exiting ? "player-row-out" : "player-row-in")} />}>
                   <td className="px-4 py-2.5">
                     <span className="flex items-center gap-2.5">
                       <PlayerHead player={p} />
@@ -349,7 +386,7 @@ function PlayerTable({
                   <td className="px-4 py-2.5"><span className="flex items-center gap-2"><RoleDot role={p.role} /> {p.server}</span></td>
                   <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">#{p.vmid}</td>
                   <td className="px-4 py-2.5 text-right">
-                    {kicking === p.name
+                    {kicking === `${p.name.toLowerCase()}|${p.serverId ?? ""}`
                       ? <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin text-muted-foreground" />
                       : <span className="text-[11px] text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100">right-click ⋯</span>}
                   </td>
@@ -363,11 +400,13 @@ function PlayerTable({
                 </ContextMenuContent>
               </ContextMenu>
             ))}
-            {players.length === 0 && (
+            {rows.length === 0 && (
               <tr><td colSpan={4} className="px-4 py-12 text-center text-sm text-muted-foreground">
-                <Users className="mx-auto mb-2 h-6 w-6 opacity-40" />
-                No players online.
-                {emptyHint && <div className="mt-1 text-xs text-muted-foreground/60">{emptyHint}</div>}
+                <div className="player-empty-in">
+                  <Users className="mx-auto mb-2 h-6 w-6 opacity-40" />
+                  No players online.
+                  {emptyHint && <div className="mt-1 text-xs text-muted-foreground/60">{emptyHint}</div>}
+                </div>
               </td></tr>
             )}
           </tbody>
