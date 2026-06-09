@@ -21,7 +21,7 @@ const KIND_BLURB: Record<string, string> = {
   velocity: "A Velocity proxy: the player-facing edge on :25565. Holds the network slot limit, MOTD and maintenance, and routes players to backend lobbies/SMP servers — including seamless transfers used by world-sharding.",
   paper: "A Paper Minecraft server. Static = persistent world on its own dataset; dynamic = stateless, cloned from a fast image and autoscaled on player count. Carries the Conduit connector for live player data + actions.",
   mariadb: "A shared MariaDB database for the network. Persistent and backed up.",
-  redis: "A Redis store for seamless-world player-data sync — inventory / HP / XP / effects travel with a player across shard handoffs. Self-configuring: the first instance is primary, extras auto-replicate it with failover, and connectors discover the endpoints automatically.",
+  redis: "A Redis store for seamless-world player-data sync — inventory / HP / XP / effects travel with a player across shard handoffs.\n\nWhat's special: it's zero-config. The controller designates the lowest-vmid running instance as PRIMARY and auto-wires the rest as REPLICAS (replicaof), re-running only when membership changes, and publishes the endpoint list (primary first). Auth needs no setup either — the password is derived deterministically from the network secret (SHA-256), so the server and every connector compute the same one.\n\nHow servers connect: backends never hardcode an address. The panel hands each sharded server the Redis endpoints + password inside its heartbeat config, so a connector discovers the cluster automatically the moment Redis exists. Its built-in (dependency-free) RESP client tries the endpoints in order — if the primary is down it fails over to a replica.\n\nHow it's used: on a shard boundary cross the source server serializes the player's state (inventory/armor/ender/HP/food/XP/gamemode/effects) to a short-TTL key conduit:pd:<uuid>; the destination reads + applies it on arrival and deletes it. Scale to 2+ for redundancy with automatic failover.",
   nginx: "An nginx web server serving /opt/www, editable via the file manager. Use as a static host or reverse proxy.",
   hytale: "A Hytale server sharing the read-only /assets store. Carries the Conduit Hytale connector so its players appear in the network alongside Minecraft.",
   generic: "A custom container provisioned from a declarative recipe — install packages, pull assets, run an install script, then supervise a start command.",
@@ -66,7 +66,7 @@ export function EggDetailDialog({ egg, open, onOpenChange }: { egg: Egg; open: b
 
         {tab === "overview" ? (
           <div className="space-y-4">
-            <p className="text-[13px] leading-relaxed text-muted-foreground">{blurb}</p>
+            <p className="whitespace-pre-line text-[13px] leading-relaxed text-muted-foreground">{blurb}</p>
 
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Stat icon={<Cpu className="h-3.5 w-3.5" />} label="Cores" value={`${egg.cores}`} />
