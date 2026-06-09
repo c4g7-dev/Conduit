@@ -1,233 +1,216 @@
 # Conduit
 
-**A Proxmox-native orchestrator for Minecraft networks — a self-hosted replacement for CloudNet.**
+**A Proxmox-native orchestrator for Minecraft (and Hytale) networks — a self-hosted, HA replacement for CloudNet.**
 
-Conduit treats a Proxmox VE cluster as the substrate and adds the Minecraft-network
-logic on top: server groups, tasks, blueprints, autoscaling primitives, Velocity
-player-routing and live metrics. You describe the desired network; a controller
-(`conduitd`) continuously reconciles Proxmox reality to match it.
+Conduit treats a **Proxmox VE cluster** as the substrate and adds the network logic on top:
+server groups, tasks, blueprints, fast clone-based autoscaling, Velocity player-routing,
+seamless world-sharding, live metrics, and per-player control. You describe the desired
+network; a leader-elected controller (`conduitd`) continuously reconciles Proxmox reality to
+match it.
 
-> The original concept paper (German) is in [`KONZEPT.md`](./KONZEPT.md).
-
----
-
-## Why two layers
-
-| Layer | Responsibility |
-|-------|----------------|
-| **Proxmox VE** | Infrastructure: LXC isolation, storage, networking (DHCP/VLAN), live-migration, and **PBS backups**. |
-| **Conduit** | MC logic: groups, tasks, blueprints, provisioning the actual Paper/Velocity software, routing, metrics. |
-
-This split is the whole bet: we don't reimplement hosting (CloudNet's weakest area),
-we inherit it from a battle-tested hypervisor and only own the Minecraft-shaped part.
+> Concept paper (German): [`KONZEPT.md`](./KONZEPT.md).
 
 ---
 
-## CloudNet factor-by-factor
+## The bet
 
-This is the honest status against the factors that matter for the c4g7 network.
+| Layer | Owns |
+|-------|------|
+| **Proxmox VE** | Infrastructure — LXC isolation, LVM-thin storage, DHCP/bridged networking, live-migration, **PBS backups**. |
+| **Conduit** | Network logic — groups, tasks, blueprints, in-container software install, routing, autoscaling, metrics, sharding. |
 
-### 1. Multi-routing / load-balancing — ✅ working
-- A **Velocity** proxy is provisioned as the player-facing edge (binds `:25565`).
-- The controller discovers each backend's **DHCP IP via the Proxmox LXC API**,
-  renders the proxy's `velocity.toml` `[servers]` block from those live IPs, and
-  restarts the proxy **only when the backend set changes**.
-- Velocity itself load-balances players across the servers in its `try` list and
-  handles fail-over. Add more backend instances → they appear in the routing table
-  automatically on the next reconcile.
-
-### 2. Template system for scalable (non-static) servers — ✅ working
-- **Blueprints** (`dashboard/src/lib/blueprints.ts`) are the templates: role + base
-  image + resources + provisioning recipe. Shipped: `velocity-proxy`, `paper-lobby`
-  (dynamic/stateless), `paper-smp` (static/persistent), `mariadb`.
-- A **task** instantiates a blueprint N times. `dynamic` tasks (lobbies) are meant to
-  scale on demand and be thrown away; `static` tasks (SMP/region) hold a fixed count
-  with a persistent world. Scaling is one click (or one API call) today.
-- Each blueprint declares its **software + version** (`{kind, version}`), and the
-  version is **selectable per task** in the New Task dialog — the list is pulled live
-  from the **PaperMC v3 "Fill" API** (`/api/versions`), so the newest releases show up
-  (e.g. 26.x). The required **Java is read from the API and installed automatically**
-  (any major, via the Adoptium binary API → `/opt/jre`), so a latest-version task just
-  works. `kind` is the extension seam — paper/velocity today; nginx/Hytale/etc. later.
-- Blueprints (and individual tasks) carry a **`seed`**: a world (`tar.gz` URL,
-  extracted in-container), extra `server.properties`, a `server-icon.png`, and plugin
-  jar URLs — all applied before first boot, so instances come up **game-ready** rather
-  than vanilla. The shipped `paper-lobby` seeds a superflat lobby world + lobby config
-  (adventure mode, peaceful, no mob spawning). Per-task `seed` overrides the blueprint's.
-
-### 3. Backups — ✅ working (PBS)
-- Backups are **built-in via Proxmox + Proxmox Backup Server**: deduplicated,
-  incremental, retained — no custom storage code. Persistent worlds live on their own
-  LXC rootfs.
-- Conduit drives it from the **Backups page**: attach a PBS datastore as storage, then
-  **back up a whole group on demand** (vzdump over the pool) or **schedule per-group
-  jobs** (systemd-calendar cron → `/cluster/backup`). Recent snapshots, sizes and
-  per-storage usage are listed live, and any snapshot can be **restored** in one click
-  (stops the CT, rolls it back, restarts — the reconcile loop is paused so the
-  controller can't race the restore). Verified end-to-end against a real PBS.
-
-### 4. Management / dashboard — ✅ working
-- Next.js + shadcn/ui dashboard: **Overview** (cluster + live player total),
-  **Containers** (start/stop/reboot, IPs, tags), **Templates & Storage**,
-  **Groups & Tasks** (create groups, deploy tasks from blueprints, scale live, see
-  per-instance provisioning state, IPs, player counts, and proxy routing).
-- Everything is also a **JSON API** (see below) so it's automatable, not UI-only.
-
-### 5. Server groups & tasks (the CloudNet model) — ✅ working
-- **Group** = a Proxmox **resource pool** + a slot limit + maintenance flag.
-- **Task** = a blueprint + ruleset (mode, desired/min/max, fronts).
-- The canonical example — **Time SMP** — is exactly: a group containing a *spawn/region*
-  task (`paper-smp`, static, persistent), a *spawn/lobby* task (`paper-lobby`, dynamic,
-  **autoscaling**) and an *edge* task (`velocity-proxy`) fronting both. Slot-limit and
-  maintenance live on the group.
-
-### Autoscaling — ✅ working
-Dynamic tasks (lobbies) carry `autoscale: true`. Each reconcile the controller reads
-live player counts (via SLP), computes a target — `ceil(players / playersPerInstance)
-+ 1` to always keep one fresh joinable lobby — clamped to `[min, max]`, and
-provisions/drains to match. **Scale-down only ever removes *empty* instances**, so it
-never kicks a player. The live target is written back so the dashboard shows it.
-
----
-
-## What it can and can't do today
-
-**Can do**
-- Create/delete groups (→ Proxmox pools) and tasks from the UI or API.
-- Provision real LXC containers (VMID 200–999), boot them, read their DHCP IPs.
-- **Install actual MC software in-container** (openjdk-17 + Paper 1.20.4 / Velocity
-  3.3.0) over SSH+`pct exec`, write config + a `systemd` unit, and start it.
-- Wire Velocity modern-forwarding (shared secret) so the proxy → backend hop is trusted.
-- Scale a task up/down; the controller provisions/destroys to match.
-- Read **live player counts + names** from every instance via Minecraft SLP — no plugin.
-- Stay safe: it only ever touches containers tagged `conduit` in 200–999; hand-made
-  containers (e.g. CT100) are never read as instances nor destroyed.
-
-- Authenticate to the Proxmox API with a **revocable API token** (no password, no
-  CSRF) and provision over SSH with a **dedicated key** (`PROXMOX_SSH_KEY`) — no
-  password on the wire at all when both are set.
-
-- Back up groups to **PBS** on demand / on a schedule, list snapshots, and **restore**
-  any snapshot from the UI.
-
-- Seed instances **game-ready** — world + config + icon + plugins per blueprint/task,
-  editable in the New Task dialog.
-
-**Can't do yet**
-- Multi-node placement strategy / live-migration from the UI (single node so far).
-
----
-
-## Demo walkthrough (the Time SMP example)
-
-```bash
-# 1. a group  → becomes Proxmox pool "time-smp"
-curl -X POST :3737/api/groups -d '{"name":"Time SMP","slotLimit":200}'
-
-# 2. a persistent region/SMP task → controller provisions CT200, installs Paper, starts it
-curl -X POST :3737/api/tasks \
-  -d '{"name":"world","groupId":"time-smp","blueprintId":"paper-smp","desired":1}'
-
-# 3. an edge proxy that fronts the SMP → CT201, installs Velocity, routes to CT200
-curl -X POST :3737/api/tasks \
-  -d '{"name":"edge","groupId":"time-smp","blueprintId":"velocity-proxy",
-       "desired":1,"fronts":["time-smp-world"]}'
-```
-
-What the controller does on its 10s reconcile loop, with no further input:
-1. picks a free VMID, clones the base LXC with `features: nesting=1`, tags it
-   `conduit;g-time-smp;smp;t-time-smp-world`, starts it;
-2. once it has a DHCP IP, installs the role's software in the background and stamps a
-   `ready` tag;
-3. renders the proxy's `velocity.toml` from the live backend IP and restarts Velocity.
-
-Result: a player connecting to the **proxy IP on :25565** is forwarded to the Paper
-backend. Verified live: secrets matched, both `systemd` services active, SLP reports
-`Paper 1.20.4` / `Velocity`, network player total surfaced on the dashboard.
-
----
-
-## API
-
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| GET | `/api/overview` | cluster nodes + totals |
-| GET | `/api/containers` | all LXC with status, tags, IP |
-| POST | `/api/containers/{vmid}/action` | start/stop/shutdown/reboot |
-| GET | `/api/templates` | vztmpl images + storage |
-| GET | `/api/blueprints` | premade templates |
-| GET | `/api/conduit/state` | groups → tasks → instances (+ready) + routing |
-| POST | `/api/conduit/reconcile` | force a reconcile pass |
-| GET/POST | `/api/groups`, PATCH/DELETE `/api/groups/{id}` | group CRUD (maintenance, slotLimit) |
-| POST | `/api/tasks`, PATCH/DELETE `/api/tasks/{id}` | task CRUD + live scaling |
-| **GET** | **`/api/metrics`** | **live player counts + sample names per instance, via SLP** |
-| GET | `/api/versions?kind=` | selectable software versions (PaperMC API) |
-| GET/POST | `/api/backups` | storages + snapshots + jobs; trigger a vmid/pool backup |
-| POST/DELETE | `/api/backups/jobs`, `/api/backups/jobs/{id}` | per-group scheduled backup jobs |
-| POST | `/api/backups/restore` | restore a CT from a snapshot (controller paused during) |
-| GET/POST/DELETE | `/api/assets` | uploaded worlds/plugins store (node-backed) |
-| POST | `/api/tasks/{id}/motd` | set + apply a task's MOTD live (Paper § / Velocity MiniMessage) |
-| GET/POST | `/api/services/{vmid}/console` | live tmux console: capture output / send a command |
-| GET | `/api/services/{vmid}/files` | read-only file browser inside a service |
-| GET/POST | `/api/metrics/history` | time-series ring buffer for the dashboard graphs |
-
-`/api/metrics` is the CloudNet-style telemetry feed — per-instance `online/max`,
-player `sample` names, MOTD, version, latency, and a network total (counted at the edge).
+We don't reimplement hosting (CloudNet's weakest area); we inherit it from a battle-tested
+hypervisor and only own the Minecraft-shaped part.
 
 ---
 
 ## Architecture
 
 ```
-dashboard/src/lib/
-  proxmox.ts     # Proxmox VE API client (ticket auth, CSRF, LXC/pool CRUD, IPs)
-  store.ts       # desired state (groups, tasks, network secret) in data/conduit.json
-  blueprints.ts  # premade templates (role + base + resources + provision recipe)
-  engine.ts      # conduitd: reconcile loop, discovery, provisioning, routing
-  provision.ts   # in-container installs over SSH + pct exec (Paper/Velocity/systemd)
-  mcping.ts      # Minecraft Server List Ping client (player counts, no plugin)
-  instrumentation.ts  # starts the reconcile interval on server boot
+                      ┌─────────────── keepalived VIP (10.27.27.50:3001) ───────────────┐
+                      │                                                                  │
+   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐        players ──► ┌─────────────────┐
+   │ panel CT 190 │   │ panel CT 191 │   │ panel CT 192 │                     │ Velocity proxy  │ :25565
+   │ (node1)      │   │ (node2)      │   │ (node3)      │                     └────────┬────────┘
+   │ Next.js +    │   │  (BACKUP)    │   │  (BACKUP)    │                              │ routes
+   │ conduitd ◄───┼── leader-gated on the VIP ──────────┘                ┌────────────┼────────────┐
+   └──────┬───────┘                                                      ▼            ▼            ▼
+          │ Proxmox API (token) + per-node agent (:8800)            ┌─────────┐ ┌─────────┐ ┌─────────┐
+          ▼                                                          │ Paper   │ │ Paper   │ │ Hytale  │
+   ┌──────────────┬──────────────┬──────────────┐                    │ lobby   │ │ world   │ │ server  │
+   │   node1      │   node2      │   node3      │                    └────┬────┘ └────┬────┘ └────┬────┘
+   │ conduit-agent│ conduit-agent│ conduit-agent│                         │  Conduit connector plugin │
+   │  LXC 200…    │  LXC 200…    │  LXC 200…    │                         └──── heartbeat / actions ──┘
+   └──────────────┴──────────────┴──────────────┘                                    │ HTTP/1.1
+        GlusterFS replica-3  /var/lib/conduit  ◄──── shared store ────► panel ◄───────┘
 ```
 
-**Reconcile pattern:** desired state (JSON) → engine diffs it against Proxmox reality
-→ provisions or destroys to converge. Idempotent: a `ready` tag + an in-container
-marker stop re-installs; the proxy config is only rewritten when backends change.
+**Components**
 
-**Safety boundary:** VMID range 200–999 **and** the `conduit` tag are both required
-before the engine will read or mutate a container.
+- **Panel** — Next.js (standalone build) running in an LXC on **every node** (CT 190/191/192),
+  fronted by a **keepalived VIP**. The `conduitd` reconcile loop is **leader-gated**: only the
+  panel holding the VIP runs it, so there's exactly one controller, and it fails over with the VIP.
+- **conduit-agent** — a small Node service on every Proxmox node (`:8800`): runs `pct exec`,
+  sandboxed in-container file ops (`/v1/fs`), and a console WebSocket bridge. The panel uses the
+  **Proxmox API** for orchestration and the agent for in-container work.
+- **GlusterFS replica-3** at `/var/lib/conduit` on all nodes — the shared store for state, file
+  overlays, uploaded assets, per-service config, and the built connector jars.
+- **Connector plugins** — see below; the live data + control plane inside each game server.
+- **Reconcile pattern** — desired state (JSON) → engine diffs it against live Proxmox reality →
+  provisions/clones/destroys to converge. Idempotent (a `ready` tag + an in-container marker stop
+  re-installs); the proxy config is only rewritten when the backend set changes.
+- **Safety boundary** — the engine only ever reads or mutates containers in **VMID 200–999** that
+  carry the **`conduit` tag**. Hand-made containers are invisible to it. Persistent instances are
+  never auto-destroyed.
+
+Key modules (`dashboard/src/lib/`): `proxmox.ts` (API client), `engine.ts` (conduitd: reconcile,
+discovery, provisioning, autoscale, routing, redis, sharding), `provision.ts` (in-container
+install recipes), `store.ts` (desired state, agent-replicated), `blueprints.ts` (eggs),
+`connector.ts` (live registry), `sharding.ts` / `shard-state.ts`, `redis-cluster.ts`, `images.ts`
+(golden-image clones), `metrics-history.ts`.
+
+---
+
+## The connector (CloudNet-Bridge equivalent)
+
+Built without Gradle (plain `javac` + `jar`); jars live on the shared store and are pushed into
+each server at provision.
+
+- **Minecraft** (`plugin/`, Paper + Velocity in one jar) — registers the server, **heartbeats the
+  full player list (name + UUID), counts and TPS** every ~3 s, reports join/quit/switch events, and
+  **executes actions** the panel queues (move / message / kick). The Velocity side is also driven
+  by a panel-supplied **config block**: fallback routing, MOTD, maintenance, tablist. In-game
+  `/conduit` (aliases `/ct`, `/cloud`) with tab-completion. Uses the JDK HTTP client forced to
+  **HTTP/1.1** (the Node panel mishandles HTTP/2).
+- **Hytale** (`plugin-hytale/`, compiled against `HytaleServer.jar` with JDK 25) — same reporter
+  role plus action execution via `referToServer` / `sendMessage` / `disconnect`. There's no Hytale
+  proxy, so it drains its own actions.
+
+Player data now comes **entirely from the connector** (full, exact lists) — the old SLP
+(`mcping`) path is gone. Actions are **scoped to a player's current server** so a same-named MC
+and Hytale player aren't both hit.
+
+---
+
+## What works today
+
+**Orchestration**
+- Groups (→ Proxmox pools, slot limit, maintenance) and tasks (blueprint + mode + min/max/desired
+  + fronts) from the UI or JSON API.
+- **Static** tasks hold a fixed count with persistent worlds; **dynamic** tasks autoscale on live
+  player load (`ceil(players / playersPerInstance)` + headroom, clamped to `[min, max]`, with
+  CloudNet-Smart knobs: scale-up %, idle-drain, spawn cooldown, prepared/warm pool, split-over-nodes).
+- **Golden-image fast autoscaling** — build a per-egg LXC **template on each node**, then
+  **linked-clone** it on demand (seconds vs. minutes) with an optional **warm pool** of pre-cloned
+  stopped instances for instant scale-up. Multi-node: clones land on the node that holds the template.
+- **Multi-node**: instances spread across nodes; move a service between nodes from the UI (Proxmox
+  migration). Single controller via VIP leader election; panel + agents on every node.
+
+**Software**
+- Installs real software in-container over the agent/`pct exec`: **Paper / Velocity** (Java
+  auto-installed from the Adoptium API for any major; version selectable per task from the PaperMC
+  Fill API), **nginx**, **Redis**, **Hytale** (shared read-only `/assets` mount + downloader), and
+  **custom generic templates** with a declarative recipe (apt packages → asset pulls → install
+  script → supervised start command).
+- Velocity modern-forwarding wired with a shared secret; routing table rendered from live backend
+  IPs and applied with a hot `velocity reload` (no kicks) when the set changes.
+
+**Seamless world-sharding** (TMregion-style, opt-in)
+- One world split along the X axis into per-instance strips; players cross boundaries and are
+  **handed off keeping their exact position** (same seed everywhere ⇒ continuous terrain). A blue
+  particle wall + graduated action-bar warning mark the seam; the outer edge is a hard world border.
+- **Redis player-data sync** carries inventory / HP / XP / effects across the handoff. The Redis
+  egg is self-configuring: first instance = primary, extras auto-replicate with failover, and
+  connectors discover the endpoints automatically.
+
+**Observability & control**
+- **Players** page: live (SSE) network player list with real skins, split MC / Hytale, right-click
+  **move** (compatible-service picker), styled **message** composer (with `&`-code preview), and
+  **kick** — all instant/optimistic.
+- **Metrics**: Players / Containers / CPU / Memory over **5m / 1h / 24h / 30d**, from Proxmox RRD
+  (cpu/mem) + a server-side sampler (players/containers), cluster-wide and per-instance.
+- Per-service **live tmux console** + **file manager**, per-task **MOTD** editor, **persistent
+  audit log**, **scheduled** restarts/broadcasts, an in-app **help center**, and a **mobile**
+  drawer nav.
+
+**Platform & safety**
+- HA panel-per-node behind a keepalived VIP; corosync/agent-replicated state.
+- PVE **API token** (revocable, no CSRF) + dedicated **SSH key** — no password on the wire.
+- **PBS backups**: on-demand or per-group scheduled, list snapshots, one-click restore.
+
+---
+
+## API (selected)
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/overview` | cluster nodes + totals |
+| GET | `/api/conduit/state` | groups → tasks → instances (+ready) + routing |
+| POST | `/api/conduit/reconcile` | force a reconcile pass |
+| GET/POST/PATCH/DELETE | `/api/groups`, `/api/tasks` | group + task CRUD, live scaling |
+| GET/POST/DELETE | `/api/containers`, `/api/containers/{vmid}` | list / action / **delete** |
+| POST | `/api/containers/{vmid}/migrate` | move a service to another node |
+| GET/POST | `/api/blueprints` | eggs incl. custom templates (+ recipe) |
+| GET/POST | `/api/images`, `/api/images/build` | golden fast-clone images per egg/node |
+| GET | `/api/metrics` · `/api/metrics/history?range=` | live counts · RRD time-series |
+| GET | `/api/stream` | **SSE** live connector state (players/servers) |
+| POST | `/api/connector/{register,heartbeat,event,action,transfer,pending}` | connector ingest + control |
+| GET | `/api/connector/move-targets` | compatible servers a player can be moved to |
+| POST/GET | `/api/tasks/{id}/sharding` | enable sharding (regen on a shared seed) / live grid |
+| GET/POST | `/api/backups…` | PBS storages, snapshots, jobs, restore |
+| GET/POST | `/api/services/{vmid}/{console,files}` | live console / file browser |
+
+The full registry is in `dashboard/src/lib/api-registry.ts` (surfaced on the **API** page).
+
+---
+
+## Repo layout
+
+```
+dashboard/        Next.js panel + conduitd controller (the brain)
+agent/            per-node conduit-agent (pct exec + fs + console WS) + systemd units
+plugin/           Minecraft connector (Paper + Velocity), built with javac
+plugin-hytale/    Hytale connector (compiled against HytaleServer.jar, JDK 25)
+scripts/          deploy-panel.sh, deploy-agent.sh, setup-glusterfs.sh, setup-sftp.sh, …
+examples/         walkthroughs (e.g. lobby autoscaling)
+```
 
 ---
 
 ## Running it
 
+**Single-node / dev:**
+
 ```bash
 cd dashboard
-cp .env.example .env.local   # fill in your Proxmox host + creds
+cp .env.example .env.local      # Proxmox host + API token + SSH key
 npm install
-npm run dev                  # or: npm run build && npm run start
+npm run dev                     # or: npm run build && npm run start
 ```
 
-Requirements: a Proxmox VE node with a Debian-12 LXC template, a bridge with DHCP, and
-SSH access to the node for `pct exec` provisioning (a dedicated key via `PROXMOX_SSH_KEY`,
-or a password via `sshpass`). Set `CONDUIT_CONTROLLER=off` to run without the reconcile loop.
+Requirements: a Proxmox VE node with a Debian-12 LXC template, a DHCP bridge, and a scoped **PVE
+API token** + dedicated **SSH key** (`PROXMOX_TOKEN_ID/SECRET`, `PROXMOX_SSH_KEY`). Set
+`CONDUIT_CONTROLLER=off` to run the UI without the reconcile loop.
 
-> ⚠️ The dashboard talks to the node server-side. Use a scoped **PVE API token**
-> (`PROXMOX_TOKEN_ID`/`SECRET`) and a dedicated **SSH key** (`PROXMOX_SSH_KEY`) so no
-> password is on the wire, and run it on a trusted host on the management network.
+**HA cluster deploy** (panel on every node behind a VIP, agents, shared store):
+
+```bash
+./scripts/setup-glusterfs.sh                                  # shared /var/lib/conduit
+CONDUIT_AGENT_TOKEN=… ./scripts/deploy-agent.sh               # per-node agent on :8800
+CONDUIT_AGENT_TOKEN=… PROXMOX_TOKEN_ID=… PROXMOX_TOKEN_SECRET=… \
+  ./scripts/deploy-panel.sh                                   # panel CTs + keepalived VIP
+```
+
+> ⚠️ The panel talks to Proxmox server-side. Run it on the management network with a scoped API
+> token + SSH key (no password on the wire).
 
 ---
 
-## Roadmap
+## Status / not-done
 
-- More software kinds (Hytale, web/nginx, …). The `kind` seam + an optional shared
-  read-only `/assets` mount (`CONDUIT_ASSETS_DIR`, bind-mounted as root over SSH) are in
-  place for engines whose servers share large static assets — Minecraft opts out, since
-  a Paper server needs its own live, writable world.
-- Multi-node placement + live-migration controls.
-
-Done recently: live SLP metrics · player-count autoscaling · PVE API-token + SSH-key
-auth (no password on the wire) · PBS backups (on-demand + per-group schedules +
-one-click restore + delete) · game-ready seeding (URL or uploaded asset) with an
-in-dashboard seed editor · custom templates + Hytale · per-service MOTD editor with
-live preview · live tmux console + file viewer per service · edit dialogs for groups
-& tasks · time-series graphs on the Overview.
+- Velocity routing, autoscaling (incl. golden-image clones + warm pool), backups, sharding +
+  Redis sync, Hytale, HA panel, multi-node moves, and live player control are all **working**.
+- Custom-template recipes cover most generic servers; richer per-kind install recipes (full
+  MariaDB schema, etc.) are still thin.
+- Cross-node sharding handoff relies on a reachable Redis for state sync; position handoff works
+  without it (per-region data only).
