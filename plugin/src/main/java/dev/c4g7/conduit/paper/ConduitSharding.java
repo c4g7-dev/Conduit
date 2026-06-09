@@ -238,7 +238,7 @@ final class ConduitSharding {
      * the boundary (e.g. a creative flyer that velocity can't stop) — a hard teleport clamp to the
      * boundary. The transfer then connects them at the seam on the owning server.
      */
-    private static final double CLAMP_MARGIN = 24;
+    private static final double CLAMP_MARGIN = 80;
     private void pushInward(Player p, String world, double x) {
         Region me = selfRegion();
         if (me == null) return;
@@ -253,7 +253,7 @@ final class ConduitSharding {
             l.setX(edge + dir * 2); // just inside our boundary
             p.teleport(l);
         } else {
-            p.setVelocity(p.getVelocity().add(new Vector(dir * 0.9, 0.1, 0)));
+            p.setVelocity(p.getVelocity().add(new Vector(dir * 0.25, 0.0, 0)));
         }
     }
 
@@ -273,7 +273,7 @@ final class ConduitSharding {
         applied.put(p.getName().toLowerCase(), loc);
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             Location l = parseLoc(loc);
-            if (l != null) p.teleport(l);
+            if (l != null) p.teleport(safeY(l));
         });
         final UUID uuid = p.getUniqueId();
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
@@ -303,6 +303,27 @@ final class ConduitSharding {
             if (a.length > 5) { l.setYaw(Float.parseFloat(a[4])); l.setPitch(Float.parseFloat(a[5])); }
             return l;
         } catch (Exception e) { return null; }
+    }
+
+    /**
+     * Keep the exact handoff position when it's safe (continuous terrain on a shared seed means
+     * the player's Y is valid), but never drop them inside a block or floating far up: if the feet
+     * or head block is solid, or there's no ground for a while below, snap to the surface highest
+     * block at that X/Z so they always land on top of the landscape rather than suffocating.
+     */
+    private static Location safeY(Location l) {
+        World w = l.getWorld();
+        if (w == null) return l;
+        int x = l.getBlockX(), z = l.getBlockZ(), y = l.getBlockY();
+        boolean feetClear = w.getBlockAt(x, y, z).isPassable();
+        boolean headClear = w.getBlockAt(x, y + 1, z).isPassable();
+        boolean groundNear = false;
+        for (int dy = 1; dy <= 4; dy++) if (!w.getBlockAt(x, y - dy, z).isPassable()) { groundNear = true; break; }
+        if (feetClear && headClear && groundNear) return l; // exact position is safe
+        int top = w.getHighestBlockYAt(x, z);
+        Location s = new Location(w, l.getX(), top + 1, l.getZ());
+        s.setYaw(l.getYaw()); s.setPitch(l.getPitch());
+        return s;
     }
 
     private static String str(JsonObject o, String k) {

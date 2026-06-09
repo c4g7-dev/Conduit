@@ -85,6 +85,10 @@ export type Sharding = {
   splitEnd: boolean;
   /** seam no-build buffer: cancel block interaction within this many blocks of a boundary */
   borderCancelRange: number;
+  /** shared world seed — ALL region instances must generate with the same seed so the terrain
+   *  is continuous across strips (different seeds = teleporting to the same X/Z lands in
+   *  different terrain). Auto-assigned when sharding is enabled; applied via level-seed. */
+  seed?: string;
 };
 
 /** Golden-image build status per egg: which node holds the template CT, version, timestamp. */

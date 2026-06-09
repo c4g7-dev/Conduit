@@ -75,8 +75,11 @@ public class ConduitVelocityPlugin {
             proxy.getCommandManager().register(new BrigadierCommand(buildBrigadier(name)));
         }
 
+        // 1s tick: the proxy drains queued actions (incl. sharding moves) here, so a faster tick
+        // means a player crossing a strip boundary is moved to the owning server within ~1s
+        // instead of up to 3s (the lag felt during a handoff).
         proxy.getScheduler().buildTask(this, this::tick)
-                .repeat(3, TimeUnit.SECONDS).delay(2, TimeUnit.SECONDS).schedule();
+                .repeat(1, TimeUnit.SECONDS).delay(2, TimeUnit.SECONDS).schedule();
     }
 
     /** Split an argument line, keeping a trailing empty token so completion advances per arg. */
