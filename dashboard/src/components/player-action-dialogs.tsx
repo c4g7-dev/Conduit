@@ -16,13 +16,13 @@ const MC_COLORS: Record<string, string> = {
 // (colour + bold + italic + monospace, no underline/strike/obfuscate). `&p` = monospace (Hytale).
 const MC_FORMATS = [
   { code: "l", label: "Bold" }, { code: "o", label: "Italic" }, { code: "n", label: "Underline" },
-  { code: "m", label: "Strike" }, { code: "r", label: "Reset" },
+  { code: "m", label: "Strike" }, { code: "k", label: "Magic" }, { code: "r", label: "Reset" },
 ];
 const HYTALE_FORMATS = [
   { code: "l", label: "Bold" }, { code: "o", label: "Italic" }, { code: "p", label: "Mono" }, { code: "r", label: "Reset" },
 ];
 
-type Run = { text: string; color?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; mono?: boolean };
+type Run = { text: string; color?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; mono?: boolean; obf?: boolean };
 function parseLegacy(s: string): Run[] {
   const runs: Run[] = [];
   let cur: Run = { text: "" };
@@ -37,6 +37,7 @@ function parseLegacy(s: string): Run[] {
       if (code === "n") { push(); cur = { ...cur, text: "", underline: true }; i++; continue; }
       if (code === "m") { push(); cur = { ...cur, text: "", strike: true }; i++; continue; }
       if (code === "p") { push(); cur = { ...cur, text: "", mono: true }; i++; continue; }
+      if (code === "k") { push(); cur = { ...cur, text: "", obf: true }; i++; continue; }
       if (code === "r") { push(); cur = { text: "" }; i++; continue; }
     }
     cur.text += c;
@@ -45,19 +46,29 @@ function parseLegacy(s: string): Run[] {
   return runs.length ? runs : [{ text: "" }];
 }
 
+const OBF_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&?";
+/** Obfuscated (&k) run — scrambles each non-space character on an interval, like vanilla magic. */
+function Obfuscated({ text, style }: { text: string; style: React.CSSProperties }) {
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 70); return () => clearInterval(t); }, []);
+  const scrambled = text.split("").map((c) => (c === " " ? " " : OBF_CHARS[Math.floor(Math.random() * OBF_CHARS.length)])).join("");
+  return <span style={style}>{scrambled}</span>;
+}
+
 function Preview({ value }: { value: string }) {
   const runs = parseLegacy(value);
   return (
     <div className="min-h-[2.25rem] rounded-md border border-hairline bg-[#1a1a1a] px-3 py-2 font-mono text-[13px] leading-relaxed">
-      {value.trim() === "" ? <span className="text-muted-foreground/40">preview…</span> : runs.map((r, i) => (
-        <span key={i} style={{
+      {value.trim() === "" ? <span className="text-muted-foreground/40">preview…</span> : runs.map((r, i) => {
+        const style: React.CSSProperties = {
           color: r.color ?? "#FFFFFF",
           fontWeight: r.bold ? 700 : 400,
           fontStyle: r.italic ? "italic" : "normal",
           fontFamily: r.mono ? "ui-monospace, monospace" : undefined,
           textDecoration: [r.underline && "underline", r.strike && "line-through"].filter(Boolean).join(" ") || "none",
-        }}>{r.text}</span>
-      ))}
+        };
+        return r.obf ? <Obfuscated key={i} text={r.text} style={style} /> : <span key={i} style={style}>{r.text}</span>;
+      })}
     </div>
   );
 }
