@@ -273,7 +273,12 @@ function PlayerHead({ player }: { player: PlayerRow }) {
     <span className="flex h-6 w-6 items-center justify-center rounded bg-accent text-[11px] font-semibold uppercase text-muted-foreground">{player.name.slice(0, 2)}</span>
   );
   if (player.env === "hytale" || failed) return initials;
-  const key = player.uuid || player.name;
+  // The network runs offline-mode, so the reported UUID is an offline/v3 UUID (name-derived) that
+  // skin services can't resolve → Steve. A real premium UUID is v4 (the 15th hex digit is "4").
+  // Use the UUID only when it's premium; otherwise look up by name (mc-heads resolves the skin
+  // from the Mojang username).
+  const uuidPremium = !!player.uuid && player.uuid.replace(/-/g, "")[12] === "4";
+  const key = uuidPremium ? player.uuid! : player.name;
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img src={`https://mc-heads.net/avatar/${encodeURIComponent(key)}/24`} alt={player.name}
