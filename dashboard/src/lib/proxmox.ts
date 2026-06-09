@@ -165,9 +165,11 @@ export type Template = {
   format?: string;
 };
 
-/** One RRD sample. cpu is a 0..1 fraction; mem/maxmem in bytes; netin/netout bytes/s. */
+/** One RRD sample. cpu is a 0..1 fraction; bytes for memory/net. NOTE: node rrddata uses
+ *  memused/memtotal, while guest (lxc/qemu) rrddata uses mem/maxmem — both are included. */
 export type RrdPoint = {
-  time: number; cpu?: number; maxcpu?: number; mem?: number; maxmem?: number;
+  time: number; cpu?: number; maxcpu?: number;
+  mem?: number; maxmem?: number; memused?: number; memtotal?: number;
   netin?: number; netout?: number; diskread?: number; diskwrite?: number;
 };
 

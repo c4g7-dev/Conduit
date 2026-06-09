@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getHistory, pushSample, type Sample } from "@/lib/history";
 import { api, vmidNode } from "@/lib/proxmox";
+import { seriesAt } from "@/lib/metrics-history";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,7 +25,7 @@ const RANGE: Record<string, { tf: string; keep?: number }> = {
   "30d": { tf: "month" },
 };
 
-type Pt = { t: number; cpu: number; mem: number; memBytes: number; maxmemBytes: number; netin: number; netout: number };
+type Pt = { t: number; cpu: number; mem: number; memBytes: number; maxmemBytes: number; netin: number; netout: number; players?: number; containers?: number };
 
 // tiny server-side cache (key → {at, data}); RRD barely changes within a minute.
 declare global { var __conduitRrdCache: Map<string, { at: number; data: Pt[] }> | undefined; }
@@ -63,7 +64,10 @@ export async function GET(req: NextRequest) {
       for (const rows of series) for (const p of rows) {
         if (!p.time) continue;
         const e = byT.get(p.time) ?? { cpu: [], mem: 0, maxmem: 0, netin: 0, netout: 0 };
-        e.cpu.push(p.cpu ?? 0); e.mem += p.mem ?? 0; e.maxmem += p.maxmem ?? 0;
+        // node rrddata reports memused/memtotal (guests use mem/maxmem) — accept either.
+        e.cpu.push(p.cpu ?? 0);
+        e.mem += p.memused ?? p.mem ?? 0;
+        e.maxmem += p.memtotal ?? p.maxmem ?? 0;
         e.netin += p.netin ?? 0; e.netout += p.netout ?? 0;
         byT.set(p.time, e);
       }
@@ -75,6 +79,12 @@ export async function GET(req: NextRequest) {
       }));
     }
     if (r.keep) points = points.slice(-r.keep);
+    // Enrich cluster series with players/containers history (RRD doesn't track these), aligned
+    // to the RRD timestamps. Per-container series get only the container's own cpu/mem.
+    if (!vmidParam) {
+      const extra = seriesAt(points.map((p) => p.t));
+      points = points.map((p, i) => ({ ...p, players: extra[i].players, containers: extra[i].containers }));
+    }
     cache.set(key, { at: Date.now(), data: points });
     return NextResponse.json({ range, points });
   } catch (e) {

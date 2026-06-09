@@ -6,7 +6,7 @@ import { Sparkline } from "@/components/sparkline";
 import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
 
-type Pt = { t: number; cpu: number; mem: number; memBytes: number; maxmemBytes: number; netin: number; netout: number };
+type Pt = { t: number; cpu: number; mem: number; memBytes: number; maxmemBytes: number; netin: number; netout: number; players?: number; containers?: number };
 type Resp = { range: string; points: Pt[] };
 
 const RANGES = ["5m", "1h", "24h", "30d"] as const;
@@ -31,10 +31,16 @@ export function MetricsPanel({ vmid, className }: { vmid?: number; className?: s
   const points = data?.points ?? [];
   const last = points[points.length - 1];
 
+  const cluster = vmid == null;
   const cards = [
-    { label: "CPU", color: "#7c83ff", series: points.map((p) => p.cpu), max: 100, value: last ? `${last.cpu.toFixed(0)}%` : "—" },
+    // Players + Containers only make sense cluster-wide (RRD-less, from our sampler).
+    ...(cluster ? [
+      { label: "Players", color: "#34d399", series: points.map((p) => p.players ?? 0), max: undefined as number | undefined, value: last ? `${last.players ?? 0}` : "—" },
+      { label: "Containers", color: "#f6821f", series: points.map((p) => p.containers ?? 0), max: undefined as number | undefined, value: last ? `${last.containers ?? 0}` : "—" },
+    ] : []),
+    { label: "CPU", color: "#7c83ff", series: points.map((p) => p.cpu), max: 100 as number | undefined, value: last ? `${last.cpu.toFixed(0)}%` : "—" },
     {
-      label: "Memory", color: "#38bdf8", series: points.map((p) => p.mem), max: 100,
+      label: "Memory", color: "#38bdf8", series: points.map((p) => p.mem), max: 100 as number | undefined,
       value: last ? (last.maxmemBytes ? `${fmtBytes(last.memBytes)} / ${fmtBytes(last.maxmemBytes)}` : `${last.mem.toFixed(0)}%`) : "—",
     },
   ];
@@ -54,7 +60,7 @@ export function MetricsPanel({ vmid, className }: { vmid?: number; className?: s
           ))}
         </div>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className={cn("grid gap-3 sm:grid-cols-2", cluster && "lg:grid-cols-4")}>
         {cards.map((card) => (
           <div key={card.label} className="panel p-4">
             <div className="flex items-center justify-between">

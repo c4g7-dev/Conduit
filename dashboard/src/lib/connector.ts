@@ -83,17 +83,18 @@ export function liveServers(): ConnServer[] {
   return [...reg.servers.values()].filter((s) => now - s.lastSeen < STALE_MS);
 }
 
-/** Flattened player list across all backend servers (proxy duplicates filtered out). A player is
- *  only ever on ONE backend, but during a server switch a stale backend can still list them for up
- *  to STALE_MS — and if the two reports disagree on uuid presence, keying by uuid|name would show
- *  the player twice. Dedup by lowercased NAME (always present, unique per network), keeping the
- *  most-recently-seen backend so the listed server is the current one. */
+/** Flattened player list across all backend servers (proxy duplicates filtered out).
+ *  Dedup by UUID — distinct across platforms (an MC offline UUID ≠ a Hytale UUID), so a same-named
+ *  MC + Hytale player correctly show as TWO rows; but the SAME player mid-switch between two MC
+ *  backends shares one UUID → one row (most-recently-seen backend wins). Falls back to name+env
+ *  only if a UUID is somehow missing. (Keying by name alone wrongly merged cross-platform
+ *  same-name players and made the list flicker as heartbeats alternated.) */
 export function allPlayers(): ConnPlayer[] {
   const out = new Map<string, { p: ConnPlayer; seen: number }>();
   for (const s of liveServers()) {
     if (s.env === "proxy") continue; // attribute players to their backend, not the proxy
     for (const p of s.players) {
-      const key = p.name.toLowerCase();
+      const key = p.uuid && p.uuid.length ? `u:${p.uuid}` : `n:${p.name.toLowerCase()}|${s.env}`;
       const prev = out.get(key);
       if (!prev || s.lastSeen > prev.seen) out.set(key, { p: { ...p, server: s.task }, seen: s.lastSeen });
     }
