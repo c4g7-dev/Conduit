@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { Users, Send, UserX, Radio, Loader2, MoveRight, MessageSquare, Gamepad2, Boxes } from "lucide-react";
+import { MessageDialog, MoveDialog, KickDialog } from "@/components/player-action-dialogs";
 
 type MetricRow = {
   vmid: number; taskName: string; role: string; reachable: boolean;
@@ -19,7 +20,8 @@ type Metrics = { instances: MetricRow[]; totals: { players: number; capacity: nu
 type StTask = { softwareKind: string; name: string; instances: { vmid: number; status: string; ready: boolean }[] };
 type State = { groups: { id: string; name: string; tasks: StTask[] }[] };
 
-type PlayerRow = { name: string; server: string; vmid: number; role: string; uuid?: string };
+type PlayerRow = { name: string; server: string; vmid: number; role: string; uuid?: string; group?: string };
+type DialogState = { kind: "move" | "message" | "kick"; player: PlayerRow } | null;
 
 // Software kinds that represent a game/player service (vs db/web/generic).
 const GAME_KINDS = new Set(["paper", "velocity", "hytale"]);
@@ -36,6 +38,7 @@ export default function PlayersPage() {
   const [groupId, setGroupId] = useState("__all");
   const [busy, setBusy] = useState(false);
   const [kicking, setKicking] = useState<string | null>(null);
+  const [dlg, setDlg] = useState<DialogState>(null);
 
   const connActive = !!conn?.active;
 
@@ -43,10 +46,12 @@ export default function PlayersPage() {
   // backend SLP samples (capped ~12/server) when no connector is reporting.
   const players = useMemo<PlayerRow[]>(() => {
     if (connActive) {
-      // map server task name → a vmid for the kick/console fallback
+      // map server task name → a vmid for the kick/console fallback + → group for move targets
       const vmidByTask = new Map<string, number>();
       for (const r of metrics?.instances ?? []) vmidByTask.set(r.taskName, r.vmid);
-      return (conn!.players ?? []).map((p) => ({ name: p.name, uuid: p.uuid, server: p.server ?? "?", vmid: vmidByTask.get(p.server ?? "") ?? 0, role: "smp" }))
+      const groupByTask = new Map<string, string>();
+      for (const s of conn!.servers ?? []) groupByTask.set(s.task, s.group);
+      return (conn!.players ?? []).map((p) => ({ name: p.name, uuid: p.uuid, server: p.server ?? "?", vmid: vmidByTask.get(p.server ?? "") ?? 0, role: "smp", group: groupByTask.get(p.server ?? "") }))
         .sort((a, b) => a.name.localeCompare(b.name));
     }
     const rows = (metrics?.instances ?? []).filter((r) => r.role !== "proxy" && r.reachable);
@@ -210,7 +215,7 @@ export default function PlayersPage() {
         players={mcPlayers}
         kicking={kicking}
         connActive={connActive}
-        onAction={playerAction}
+        onOpenDialog={(kind, p) => setDlg({ kind, player: p })}
         emptyHint={(metrics?.instances ?? []).every((r) => !r.reachable) ? "(no reachable Minecraft servers)" : undefined}
       />
 
@@ -224,19 +229,35 @@ export default function PlayersPage() {
             players={hytalePlayers}
             kicking={kicking}
             connActive={connActive}
-            onAction={playerAction}
+            onOpenDialog={(kind, p) => setDlg({ kind, player: p })}
             emptyHint="(Hytale connector reports players here once they join)"
           />
         </div>
       )}
 
       <p className="mt-2 text-[11px] text-muted-foreground/60">{connActive ? "Live player lists via the Conduit connector — right-click a player for move/message/kick · in-game: /ct." : "Player names from Minecraft server-list-ping samples (capped at ~12 per server)."}</p>
+
+      {/* player-action dialogs (styled message, compatible-service move picker, kick) */}
+      {dlg?.kind === "message" && (
+        <MessageDialog open onOpenChange={(o) => !o && setDlg(null)} target={dlg.player.name}
+          hint="Supports & colour/format codes. Minecraft renders them styled; Hytale shows plain text."
+          onSend={(text) => playerAction("message", dlg.player, text)} />
+      )}
+      {dlg?.kind === "move" && (
+        <MoveDialog open onOpenChange={(o) => !o && setDlg(null)} player={dlg.player}
+          kindLabel={kindByTask.get(dlg.player.server) === "hytale" ? "Hytale" : "Minecraft"}
+          onMove={(target) => playerAction("move", dlg.player, target)} />
+      )}
+      {dlg?.kind === "kick" && (
+        <KickDialog open onOpenChange={(o) => !o && setDlg(null)} target={dlg.player.name}
+          onKick={(reason) => playerAction("kick", dlg.player, reason || undefined)} />
+      )}
     </>
   );
 }
 
 function PlayerTable({
-  icon, label, count, players, kicking, connActive, onAction, emptyHint,
+  icon, label, count, players, kicking, connActive, onOpenDialog, emptyHint,
 }: {
   icon: ReactNode;
   label: string;
@@ -244,7 +265,7 @@ function PlayerTable({
   players: PlayerRow[];
   kicking: string | null;
   connActive: boolean;
-  onAction: (kind: "kick" | "move" | "message", p: PlayerRow, extra?: string) => void;
+  onOpenDialog: (kind: "kick" | "move" | "message", p: PlayerRow) => void;
   emptyHint?: string;
 }) {
   return (
@@ -283,10 +304,10 @@ function PlayerTable({
                 </ContextMenuTrigger>
                 <ContextMenuContent>
                   <ContextMenuLabel>{p.name}{p.uuid ? ` · ${p.uuid.slice(0, 8)}` : ""}</ContextMenuLabel>
-                  <ContextMenuItem disabled={!connActive} onClick={() => { const t = prompt(`Move ${p.name} to which server/task?`); if (t?.trim()) onAction("move", p, t.trim()); }}><MoveRight /> Move to…</ContextMenuItem>
-                  <ContextMenuItem disabled={!connActive} onClick={() => { const m = prompt(`Message to ${p.name}:`); if (m?.trim()) onAction("message", p, m.trim()); }}><MessageSquare /> Message…</ContextMenuItem>
+                  <ContextMenuItem disabled={!connActive} onClick={() => onOpenDialog("move", p)}><MoveRight /> Move to…</ContextMenuItem>
+                  <ContextMenuItem disabled={!connActive} onClick={() => onOpenDialog("message", p)}><MessageSquare /> Message…</ContextMenuItem>
                   <ContextMenuSeparator />
-                  <ContextMenuItem variant="destructive" onClick={() => { const r = connActive ? prompt(`Kick ${p.name} — reason (optional):`) ?? "" : ""; onAction("kick", p, r || undefined); }}><UserX /> Kick</ContextMenuItem>
+                  <ContextMenuItem disabled={!connActive} variant="destructive" onClick={() => onOpenDialog("kick", p)}><UserX /> Kick</ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
             ))}

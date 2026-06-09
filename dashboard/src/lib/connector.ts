@@ -12,7 +12,7 @@ export type ConnServer = {
   id: string;            // service id, e.g. "Lobby-1" or the conduit task-instance id
   task: string;          // task/egg name
   group: string;         // group name
-  env: "proxy" | "server";
+  env: "proxy" | "server" | "hytale";
   node?: string;
   ip?: string;
   port?: number;
