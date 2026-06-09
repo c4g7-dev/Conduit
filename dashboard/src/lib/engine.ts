@@ -18,6 +18,7 @@ import {
   installHytale,
   installNginx,
   installConnector,
+  installHytaleConnector,
   syncVelocity,
   forgetVelocity,
   nodeExec,
@@ -152,6 +153,14 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
       await installConnector(inst.vmid, host);
     } catch (e) {
       pushInstallLog(inst.vmid, `[conduit] connector install skipped: ${String(e)}`);
+    }
+  } else if (kind === "hytale") {
+    // Hytale gets its own connector mod (reports players to the panel like the MC connector).
+    try {
+      await installHytaleConnector(inst.vmid, host);
+      await ctExec(inst.vmid, `systemctl restart mc 2>/dev/null || true`, 30_000, host);
+    } catch (e) {
+      pushInstallLog(inst.vmid, `[conduit] hytale connector install skipped: ${String(e)}`);
     }
   }
 
