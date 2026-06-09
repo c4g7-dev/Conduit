@@ -65,7 +65,26 @@ export type Task = {
   splitOverNodes?: boolean;
   /** preferred Proxmox node for this task's instances (undefined = auto / least-loaded) */
   node?: string;
+  /** opt-in seamless multi-server world (TMregion-style X-strip sharding); default off */
+  sharding?: Sharding;
   createdAt: number;
+};
+
+/**
+ * Seamless world sharding (opt-in). The task's ordered running instances each own one
+ * vertical X-strip of a shared world; players cross strip boundaries and are handed off to
+ * the owning instance keeping their exact position. Mirrors SKYDINSE's TMregion serverlogic.
+ */
+export type Sharding = {
+  enabled: boolean;
+  /** base overworld name in the container (default "world"; nether/end derived) */
+  world: string;
+  /** nether strip width `tol` (blocks); overworld + end strips are tol×8 */
+  stripWidth: number;
+  /** also shard the End (overworld-scaled) */
+  splitEnd: boolean;
+  /** seam no-build buffer: cancel block interaction within this many blocks of a boundary */
+  borderCancelRange: number;
 };
 
 /** Golden-image build status per egg: which node holds the template CT, version, timestamp. */
