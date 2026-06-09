@@ -30,6 +30,9 @@ public final class ConduitClient {
             .connectTimeout(Duration.ofSeconds(5)).build();
     private final String endpoint, token, id, task, group, env;
     public volatile long ackActionId = 0;
+    // Heartbeat health, to throttle failure logging (log on transition, not every attempt).
+    private volatile boolean hbOk = true;
+    private volatile int hbFails = 0;
     /** Latest proxy config pushed by the panel via the heartbeat response (routing/MOTD/tablist). */
     public volatile JsonObject config = null;
     // Lightweight name snapshot from the heartbeat response — for tab-completion without HTTP.
@@ -95,6 +98,7 @@ public final class ConduitClient {
             o.add("players", arr);
             HttpResponse<String> resp = post("/api/connector/heartbeat", o);
             if (resp.statusCode() == 200) {
+                if (!hbOk) { System.out.println("[Conduit] heartbeat recovered after " + hbFails + " missed beat(s)"); hbOk = true; hbFails = 0; }
                 JsonObject r = GSON.fromJson(resp.body(), JsonObject.class);
                 if (r != null && r.has("config") && r.get("config").isJsonObject()) {
                     this.config = r.getAsJsonObject("config");
@@ -119,7 +123,10 @@ public final class ConduitClient {
                 }
             }
         } catch (Throwable t) {
-            System.out.println("[Conduit] heartbeat FAILED: " + t);
+            // Throttle: log only the FIRST miss (e.g. the panel VIP briefly down during a panel
+            // restart) then stay quiet until it recovers — otherwise a 1s tick floods the console.
+            hbFails++;
+            if (hbOk) { hbOk = false; System.out.println("[Conduit] heartbeat lost (" + t + ") — retrying quietly until it recovers"); }
         }
         return out;
     }
