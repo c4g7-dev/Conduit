@@ -5,7 +5,9 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Color;
 import org.bukkit.Location;
+import org.bukkit.Particle;
 import org.bukkit.World;
 import org.bukkit.WorldBorder;
 import org.bukkit.entity.Player;
@@ -226,10 +228,21 @@ final class ConduitSharding {
         if (s == null) return;
         double d = Math.min(x - s.min(), s.max() - x);
         if (d > 150 || d < 0) return;
-        // graduated proximity colour: 150..100 green, 100..30 yellow, <30 red
-        String color = d > 100 ? "§a" : d >= 30 ? "§e" : "§c";
-        String msg = color + "Region border " + Math.round(d) + "m";
+        long m = Math.round(d);
+        // graduated proximity: 150..100 green, 100..30 yellow, 30..10 red, <10 dark-red "!".
+        // Minimalistic styled action bar (thin bar glyph + dim unit).
+        String msg = d < 10
+                ? "§4§l! §cregion border §4§l" + m + "§cm"
+                : (d > 100 ? "§a" : d >= 30 ? "§e" : "§c") + "▏ §7region border §f" + m + "§7m";
         p.spigot().sendMessage(ChatMessageType.ACTION_BAR, TextComponent.fromLegacyText(msg));
+
+        // From 30m, render a blue dust "wall" at the boundary X in front of the player so the seam
+        // is visible (ported from the TMregion Skript draw: 120 dust, offset 0/7/7, extra 2).
+        if (d <= 30) {
+            double edge = (x - s.min() < s.max() - x) ? s.min() : s.max();
+            Location at = new Location(p.getWorld(), edge, p.getLocation().getY(), p.getLocation().getZ());
+            p.spawnParticle(Particle.REDSTONE, at, 120, 0, 7, 7, 2, new Particle.DustOptions(Color.fromRGB(5, 84, 214), 1.0f));
+        }
     }
 
     /**
