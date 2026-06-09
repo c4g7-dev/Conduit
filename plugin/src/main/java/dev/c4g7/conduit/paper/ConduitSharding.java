@@ -212,8 +212,11 @@ final class ConduitSharding {
                 });
                 pushInward(p, world, x);
             } else {
+                // Keep the player inside their strip while the connect lands, and re-post the
+                // transfer if it stalls (proxy drains moves ~3s; retry sooner so a fast flyer
+                // doesn't drift deep into the neighbour's territory before being moved).
                 pushInward(p, world, x);
-                if (now - tt > 3000) transferring.remove(key); // let it retry if the move stalled
+                if (now - tt > 1500) transferring.remove(key);
             }
         }
     }
@@ -229,14 +232,29 @@ final class ConduitSharding {
         p.spigot().sendMessage(ChatMessageType.ACTION_BAR, TextComponent.fromLegacyText(msg));
     }
 
+    /**
+     * Keep a player from drifting deep into a neighbour's territory while their transfer lands:
+     * a velocity nudge back toward their own strip, and — if they've gone more than MARGIN past
+     * the boundary (e.g. a creative flyer that velocity can't stop) — a hard teleport clamp to the
+     * boundary. The transfer then connects them at the seam on the owning server.
+     */
+    private static final double CLAMP_MARGIN = 24;
     private void pushInward(Player p, String world, double x) {
         Region me = selfRegion();
         if (me == null) return;
         Strip s = me.worlds().get(world);
         if (s == null) return;
-        double toMin = s.min() - x, toMax = s.max() - x;
-        double dx = Math.abs(toMin) < Math.abs(toMax) ? toMin : toMax;
-        p.setVelocity(p.getVelocity().add(new Vector(Math.signum(dx) * 0.6, 0.2, 0)));
+        double over = x < s.min() ? s.min() - x : (x > s.max() ? x - s.max() : 0);
+        if (over <= 0) return; // inside our strip
+        double edge = x < s.min() ? s.min() : s.max();
+        double dir = x < s.min() ? 1 : -1; // push toward the strip interior
+        if (over > CLAMP_MARGIN) {
+            Location l = p.getLocation();
+            l.setX(edge + dir * 2); // just inside our boundary
+            p.teleport(l);
+        } else {
+            p.setVelocity(p.getVelocity().add(new Vector(dir * 0.9, 0.1, 0)));
+        }
     }
 
     private void applyPending(JsonArray pending) {

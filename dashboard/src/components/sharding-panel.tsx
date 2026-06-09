@@ -95,11 +95,11 @@ export function ShardingPanel({ taskId, instanceCount, taskMax }: { taskId: stri
         <label className="flex cursor-pointer items-center justify-between rounded-md border border-hairline bg-accent/30 px-3 py-2.5">
           <span className="text-[13px] font-medium">Enable sharding</span>
           <button
-            role="switch" aria-checked={s.enabled}
+            type="button" role="switch" aria-checked={s.enabled}
             onClick={() => save({ enabled: !s.enabled })}
-            className={cn("relative h-5 w-9 rounded-full transition-colors", s.enabled ? "bg-brand" : "bg-muted-foreground/30")}
+            className={cn("relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors", s.enabled ? "bg-brand" : "bg-muted-foreground/30")}
           >
-            <span className={cn("absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform", s.enabled ? "translate-x-4" : "translate-x-0.5")} />
+            <span className={cn("inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform", s.enabled ? "translate-x-[18px]" : "translate-x-0.5")} />
           </button>
         </label>
 
@@ -109,9 +109,13 @@ export function ShardingPanel({ taskId, instanceCount, taskMax }: { taskId: stri
               <input value={s.world} onChange={(e) => setDraft({ ...s, world: e.target.value })} onBlur={(e) => save({ world: e.target.value })}
                 className="w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-[13px] outline-none" />
             </Field>
-            <Field label="Strip width" hint="nether blocks (×8 overworld)">
-              <input type="number" min={500} step={500} value={s.stripWidth}
-                onChange={(e) => setDraft({ ...s, stripWidth: Number(e.target.value) })} onBlur={(e) => save({ stripWidth: Number(e.target.value) })}
+            {/* Region width in overworld CHUNKS (the intuitive MC unit). 1 chunk = 16 blocks;
+                the overworld strip is stripWidth×8 blocks, so chunks = stripWidth/2 and
+                stripWidth = chunks×2. The nether strip is chunks/8 (MC's 1:8 scale). */}
+            <Field label="Chunks / region" hint={`${(s.stripWidth * 8).toLocaleString()} blocks overworld`}>
+              <input type="number" min={16} step={16} value={Math.round(s.stripWidth / 2)}
+                onChange={(e) => setDraft({ ...s, stripWidth: Math.max(2, Number(e.target.value) * 2) })}
+                onBlur={(e) => save({ stripWidth: Math.max(2, Number(e.target.value) * 2) })}
                 className="w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-[13px] tabular-nums outline-none" />
             </Field>
             <Field label="Seam buffer" hint="no-build blocks at edge">
@@ -239,11 +243,11 @@ function RegionMap({ grid, addRegion, adding, atCap }: { grid: Grid; addRegion?:
           </button>
         ))}
       </div>
-      {/* ruler */}
+      {/* ruler — the left/right edges are a hard vanilla world border (no server beyond) */}
       <div className="mt-2 flex justify-between text-[10px] tabular-nums text-muted-foreground/60">
-        <span>{fmt(left)}</span>
+        <span title="hard world border — players can't pass">⊣ {fmt(left)}</span>
         <span>center {fmt(centerWorld)}</span>
-        <span>{fmt(right)}</span>
+        <span title="hard world border — players can't pass">{fmt(right)} ⊢</span>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
         <span><span className="font-medium text-foreground">{grid.regions.length}</span> regions</span>
