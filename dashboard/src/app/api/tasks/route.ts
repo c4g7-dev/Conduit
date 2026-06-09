@@ -50,6 +50,7 @@ export async function POST(req: NextRequest) {
       spawnCooldownSec: body.spawnCooldownSec != null ? Number(body.spawnCooldownSec) : undefined,
       maxServices: body.maxServices != null ? Number(body.maxServices) : undefined,
       splitOverNodes: body.splitOverNodes != null ? Boolean(body.splitOverNodes) : undefined,
+      node: typeof body.node === "string" && body.node.trim() ? body.node.trim() : undefined,
       seed: body.seed && typeof body.seed === "object" ? body.seed : undefined,
       software:
         body.software && body.software.version

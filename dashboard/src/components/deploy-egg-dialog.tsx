@@ -8,7 +8,7 @@ import {
 import { RoleDot, roleColor } from "@/components/role-dot";
 import { cn } from "@/lib/utils";
 import {
-  Rocket, Cpu, MemoryStick, HardDrive, Users, Infinity as InfinityIcon, Pin, Plus,
+  Rocket, Cpu, MemoryStick, HardDrive, Users, Infinity as InfinityIcon, Pin, Plus, Package,
 } from "lucide-react";
 
 type Blueprint = {
@@ -62,8 +62,14 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
   const [disk, setDisk] = useState(egg.disk);
   const [version, setVersion] = useState(egg.software.version);
   const [versions, setVersions] = useState<string[]>([]);
+  const [node, setNode] = useState("");
+  const [nodes, setNodes] = useState<{ node: string; status: string }[]>([]);
+  const [worldUrl, setWorldUrl] = useState("");
+  const [plugins, setPlugins] = useState<string[]>([]);
+  const [assets, setAssets] = useState<{ kind: string; name: string; ref: string }[]>([]);
 
   const versioned = egg.software.kind === "paper" || egg.software.kind === "velocity";
+  const seedable = egg.role !== "proxy" && egg.software.kind !== "nginx";
 
   useEffect(() => {
     if (!open) return;
@@ -72,17 +78,19 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
     setMin(1); setMax(egg.mode === "dynamic" ? 5 : 1);
     setPps(egg.role === "lobby" ? 50 : 80);
     setCores(egg.cores); setMemory(egg.memory); setDisk(egg.disk);
-    setVersion(egg.software.version); setNewGroup("");
+    setVersion(egg.software.version); setNewGroup(""); setNode(""); setWorldUrl(""); setPlugins([]);
     fetch("/api/groups").then((r) => r.json()).then((j) => {
       const gs: Group[] = j.groups ?? [];
       setGroups(gs);
       setGroupId(gs[0]?.id ?? "__new");
     }).catch(() => {});
+    fetch("/api/nodes").then((r) => r.json()).then((j) => setNodes(j.nodes ?? [])).catch(() => {});
+    if (seedable) fetch("/api/assets").then((r) => r.json()).then((j) => setAssets(j.assets ?? [])).catch(() => {});
     if (versioned) {
       fetch(`/api/versions?kind=${egg.software.kind}`).then((r) => r.json())
         .then((j) => setVersions(Array.isArray(j.versions) ? j.versions : [])).catch(() => {});
     }
-  }, [open, egg, versioned]);
+  }, [open, egg, versioned, seedable]);
 
   async function deploy() {
     setBusy(true);
@@ -109,6 +117,10 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
         body.preparedPool = preparedPool;
         body.scaleUpPercent = scaleUpPercent;
         body.scaleDownAfterSec = scaleDownAfterSec;
+      }
+      if (node) body.node = node;
+      if (seedable && (worldUrl.trim() || plugins.length)) {
+        body.seed = { worldUrl: worldUrl.trim() || undefined, plugins: plugins.length ? plugins : undefined };
       }
       if (versioned && version) body.software = { version };
       const res = await fetch("/api/tasks", {
@@ -176,15 +188,24 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
             </Field>
           )}
 
-          {versioned && (
-            <Field label="Version">
-              <select value={version} onChange={(e) => setVersion(e.target.value)}
+          <div className={cn("grid gap-3", versioned ? "grid-cols-2" : "grid-cols-1")}>
+            {versioned && (
+              <Field label="Version">
+                <select value={version} onChange={(e) => setVersion(e.target.value)}
+                  className="w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-sm outline-none">
+                  <option value={egg.software.version}>{egg.software.version} (default)</option>
+                  {versions.filter((v) => v !== egg.software.version).map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </Field>
+            )}
+            <Field label="Deploy node">
+              <select value={node} onChange={(e) => setNode(e.target.value)}
                 className="w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-sm outline-none">
-                <option value={egg.software.version}>{egg.software.version} (default)</option>
-                {versions.filter((v) => v !== egg.software.version).map((v) => <option key={v} value={v}>{v}</option>)}
+                <option value="">Auto (least-loaded)</option>
+                {nodes.map((n) => <option key={n.node} value={n.node} disabled={n.status !== "online"}>{n.node}{n.status !== "online" ? " (offline)" : ""}</option>)}
               </select>
             </Field>
-          )}
+          </div>
 
           {/* Scaling — the core of the egg */}
           <div>
@@ -245,6 +266,47 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
               <Field label="Disk"><Num value={disk} onChange={setDisk} min={1} suffix="GB" /></Field>
             </div>
           </div>
+
+          {/* Assets — pick uploaded worlds/plugins (shared store, replicated to all nodes) */}
+          {seedable && (assets.length > 0) && (
+            <div>
+              <div className="mb-2 flex items-center gap-2">
+                <Package className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Assets · applied on provision (cross-node)</span>
+              </div>
+              {assets.filter((a) => a.kind === "worlds").length > 0 && (
+                <div className="mb-2">
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">World</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {assets.filter((a) => a.kind === "worlds").map((a) => (
+                      <button key={a.ref} type="button" onClick={() => setWorldUrl(worldUrl === a.ref ? "" : a.ref)}
+                        className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors",
+                          worldUrl === a.ref ? "border-brand/50 bg-brand/10 text-foreground" : "border-hairline text-muted-foreground hover:bg-accent/50")}>
+                        <Package className="h-3 w-3" /> {a.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {assets.filter((a) => a.kind === "plugins").length > 0 && (
+                <div>
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">Plugins</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {assets.filter((a) => a.kind === "plugins").map((a) => {
+                      const on = plugins.includes(a.ref);
+                      return (
+                        <button key={a.ref} type="button" onClick={() => setPlugins((p) => on ? p.filter((x) => x !== a.ref) : [...p, a.ref])}
+                          className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors",
+                            on ? "border-brand/50 bg-brand/10 text-foreground" : "border-hairline text-muted-foreground hover:bg-accent/50")}>
+                          <Package className="h-3 w-3" /> {a.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex items-center justify-between gap-2 border-t border-hairline pt-4">
