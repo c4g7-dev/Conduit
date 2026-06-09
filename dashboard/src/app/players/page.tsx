@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
@@ -9,7 +9,7 @@ import {
   ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator,
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
-import { Users, Send, UserX, Radio, Loader2, MoveRight, MessageSquare } from "lucide-react";
+import { Users, Send, UserX, Radio, Loader2, MoveRight, MessageSquare, Gamepad2, Boxes } from "lucide-react";
 
 type MetricRow = {
   vmid: number; taskName: string; role: string; reachable: boolean;
@@ -22,9 +22,9 @@ type State = { groups: { id: string; name: string; tasks: StTask[] }[] };
 type PlayerRow = { name: string; server: string; vmid: number; role: string; uuid?: string };
 
 // Software kinds that represent a game/player service (vs db/web/generic).
-const GAME_KINDS = new Set(["paper", "velocity"]);
-// Kinds we can enumerate live players for (Minecraft SLP). Hytale has no public query yet.
-const QUERYABLE = new Set(["paper", "velocity"]);
+const GAME_KINDS = new Set(["paper", "velocity", "hytale"]);
+// Kinds we get live player counts for. Hytale now reports via its own connector.
+const QUERYABLE = new Set(["paper", "velocity", "hytale"]);
 
 type Conn = { active: boolean; players: { uuid: string; name: string; server?: string }[]; servers: { task: string; group: string; env: string }[] };
 
@@ -59,6 +59,19 @@ export default function PlayersPage() {
   const total = metrics?.totals.players ?? 0;
   const capacity = metrics?.totals.capacity ?? 0;
   const mByVmid = useMemo(() => new Map((metrics?.instances ?? []).map((r) => [r.vmid, r])), [metrics]);
+
+  // server (task) name → software kind, to split Minecraft vs Hytale players.
+  const kindByTask = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const g of state?.groups ?? []) for (const t of g.tasks ?? []) m.set(t.name, t.softwareKind);
+    return m;
+  }, [state]);
+  const hytalePlayers = useMemo(() => players.filter((p) => kindByTask.get(p.server) === "hytale"), [players, kindByTask]);
+  const mcPlayers = useMemo(() => players.filter((p) => kindByTask.get(p.server) !== "hytale"), [players, kindByTask]);
+  const hasHytale = useMemo(
+    () => (state?.groups ?? []).some((g) => (g.tasks ?? []).some((t) => t.softwareKind === "hytale")),
+    [state],
+  );
 
   // All running game services (Minecraft + Hytale + …) for the presence strip.
   const gameServices = useMemo(() => {
@@ -189,7 +202,58 @@ export default function PlayersPage() {
         </div>
       </div>
 
-      {/* Player list */}
+      {/* Minecraft players */}
+      <PlayerTable
+        icon={<Gamepad2 className="h-3.5 w-3.5 text-brand" />}
+        label="Minecraft players"
+        count={mcPlayers.length}
+        players={mcPlayers}
+        kicking={kicking}
+        connActive={connActive}
+        onAction={playerAction}
+        emptyHint={(metrics?.instances ?? []).every((r) => !r.reachable) ? "(no reachable Minecraft servers)" : undefined}
+      />
+
+      {/* Hytale players — shown whenever a Hytale service exists (mirrors the MC section) */}
+      {hasHytale && (
+        <div className="mt-5">
+          <PlayerTable
+            icon={<Boxes className="h-3.5 w-3.5 text-violet-400" />}
+            label="Hytale players"
+            count={hytalePlayers.length}
+            players={hytalePlayers}
+            kicking={kicking}
+            connActive={connActive}
+            onAction={playerAction}
+            emptyHint="(Hytale connector reports players here once they join)"
+          />
+        </div>
+      )}
+
+      <p className="mt-2 text-[11px] text-muted-foreground/60">{connActive ? "Live player lists via the Conduit connector — right-click a player for move/message/kick · in-game: /ct." : "Player names from Minecraft server-list-ping samples (capped at ~12 per server)."}</p>
+    </>
+  );
+}
+
+function PlayerTable({
+  icon, label, count, players, kicking, connActive, onAction, emptyHint,
+}: {
+  icon: ReactNode;
+  label: string;
+  count: number;
+  players: PlayerRow[];
+  kicking: string | null;
+  connActive: boolean;
+  onAction: (kind: "kick" | "move" | "message", p: PlayerRow, extra?: string) => void;
+  emptyHint?: string;
+}) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-2 px-0.5">
+        {icon}
+        <span className="eyebrow">{label}</span>
+        <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">{count}</span>
+      </div>
       <div className="overflow-hidden rounded-lg border border-hairline bg-panel">
         <table className="w-full text-sm">
           <thead>
@@ -219,24 +283,23 @@ export default function PlayersPage() {
                 </ContextMenuTrigger>
                 <ContextMenuContent>
                   <ContextMenuLabel>{p.name}{p.uuid ? ` · ${p.uuid.slice(0, 8)}` : ""}</ContextMenuLabel>
-                  <ContextMenuItem disabled={!connActive} onClick={() => { const t = prompt(`Move ${p.name} to which server/task?`); if (t?.trim()) playerAction("move", p, t.trim()); }}><MoveRight /> Move to…</ContextMenuItem>
-                  <ContextMenuItem disabled={!connActive} onClick={() => { const m = prompt(`Message to ${p.name}:`); if (m?.trim()) playerAction("message", p, m.trim()); }}><MessageSquare /> Message…</ContextMenuItem>
+                  <ContextMenuItem disabled={!connActive} onClick={() => { const t = prompt(`Move ${p.name} to which server/task?`); if (t?.trim()) onAction("move", p, t.trim()); }}><MoveRight /> Move to…</ContextMenuItem>
+                  <ContextMenuItem disabled={!connActive} onClick={() => { const m = prompt(`Message to ${p.name}:`); if (m?.trim()) onAction("message", p, m.trim()); }}><MessageSquare /> Message…</ContextMenuItem>
                   <ContextMenuSeparator />
-                  <ContextMenuItem variant="destructive" onClick={() => { const r = connActive ? prompt(`Kick ${p.name} — reason (optional):`) ?? "" : ""; playerAction("kick", p, r || undefined); }}><UserX /> Kick</ContextMenuItem>
+                  <ContextMenuItem variant="destructive" onClick={() => { const r = connActive ? prompt(`Kick ${p.name} — reason (optional):`) ?? "" : ""; onAction("kick", p, r || undefined); }}><UserX /> Kick</ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
             ))}
             {players.length === 0 && (
-              <tr><td colSpan={4} className="px-4 py-16 text-center text-sm text-muted-foreground">
+              <tr><td colSpan={4} className="px-4 py-12 text-center text-sm text-muted-foreground">
                 <Users className="mx-auto mb-2 h-6 w-6 opacity-40" />
                 No players online.
-                {(metrics?.instances ?? []).every((r) => !r.reachable) && <div className="mt-1 text-xs text-muted-foreground/60">(no reachable MC servers)</div>}
+                {emptyHint && <div className="mt-1 text-xs text-muted-foreground/60">{emptyHint}</div>}
               </td></tr>
             )}
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-[11px] text-muted-foreground/60">{connActive ? "Full player list via the Conduit connector — right-click a player for move/message/kick · in-game: /ct. Hytale players appear here once the Hytale connector reports them." : "Player names from Minecraft server-list-ping samples (capped at ~12 per server)."}</p>
-    </>
+    </div>
   );
 }
