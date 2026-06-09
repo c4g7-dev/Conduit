@@ -64,9 +64,35 @@ function parseTags(tags?: string): string[] {
   return (tags ?? "").split(/[;,]/).map((t) => t.trim()).filter(Boolean);
 }
 
+// Controller runtime state. CRITICAL: this lives on `global` so it is shared across Next.js
+// module instances — route handlers and the instrumentation loop can load engine.ts in SEPARATE
+// instances (see store.ts), and a module-local reconcile lock / in-flight set is NOT shared
+// between them. That let two reconciles run concurrently (e.g. a POST /api/tasks reconcile + the
+// periodic loop), each seeing have=0 for desired=1 and BOTH provisioning → an extra instance.
+// One global keeps the lock + dedup authoritative process-wide.
+type ControllerState = {
+  recent: Map<string, Map<number, number>>; // taskId -> vmid -> ts (in-flight creates)
+  provisioning: Set<number>;                // vmids whose software install is running
+  lastSpawn: Map<string, number>;           // taskId -> ts of last provision (spawn cooldown)
+  emptySince: Map<number, number>;          // vmid -> ts it first appeared empty (idle drain)
+  busy: boolean;                            // reconcile in progress (single-flight lock)
+  restores: number;                         // active restores (pause reconcile)
+};
+declare global {
+  // eslint-disable-next-line no-var
+  var __conduitController: ControllerState | undefined;
+}
+const ctl: ControllerState = global.__conduitController ??= {
+  recent: new Map(), provisioning: new Set(), lastSpawn: new Map(), emptySince: new Map(),
+  busy: false, restores: 0,
+};
+const recent = ctl.recent;
+const provisioning = ctl.provisioning;
+const lastSpawn = ctl.lastSpawn;
+const emptySince = ctl.emptySince;
+
 // Containers we just asked Proxmox to create — cluster/resources lags ~10s, so
 // remember them briefly to avoid double-provisioning on the next tick.
-const recent = new Map<string, Map<number, number>>(); // taskId -> vmid -> ts
 function noteCreate(taskId: string, vmid: number) {
   if (!recent.has(taskId)) recent.set(taskId, new Map());
   recent.get(taskId)!.set(vmid, Date.now());
@@ -86,25 +112,13 @@ function recentVmids(taskId: string): number[] {
   return [...m.keys()];
 }
 
-// Instances whose software install is currently running (takes minutes — we kick
-// it in the background and let later ticks skip it until the `ready` tag lands).
-const provisioning = new Set<number>();
-
-// Smart-autoscale timers: spawn cooldown per task, and when an instance first went empty
-// (so we only scale it down after `scaleDownAfterSec` of idle, like CloudNet's auto-stop).
-const lastSpawn = new Map<string, number>(); // taskId -> ts of last provision
-const emptySince = new Map<number, number>(); // vmid -> ts it first appeared empty
-
-let busy = false;
-
 // While a restore is in flight the target CT is stopped/replaced; pause reconcile
 // so the controller doesn't mistake it for a missing instance and spawn a duplicate.
-let restores = 0;
 export function beginRestore() {
-  restores++;
+  ctl.restores++;
 }
 export function endRestore() {
-  restores = Math.max(0, restores - 1);
+  ctl.restores = Math.max(0, ctl.restores - 1);
 }
 
 /** Install the role's MC software inside a running instance, then tag it ready. */
@@ -612,9 +626,11 @@ export async function destroyInstance(vmid: number): Promise<string | null> {
 
 /** One reconcile pass over every task. Returns a short action log. */
 export async function reconcileAll(): Promise<string[]> {
-  if (busy) return ["skip: busy"];
-  if (restores > 0) return ["skip: restore in progress"];
-  busy = true;
+  // Single-flight across the whole process (incl. separate Next module instances): the check +
+  // set has no await between them, so it's an atomic guard on JS's single thread.
+  if (ctl.busy) return ["skip: busy"];
+  if (ctl.restores > 0) return ["skip: restore in progress"];
+  ctl.busy = true;
   const log: string[] = [];
   let dirty = false;
   try {
@@ -627,7 +643,7 @@ export async function reconcileAll(): Promise<string[]> {
     // (agent unreachable → {} fallback, or a not-yet-seeded shared file), NOT an
     // intent to tear down the whole network. Acting here would GC every container.
     if (db.tasks.length === 0 && db.groups.length === 0 && all.length > 0) {
-      busy = false;
+      ctl.busy = false;
       return [`skip: empty desired state but ${all.length} live conduit instance(s) — refusing to GC (likely state-load failure)`];
     }
 
@@ -802,7 +818,7 @@ export async function reconcileAll(): Promise<string[]> {
   } catch (e) {
     log.push(`! reconcile error: ${String(e)}`);
   } finally {
-    busy = false;
+    ctl.busy = false;
   }
   recordReconcile(log); // surface acted lines in the Activity feed
   return log;
