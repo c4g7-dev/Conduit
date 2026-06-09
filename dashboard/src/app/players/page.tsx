@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
+import { useStream } from "@/hooks/use-stream";
 import { PageHeader } from "@/components/page-header";
 import { RoleDot } from "@/components/role-dot";
 import {
@@ -33,12 +34,16 @@ type Conn = { active: boolean; players: { uuid: string; name: string; server?: s
 export default function PlayersPage() {
   const { data: metrics, loading, refresh } = usePoll<Metrics>("/api/metrics", 5000);
   const { data: state } = usePoll<State>("/api/conduit/state", 10000);
-  const { data: conn } = usePoll<Conn>("/api/connector/servers", 5000);
+  // Live connector state via SSE (instant join/quit/kick/move), polling fallback.
+  const { data: conn } = useStream<Conn>("/api/stream", "/api/connector/servers", 5000);
   const [cmd, setCmd] = useState("");
   const [groupId, setGroupId] = useState("__all");
   const [busy, setBusy] = useState(false);
   const [kicking, setKicking] = useState<string | null>(null);
   const [dlg, setDlg] = useState<DialogState>(null);
+  // Optimistically hidden players (kick/move just issued) so the row disappears instantly;
+  // re-confirmed by the next stream push (cleared when the player actually leaves the list).
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
 
   const connActive = !!conn?.active;
 
@@ -78,9 +83,23 @@ export default function PlayersPage() {
   const capacity = metrics?.totals.capacity ?? 0;
   const mByVmid = useMemo(() => new Map((metrics?.instances ?? []).map((r) => [r.vmid, r])), [metrics]);
 
+  // Drop optimistically-removed players (kick) until the stream confirms; for a move the player
+  // reappears under the new server, so we only keep `removed` entries that are still present.
+  const visible = useMemo(() => players.filter((p) => !removed.has(p.name.toLowerCase())), [players, removed]);
+  useEffect(() => {
+    if (removed.size === 0) return;
+    const live = new Set(players.map((p) => `${p.name.toLowerCase()}|${p.server}`));
+    setRemoved((prev) => {
+      // keep a removal only while that exact name+server is still in the list (kick pending);
+      // once it's gone (kicked) or changed server (moved), clear it.
+      const next = new Set([...prev].filter((k) => [...live].some((l) => l.startsWith(k + "|"))));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [players, removed.size]);
+
   // Split by the connector's env ("hytale" vs MC) — reliable even if state lags.
-  const hytalePlayers = useMemo(() => players.filter((p) => p.env === "hytale"), [players]);
-  const mcPlayers = useMemo(() => players.filter((p) => p.env !== "hytale"), [players]);
+  const hytalePlayers = useMemo(() => visible.filter((p) => p.env === "hytale"), [visible]);
+  const mcPlayers = useMemo(() => visible.filter((p) => p.env !== "hytale"), [visible]);
   const hasHytale = useMemo(
     () => (conn?.servers ?? []).some((s) => s.env === "hytale")
       || (state?.groups ?? []).some((g) => (g.tasks ?? []).some((t) => t.softwareKind === "hytale")),
@@ -157,6 +176,9 @@ export default function PlayersPage() {
         throw new Error("connector required for that action");
       }
       toast.success(`${kind} → ${p.name}`);
+      // Optimistic: hide the row immediately (kick → gone; move → reappears under the new
+      // server). The SSE stream confirms within ~0.5s and clears the optimistic state.
+      if (kind === "kick" || kind === "move") setRemoved((s) => new Set(s).add(p.name.toLowerCase()));
       setTimeout(refresh, 800);
     } catch (e) {
       toast.error(String(e));
@@ -169,7 +191,7 @@ export default function PlayersPage() {
     <>
       <PageHeader
         title="Players"
-        subtitle={`${connActive ? players.length : total}/${capacity} online · ${gameServices.length} game service(s)${connActive ? " · connector live" : " · SLP (sample)"}`}
+        subtitle={`${connActive ? visible.length : total}/${capacity} online · ${gameServices.length} game service(s)${connActive ? " · live" : " · SLP (sample)"}`}
         onRefresh={refresh}
         loading={loading}
       />
