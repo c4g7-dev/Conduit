@@ -59,7 +59,12 @@ export function recordTransfer(targetServerId: string, player: string, loc: stri
   m.set(player.toLowerCase(), { player, loc, at: Date.now() });
 }
 
-/** Drain (and clear) pending coord-restores for a destination instance. */
+/** Current (non-expired) pending coord-restores for a destination instance. */
+export function pendingForServer(serverId: string): { player: string; loc: string }[] {
+  return drainPending(serverId);
+}
+
+/** Drain (non-destructively; TTL-expires only) pending coord-restores for a destination. */
 function drainPending(serverId: string): { player: string; loc: string }[] {
   const m = pending.get(serverId);
   if (!m) return [];
