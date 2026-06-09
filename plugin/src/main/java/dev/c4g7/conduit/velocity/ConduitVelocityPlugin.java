@@ -3,6 +3,7 @@ package dev.c4g7.conduit.velocity;
 import com.google.gson.JsonObject;
 import com.google.inject.Inject;
 import com.velocitypowered.api.command.SimpleCommand;
+import com.velocitypowered.api.command.RawCommand;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.LoginEvent;
@@ -64,19 +65,20 @@ public class ConduitVelocityPlugin {
             proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder(name).build(), hub);
         }
 
-        // /conduit (aliases /ct /cloud) → network control, permission-gated, with completion.
-        SimpleCommand conduit = new SimpleCommand() {
+        // /conduit (aliases /ct /cloud) → network control. RawCommand passes the whole arg
+        // line through (no Brigadier arg-tree that rejects args with "Incorrect argument").
+        RawCommand conduit = new RawCommand() {
             @Override public void execute(Invocation inv) {
                 if (!inv.source().hasPermission("conduit.admin")) {
                     inv.source().sendMessage(LEGACY.deserialize(" &b&lConduit &8» &cNo permission.")); return;
                 }
-                ConduitCommands.run(client, inv.arguments(), line -> inv.source().sendMessage(LEGACY.deserialize(line)));
+                ConduitCommands.run(client, splitArgs(inv.arguments()), line -> inv.source().sendMessage(LEGACY.deserialize(line)));
             }
             @Override public List<String> suggest(Invocation inv) {
                 if (!inv.source().hasPermission("conduit.admin")) return List.of();
                 List<String> players = proxy.getAllPlayers().stream().map(Player::getUsername).toList();
                 List<String> servers = proxy.getAllServers().stream().map(s -> s.getServerInfo().getName()).toList();
-                return ConduitCommands.complete(inv.arguments(), players, servers);
+                return ConduitCommands.complete(splitArgs(inv.arguments()), players, servers);
             }
             @Override public boolean hasPermission(Invocation inv) { return inv.source().hasPermission("conduit.admin"); }
         };
@@ -85,6 +87,13 @@ public class ConduitVelocityPlugin {
 
         proxy.getScheduler().buildTask(this, this::tick)
                 .repeat(3, TimeUnit.SECONDS).delay(2, TimeUnit.SECONDS).schedule();
+    }
+
+    /** Split a RawCommand argument line, keeping a trailing empty token (so completion knows a
+     *  new argument has started after a space). Empty line → empty array. */
+    private static String[] splitArgs(String raw) {
+        if (raw == null || raw.isEmpty()) return new String[0];
+        return raw.split(" ", -1);
     }
 
     private void tick() {
