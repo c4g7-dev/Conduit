@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
-import { Sparkline } from "@/components/sparkline";
 import { MetricsPanel } from "@/components/metrics-panel";
 import { StatusBadge } from "@/components/status-badge";
 import { RoleDot } from "@/components/role-dot";
@@ -27,8 +25,6 @@ type Overview = {
   };
 };
 type Metrics = { totals: { players: number; capacity: number; backends: number; proxies: number } };
-type Sample = { t: number; players: number; cpu: number; mem: number };
-type History = { samples: Sample[] };
 
 function StatTile({ icon: Icon, label, value, sub, loading }: {
   icon: React.ElementType; label: string; value: string; sub?: string; loading?: boolean;
@@ -49,26 +45,6 @@ function StatTile({ icon: Icon, label, value, sub, loading }: {
   );
 }
 
-function ChartCard({ label, value, series, color, max }: {
-  label: string; value: string; series: number[]; color: string; max?: number;
-}) {
-  return (
-    <div className="panel p-4">
-      <div className="flex items-center justify-between">
-        <span className="eyebrow">{label}</span>
-        <div className="text-base font-semibold tabular-nums">{value}</div>
-      </div>
-      <div className="mt-3">
-        {series.length < 2 ? (
-          <div className="flex h-12 items-center text-xs text-muted-foreground/60">Collecting data…</div>
-        ) : (
-          <Sparkline data={series} color={color} max={max} height={48} label={label} />
-        )}
-      </div>
-    </div>
-  );
-}
-
 function SectionLabel({ children, count }: { children: React.ReactNode; count?: number }) {
   return (
     <div className="mb-3 mt-7 flex items-center gap-2">
@@ -84,35 +60,10 @@ export default function OverviewPage() {
   const { data, error, loading, refresh } = usePoll<Overview>("/api/overview", 5000);
   const { data: metrics } = usePoll<Metrics & MetricsFull>("/api/metrics", 5000);
   const { data: state } = usePoll<ConduitState>("/api/conduit/state", 5000);
-  const { data: history } = usePoll<History>("/api/metrics/history", 5000);
   const t = data?.totals;
   const m = metrics?.totals;
   const first = loading && !data;
-
-  // Cluster-wide CPU + memory so the KPI tiles and the sparklines agree (the old
-  // sparklines tracked only node[0], which made "Memory" disagree with the KPI).
   const nodes = data?.nodes ?? [];
-  const clusterCpu = nodes.length ? nodes.reduce((a, n) => a + (n.cpu ?? 0), 0) / nodes.length : 0;
-  const clusterMem = t && t.memMax > 0 ? t.memUsed / t.memMax : 0;
-  const players = m?.players ?? 0;
-
-  const lastPush = useRef<string>("");
-  useEffect(() => {
-    if (!data || !metrics) return;
-    const key = `${players}|${clusterCpu.toFixed(3)}|${clusterMem.toFixed(3)}`;
-    if (key === lastPush.current) return;
-    lastPush.current = key;
-    fetch("/api/metrics/history", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ players, cpu: clusterCpu, mem: clusterMem }),
-    }).catch(() => {});
-  }, [data, metrics, players, clusterCpu, clusterMem]);
-
-  const samples = history?.samples ?? [];
-  const playerSeries = samples.map((s) => s.players);
-  const cpuSeries = samples.map((s) => s.cpu * 100);
-  const memSeries = samples.map((s) => s.mem * 100);
 
   const playerOf = new Map((metrics?.instances ?? []).map((r) => [r.vmid, r]));
   const services = (state?.groups ?? []).flatMap((g) =>
@@ -148,15 +99,9 @@ export default function OverviewPage() {
         <StatTile icon={Users} label="Players" value={m ? `${m.players}` : "0"} sub={m ? `of ${m.capacity} slots` : undefined} loading={first} />
       </div>
 
-      {/* Sparklines — all cluster-wide (live session) */}
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <ChartCard label="Players" value={`${players}`} series={playerSeries} color="#34d399" />
-        <ChartCard label="Cluster CPU" value={`${Math.round(clusterCpu * 100)}%`} series={cpuSeries} color="#f6821f" max={100} />
-        <ChartCard label="Cluster Memory" value={`${Math.round(clusterMem * 100)}%`} series={memSeries} color="#38bdf8" max={100} />
-      </div>
-
-      {/* Historical Proxmox RRD metrics with a range selector (5m/1h/24h/30d) — shows instantly */}
-      <MetricsPanel className="mt-6" />
+      {/* One unified metrics section: Players / Containers / CPU / Memory over a selectable range
+          (5m/1h/24h/30d) — Proxmox RRD for cpu/mem, sampled history for players/containers. */}
+      <MetricsPanel className="mt-4" />
 
       <SectionLabel count={services.length}>Services</SectionLabel>
 

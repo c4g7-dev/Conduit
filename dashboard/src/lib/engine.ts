@@ -30,6 +30,8 @@ import {
   type ProxyServer,
 } from "./provision";
 import { connServersByVmid } from "./metrics-source";
+import { allPlayers } from "./connector";
+import { recordMetrics } from "./metrics-history";
 import { imageFor, cloneInstance, clonePrepared, promotePrepared, PREPARED_TAG } from "./images";
 import { applyTemplate, serviceDir } from "./templates";
 import { ensureServiceShare } from "./serviceshare";
@@ -637,6 +639,12 @@ export async function reconcileAll(): Promise<string[]> {
     await loadBlueprints(); // refresh custom templates so blueprint() sees them
     const db = await getDB();
     const all = await discoverInstances();
+
+    // Sample players + live containers into the metrics history (for the ranged charts).
+    try {
+      const running = all.filter((i) => i.status === "running").length;
+      recordMetrics(allPlayers().length, running);
+    } catch { /* non-critical */ }
 
     // SAFETY: never act on a suspiciously-empty desired state while real conduit
     // instances exist. An empty store almost always means a state-load failure
