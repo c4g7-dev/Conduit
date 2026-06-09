@@ -33,6 +33,12 @@ export async function POST(req: NextRequest) {
       const config = await buildProxyConfig(String(b.task ?? ""), String(b.group ?? "")).catch(() => null);
       return NextResponse.json({ ok: true, actions, config, names });
     }
+    // Hytale has no proxy, so its own connector drains + executes actions for its players
+    // (move via referToServer / message / kick). MC backends never drain (the proxy does).
+    if (b.env === "hytale") {
+      const actions = drainActions(Number(b.ackActionId ?? 0));
+      return NextResponse.json({ ok: true, actions, names });
+    }
     // Backends: hand a sharded task's instance its strip grid + pending coord-restores.
     // Send `config: null` when not sharded so the connector clears any stale grid.
     const shard = await shardConfigForServer(String(b.id), String(b.task ?? ""), String(b.group ?? "")).catch(() => null);

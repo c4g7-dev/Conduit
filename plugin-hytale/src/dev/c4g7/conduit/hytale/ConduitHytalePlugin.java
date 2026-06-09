@@ -5,6 +5,10 @@ import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.core.event.events.player.PlayerConnectEvent;
 import com.hypixel.hytale.server.core.event.events.player.PlayerDisconnectEvent;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
+import com.hypixel.hytale.server.core.Message;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -15,18 +19,21 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Conduit connector for Hytale — the backend reporter (equivalent to the Paper connector).
- * Tracks online players via PlayerConnect/Disconnect events and POSTs register + heartbeat
- * (id/task/group + full player list with name+uuid) to the Conduit panel, so Hytale players
- * appear in the network Players view alongside Minecraft. JDK HttpClient forced to HTTP/1.1
- * (the Node panel mishandles HTTP/2 — same gotcha as the MC connector). Config via env
- * (CONDUIT_ENDPOINT/TOKEN/SERVICE_ID/TASK/GROUP), injected by Conduit at provision.
+ * Conduit connector for Hytale — backend reporter AND action executor (parity with the Paper
+ * connector). Tracks online players via PlayerConnect/Disconnect, POSTs register + heartbeat
+ * (id/task/group + full name+uuid list) so Hytale players show in the network Players view, and
+ * — since there's no Hytale proxy — executes the move/message/kick actions the panel queues for
+ * its own players (move = referToServer to another Hytale instance, message = sendMessage,
+ * kick = disconnect). JDK HttpClient forced HTTP/1.1 (Node panel mishandles HTTP/2). Gson is
+ * bundled in HytaleServer.jar. Config via env, injected by Conduit at provision.
  */
 public class ConduitHytalePlugin extends JavaPlugin {
-    private final Map<String, String> players = new ConcurrentHashMap<>(); // uuid -> username
+    private static final Gson GSON = new Gson();
+    private final Map<String, PlayerRef> players = new ConcurrentHashMap<>(); // uuid -> ref
     private final HttpClient http = HttpClient.newBuilder()
             .version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(5)).build();
     private volatile boolean running = true;
+    private volatile long ackActionId = 0;
     private String endpoint, token, id, task, group;
     private int maxPlayers;
 
@@ -44,7 +51,7 @@ public class ConduitHytalePlugin extends JavaPlugin {
         getEventRegistry().register(PlayerConnectEvent.class, (PlayerConnectEvent e) -> {
             PlayerRef r = e.getPlayerRef();
             if (r != null && r.getUuid() != null) {
-                players.put(r.getUuid().toString(), r.getUsername());
+                players.put(r.getUuid().toString(), r);
                 event("join", r.getUsername());
             }
         });
@@ -66,45 +73,97 @@ public class ConduitHytalePlugin extends JavaPlugin {
     private void heartbeatLoop() {
         while (running) {
             try {
-                post("/api/connector/heartbeat", baseJson(players.size()));
+                String resp = postForBody("/api/connector/heartbeat", baseJson(players.size()));
+                if (resp != null) handleActions(resp);
             } catch (Throwable ignored) {}
             try { Thread.sleep(3000); } catch (InterruptedException e) { break; }
         }
     }
 
-    /** Build the register/heartbeat JSON body. */
-    private String baseJson(int online) {
-        StringBuilder sb = new StringBuilder();
-        sb.append('{');
-        kv(sb, "id", id).append(',');
-        kv(sb, "task", task).append(',');
-        kv(sb, "group", group).append(',');
-        kv(sb, "env", "server").append(',');
-        sb.append("\"online\":").append(online).append(',');
-        sb.append("\"max\":").append(maxPlayers).append(',');
-        sb.append("\"players\":[");
-        boolean first = true;
-        for (Map.Entry<String, String> e : players.entrySet()) {
-            if (!first) sb.append(',');
-            first = false;
-            sb.append('{');
-            kv(sb, "uuid", e.getKey()).append(',');
-            kv(sb, "name", e.getValue());
-            sb.append('}');
+    /** Execute any queued actions targeting players on THIS server. */
+    private void handleActions(String body) {
+        try {
+            JsonObject r = GSON.fromJson(body, JsonObject.class);
+            if (r == null || !r.has("actions") || !r.get("actions").isJsonArray()) return;
+            for (var el : r.getAsJsonArray("actions")) {
+                JsonObject a = el.getAsJsonObject();
+                long aid = a.has("id") ? a.get("id").getAsLong() : 0;
+                if (aid <= ackActionId) continue;
+                execute(a);
+                if (aid > ackActionId) ackActionId = aid;
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void execute(JsonObject a) {
+        String kind = str(a, "kind");
+        PlayerRef ref = byName(str(a, "player"));
+        if (ref == null) return; // not our player — another executor (proxy/other Hytale) handles it
+        try {
+            switch (kind) {
+                case "move" -> {
+                    String target = str(a, "target");
+                    // Hytale move targets are encoded "hyt:<host>:<port>"; ignore MC targets.
+                    if (target != null && target.startsWith("hyt:")) {
+                        String[] hp = target.substring(4).split(":");
+                        if (hp.length == 2) ref.referToServer(hp[0], Integer.parseInt(hp[1]));
+                    }
+                }
+                case "message" -> ref.sendMessage(Message.raw(strip(str(a, "text"))));
+                case "broadcast" -> ref.sendMessage(Message.raw(strip(str(a, "text"))));
+                case "kick" -> {
+                    String reason = str(a, "reason");
+                    ref.getPacketHandler().disconnect(Message.raw(reason == null || reason.isEmpty() ? "Kicked" : strip(reason)));
+                }
+                default -> {}
+            }
+        } catch (Throwable t) {
+            System.out.println("[Conduit] action " + kind + " failed: " + t);
         }
-        sb.append("]}");
-        return sb.toString();
+    }
+
+    private PlayerRef byName(String name) {
+        if (name == null) return null;
+        for (PlayerRef r : players.values()) if (name.equalsIgnoreCase(r.getUsername())) return r;
+        return null;
+    }
+
+    /** Build the register/heartbeat JSON body (Gson). */
+    private String baseJson(int online) {
+        JsonObject o = new JsonObject();
+        o.addProperty("id", id);
+        o.addProperty("task", task);
+        o.addProperty("group", group);
+        o.addProperty("env", "hytale");
+        o.addProperty("online", online);
+        o.addProperty("max", maxPlayers);
+        o.addProperty("ackActionId", ackActionId);
+        com.google.gson.JsonArray arr = new com.google.gson.JsonArray();
+        for (Map.Entry<String, PlayerRef> e : players.entrySet()) {
+            JsonObject p = new JsonObject();
+            p.addProperty("uuid", e.getKey());
+            p.addProperty("name", e.getValue().getUsername());
+            arr.add(p);
+        }
+        o.add("players", arr);
+        return GSON.toJson(o);
     }
 
     private void event(String type, String player) {
         try {
-            String body = "{" + q("type") + ":" + q(type) + "," + q("player") + ":" + q(player)
-                    + "," + q("server") + ":" + q(task) + "}";
-            post("/api/connector/event", body);
+            JsonObject o = new JsonObject();
+            o.addProperty("type", type);
+            o.addProperty("player", player);
+            o.addProperty("server", task);
+            post("/api/connector/event", GSON.toJson(o));
         } catch (Throwable ignored) {}
     }
 
     private void post(String path, String json) {
+        try { postForBody(path, json); } catch (Throwable ignored) {}
+    }
+
+    private String postForBody(String path, String json) {
         try {
             HttpRequest req = HttpRequest.newBuilder(URI.create(endpoint + path))
                     .timeout(Duration.ofSeconds(6))
@@ -112,23 +171,17 @@ public class ConduitHytalePlugin extends JavaPlugin {
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(json))
                     .build();
-            http.send(req, HttpResponse.BodyHandlers.discarding());
-        } catch (Throwable ignored) {}
+            HttpResponse<String> r = http.send(req, HttpResponse.BodyHandlers.ofString());
+            return r.statusCode() == 200 ? r.body() : null;
+        } catch (Throwable t) { return null; }
     }
 
-    private static StringBuilder kv(StringBuilder sb, String k, String v) {
-        return sb.append(q(k)).append(':').append(q(v));
+    /** Strip Minecraft &/§ colour codes (Hytale renders plain text). */
+    private static String strip(String s) {
+        return s == null ? "" : s.replaceAll("[&§][0-9A-Fa-fK-Ok-orR]", "");
     }
-    private static String q(String s) {
-        if (s == null) return "\"\"";
-        StringBuilder b = new StringBuilder("\"");
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '"' || c == '\\') b.append('\\').append(c);
-            else if (c < 0x20) b.append(' ');
-            else b.append(c);
-        }
-        return b.append('"').toString();
+    private static String str(JsonObject o, String k) {
+        return (o.has(k) && !o.get(k).isJsonNull()) ? o.get(k).getAsString() : null;
     }
     private static String envOr(String k, String d) {
         String v = System.getenv(k);
