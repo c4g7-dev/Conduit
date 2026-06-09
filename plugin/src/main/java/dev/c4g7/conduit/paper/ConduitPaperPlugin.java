@@ -9,7 +9,11 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.plugin.java.JavaPlugin;
+
+import com.google.gson.JsonObject;
 
 import dev.c4g7.conduit.ConduitCommands;
 
@@ -28,6 +32,7 @@ import dev.c4g7.conduit.ConduitClient;
 public class ConduitPaperPlugin extends JavaPlugin implements Listener {
     private ConduitClient client;
     private String selfTask;
+    private ConduitSharding sharding;
 
     @Override
     public void onEnable() {
@@ -37,11 +42,23 @@ public class ConduitPaperPlugin extends JavaPlugin implements Listener {
         selfTask = ConduitClient.envOr("CONDUIT_TASK", "server");
         String group = ConduitClient.envOr("CONDUIT_GROUP", "Network");
         client = new ConduitClient(endpoint, token, id, selfTask, group, "server");
+        sharding = new ConduitSharding(this, client);
         client.register();
 
         getServer().getPluginManager().registerEvents(this, this);
         // heartbeat every 3s on the main scheduler
         getServer().getScheduler().runTaskTimer(this, this::tick, 40L, 60L);
+        // sharding: apply config + drive the boundary handoff on the main thread every 10 ticks
+        getServer().getScheduler().runTaskTimer(this, this::shardTick, 100L, 10L);
+    }
+
+    /** Main-thread sharding loop: refresh grid from the panel config, then tick each player. */
+    private void shardTick() {
+        JsonObject cfg = client.config;
+        JsonObject sh = (cfg != null && cfg.has("sharding") && cfg.get("sharding").isJsonObject())
+                ? cfg.getAsJsonObject("sharding") : null;
+        sharding.update(sh);
+        if (sharding.active()) for (Player p : Bukkit.getOnlinePlayers()) sharding.tickPlayer(p);
     }
 
     private void tick() {
@@ -84,13 +101,26 @@ public class ConduitPaperPlugin extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onJoin(PlayerJoinEvent e) {
+        sharding.onJoin(e.getPlayer());
         getServer().getScheduler().runTaskAsynchronously(this, () ->
                 client.event("join", e.getPlayer().getName(), selfTask));
     }
 
     @EventHandler
     public void onQuit(PlayerQuitEvent e) {
+        sharding.onQuit(e.getPlayer());
         getServer().getScheduler().runTaskAsynchronously(this, () ->
                 client.event("quit", e.getPlayer().getName(), selfTask));
+    }
+
+    // Seam no-build buffer: block edits near a strip boundary (the neighbour region owns them).
+    @EventHandler
+    public void onPlace(BlockPlaceEvent e) {
+        if (!sharding.mayInteract(e.getBlock().getLocation())) e.setCancelled(true);
+    }
+
+    @EventHandler
+    public void onBreak(BlockBreakEvent e) {
+        if (!sharding.mayInteract(e.getBlock().getLocation())) e.setCancelled(true);
     }
 }

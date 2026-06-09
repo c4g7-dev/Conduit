@@ -97,6 +97,8 @@ public final class ConduitClient {
                 JsonObject r = GSON.fromJson(resp.body(), JsonObject.class);
                 if (r != null && r.has("config") && r.get("config").isJsonObject()) {
                     this.config = r.getAsJsonObject("config");
+                } else if (r != null && r.has("config") && r.get("config").isJsonNull()) {
+                    this.config = null; // panel cleared it (e.g. sharding disabled)
                 }
                 if (r != null && r.has("names") && r.get("names").isJsonObject()) {
                     JsonObject n = r.getAsJsonObject("names");
@@ -141,6 +143,19 @@ public final class ConduitClient {
             if (text != null) o.addProperty("text", text);
             if (reason != null) o.addProperty("reason", reason);
             return post("/api/connector/action", o).statusCode() == 200;
+        } catch (Exception e) { return false; }
+    }
+
+    /** Report a sharding boundary cross: stage the player's coords for `targetServerId` and
+     *  ask the panel to move them to `target` (velocity server name). */
+    public boolean transfer(String player, String target, String targetServerId, String loc) {
+        try {
+            JsonObject o = new JsonObject();
+            o.addProperty("player", player);
+            o.addProperty("target", target);
+            o.addProperty("targetServerId", targetServerId);
+            o.addProperty("loc", loc);
+            return post("/api/connector/transfer", o).statusCode() == 200;
         } catch (Exception e) { return false; }
     }
 
