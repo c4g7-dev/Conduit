@@ -70,6 +70,11 @@ function noteCreate(taskId: string, vmid: number) {
   if (!recent.has(taskId)) recent.set(taskId, new Map());
   recent.get(taskId)!.set(vmid, Date.now());
 }
+/** Drop a vmid from the in-flight set — e.g. a provision that failed, so it never counts
+ *  toward `have` (a phantom pending instance inflated `have` and triggered bad scale-downs). */
+function noteForget(taskId: string, vmid: number) {
+  recent.get(taskId)?.delete(vmid);
+}
 function recentVmids(taskId: string): number[] {
   const m = recent.get(taskId);
   if (!m) return [];
@@ -440,6 +445,7 @@ async function provision(task: Task, group: Group): Promise<number> {
 
   const vmid = await api.nextVmid(VMID_FROM, VMID_TO);
   noteCreate(task.id, vmid);
+  try {
 
   const tags = [CONDUIT_TAG, taskTag(task.id), groupTag(group.id), bp.role].join(";");
   const params: Record<string, string | number> = {
@@ -478,6 +484,13 @@ async function provision(task: Task, group: Group): Promise<number> {
     ).catch((e) => console.error(`[conduitd] assets mount ${vmid} failed:`, String(e)));
   }
   return vmid;
+  } catch (e) {
+    // A failed provision must not leave a phantom in the in-flight set (it would inflate
+    // `have` and could drive an erroneous scale-down). Best-effort destroy any half-made CT.
+    noteForget(task.id, vmid);
+    await api.deleteLxc(vmid, node).catch(() => {});
+    throw e;
+  }
 }
 
 /** Keep `preparedPool` STOPPED, pre-cloned warm instances ready (golden image required). */
@@ -622,31 +635,39 @@ export async function reconcileAll(): Promise<string[]> {
           }
           lastSpawn.set(task.id, now);
         }
-      } else if (have > desired) {
-        // scale down: prefer stopped, then highest vmid; never below min.
-        // For autoscale tasks, only drain EMPTY instances, and only after they've been idle
-        // for scaleDownAfterSec (CloudNet auto-stop) — so we never kick players or flap.
-        let removable = [...live].sort(
-          (a, b) =>
-            Number(a.status === "running") - Number(b.status === "running") ||
-            b.vmid - a.vmid,
-        );
-        if (task.autoscale) {
-          const idleMs = (task.scaleDownAfterSec ?? 60) * 1000;
-          removable = removable.filter((i) => {
-            if ((players.get(i.vmid) ?? 0) !== 0) return false;
-            const since = emptySince.get(i.vmid) ?? now;
-            return now - since >= idleMs;
-          });
-        }
-        for (let i = 0; i < have - desired && removable.length; i++) {
-          const victim = removable.shift()!;
-          try {
-            await destroy(victim);
-            emptySince.delete(victim.vmid);
-            log.push(`- ${task.id}: destroyed ${victim.vmid}`);
-          } catch (e) {
-            log.push(`! ${task.id}: destroy failed ${String(e)}`);
+      } else if (live.length > desired) {
+        // Scale down is driven by the LIVE excess only — never by `have` (which includes
+        // in-flight `pending` creations); a failed/slow provision must not trigger destroys
+        // of real instances.
+        if (task.persistent) {
+          // SAFETY: persistent instances own data — the controller never auto-destroys them.
+          // Removing one is an explicit operator action (decommission/delete in the UI).
+          log.push(`= ${task.id}: ${live.length} live > desired ${desired}, persistent — NOT auto-destroying (remove manually)`);
+        } else {
+          // prefer stopped, then highest vmid; for autoscale only drain EMPTY instances idle
+          // ≥ scaleDownAfterSec (CloudNet auto-stop) so we never kick players or flap.
+          let removable = [...live].sort(
+            (a, b) =>
+              Number(a.status === "running") - Number(b.status === "running") ||
+              b.vmid - a.vmid,
+          );
+          if (task.autoscale) {
+            const idleMs = (task.scaleDownAfterSec ?? 60) * 1000;
+            removable = removable.filter((i) => {
+              if ((players.get(i.vmid) ?? 0) !== 0) return false;
+              const since = emptySince.get(i.vmid) ?? now;
+              return now - since >= idleMs;
+            });
+          }
+          for (let i = 0; i < live.length - desired && removable.length; i++) {
+            const victim = removable.shift()!;
+            try {
+              await destroy(victim);
+              emptySince.delete(victim.vmid);
+              log.push(`- ${task.id}: destroyed ${victim.vmid}`);
+            } catch (e) {
+              log.push(`! ${task.id}: destroy failed ${String(e)}`);
+            }
           }
         }
       }
