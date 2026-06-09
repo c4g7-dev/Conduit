@@ -38,7 +38,11 @@ declare global {
   // eslint-disable-next-line no-var
   var __conduitConnector: Registry | undefined;
 }
-if (!global.__conduitConnector) global.__conduitConnector = { servers: new Map(), actions: [], seq: 0 };
+// Seed the action sequence from the wall clock (ms). Action ids must stay MONOTONIC across panel
+// restarts: the proxy plugin persists the last id it ran (ackActionId) and only executes actions
+// with a higher id. A counter that reset to 0 on restart produced ids below the proxy's stale ack,
+// so every new action was silently dropped — Date.now() always exceeds any prior run's ids.
+if (!global.__conduitConnector) global.__conduitConnector = { servers: new Map(), actions: [], seq: Date.now() };
 const reg = global.__conduitConnector;
 
 const STALE_MS = 30_000; // a server unseen this long is considered offline
@@ -99,7 +103,10 @@ export function queueAction(a: ConnActionInput): number {
   return id;
 }
 
-/** Drain actions newer than `sinceId` (the plugin tracks the last id it ran). */
+/** Drain actions newer than `sinceId` (the plugin tracks the last id it ran). Self-heals a
+ *  sequence behind a proxy's persisted ack (after a panel restart / clock skew): bump our seq
+ *  past the reported ack so subsequently-queued actions always exceed it and get delivered. */
 export function drainActions(sinceId = 0): ConnAction[] {
+  if (sinceId > reg.seq) reg.seq = sinceId;
   return reg.actions.filter((a) => a.id > sinceId);
 }
