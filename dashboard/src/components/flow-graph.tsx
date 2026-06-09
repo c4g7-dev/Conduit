@@ -55,13 +55,20 @@ export type Metrics = {
 /* ------------------------------- geometry -------------------------------- */
 
 const W = 1200;
-const H = 760;
 
 const COL = {
   players: 150,
   proxy: 470,
   backend: 880,
 };
+
+/** Vertical room per row + padding, clamped — keeps the graph tight (few nodes) and
+ * readable (many nodes) instead of locking to a fixed tall aspect that gets clipped. */
+const ROW_H = 116;
+const V_PAD = 150;
+function graphHeight(rows: number): number {
+  return Math.max(380, Math.min(1400, rows * ROW_H + V_PAD));
+}
 
 type Node = {
   key: string;
@@ -132,7 +139,7 @@ export function FlowGraph({
   }, [state]);
 
   /* ---- build proxy nodes from routing ---- */
-  const { nodes, links, totalPlayers, samplePlayers } = useMemo(() => {
+  const { nodes, links, totalPlayers, samplePlayers, H } = useMemo(() => {
     const routing = state?.routing ?? [];
 
     // backends are addressed by their task; collect every backend instance once,
@@ -151,10 +158,21 @@ export function FlowGraph({
     for (const g of state?.groups ?? [])
       for (const t of g.tasks) for (const i of t.instances) instByVmid.set(i.vmid, i);
 
+    // pre-collect distinct backends so we can size the canvas to the busier column.
+    for (const r of routing)
+      for (const b of r.backends)
+        if (!backendMap.has(b.vmid)) {
+          const inst = instByVmid.get(b.vmid);
+          backendMap.set(b.vmid, { vmid: b.vmid, name: b.name, role: b.role, pnode: inst?.node ?? "—", ip: b.ip });
+        }
+
+    const proxyCount = Math.max(1, routing.length);
+    const bn = Math.max(1, backendMap.size);
+    const H = graphHeight(Math.max(proxyCount, bn));
+
     const proxyNodes: Node[] = [];
     const linkList: Link[] = [];
 
-    const proxyCount = Math.max(1, routing.length);
     routing.forEach((r, pi) => {
       const accent = ROLE_ACCENT.proxy;
       const online = r.proxyInstances.reduce(
@@ -186,25 +204,10 @@ export function FlowGraph({
         reachable,
         accent,
       });
-
-      // register backends fronted by this proxy
-      for (const b of r.backends) {
-        if (!backendMap.has(b.vmid)) {
-          const inst = instByVmid.get(b.vmid);
-          backendMap.set(b.vmid, {
-            vmid: b.vmid,
-            name: b.name,
-            role: b.role,
-            pnode: inst?.node ?? "—",
-            ip: b.ip,
-          });
-        }
-      }
     });
 
     // lay out backends in a column, grouped loosely by appearance order
     const backendArr = [...backendMap.values()];
-    const bn = Math.max(1, backendArr.length);
     const backendNodes: Node[] = backendArr.map((b, bi) => {
       const m = mByVmid.get(b.vmid);
       const accent = ROLE_ACCENT[b.role] ?? ROLE_ACCENT.generic;
@@ -274,6 +277,7 @@ export function FlowGraph({
       links: linkList,
       totalPlayers: metrics?.totals.players ?? total,
       samplePlayers: names,
+      H,
     };
   }, [state, metrics, mByVmid]);
 
@@ -296,6 +300,7 @@ export function FlowGraph({
     canvas.height = H * dpr;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const Hc = H;
 
     let last = performance.now();
 
@@ -303,7 +308,7 @@ export function FlowGraph({
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, W, H);
+      ctx.clearRect(0, 0, W, Hc);
 
       for (const link of linksRef.current) {
         const path = pathRefs.current.get(link.key);
@@ -341,7 +346,7 @@ export function FlowGraph({
     };
     rafRef.current = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafRef.current);
-  }, []);
+  }, [H]);
 
   /* player cluster dots (stable jittered positions) */
   const playerDots = useMemo(() => {
@@ -360,7 +365,7 @@ export function FlowGraph({
       });
     }
     return dots;
-  }, [totalPlayers, samplePlayers]);
+  }, [totalPlayers, samplePlayers, H]);
 
   /* ------------------------------- render -------------------------------- */
 

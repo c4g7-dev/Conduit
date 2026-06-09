@@ -683,9 +683,9 @@ function RoutingTab({ proxy, candidates, busy, onSetFronts, state, metrics }: {
 
       <div className="panel overflow-hidden">
         <div className="border-b border-hairline px-4 py-2.5"><div className="eyebrow">Live topology</div></div>
-        <div className="h-[340px]">
-          <FlowGraph state={state} metrics={metrics} />
-        </div>
+        {/* No fixed height — the graph sizes to its content (height scales with node
+            count) so every route stays visible at any screen width, never clipped. */}
+        <FlowGraph state={state} metrics={metrics} />
       </div>
     </div>
   );
