@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -7,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { NewTemplateDialog } from "@/components/new-template-dialog";
 import { DeployEggDialog } from "@/components/deploy-egg-dialog";
+import { EggDetailDialog } from "@/components/egg-detail-dialog";
 import { AssetsSection } from "@/components/assets-section";
 import { RoleDot, roleColor } from "@/components/role-dot";
 import { bytes, pct } from "@/lib/format";
@@ -14,13 +16,16 @@ import { cn } from "@/lib/utils";
 import {
   HardDrive, LayoutTemplate, Trash2, Cpu, MemoryStick,
   Cable, Gamepad2, Server, Database, Box,
-  Infinity as InfinityIcon, Pin, Zap,
+  Infinity as InfinityIcon, Pin, Zap, Info,
 } from "lucide-react";
 
 type Blueprint = {
-  id: string; name: string; role: string; mode: string;
-  cores: number; memory: number; disk: number; port: number;
-  description: string; software: { kind: string; version: string };
+  id: string; name: string; role: string; mode: string; persistent?: boolean;
+  base?: string; cores: number; memory: number; disk: number; port: number;
+  description: string; longDescription?: string;
+  software: { kind: string; version: string };
+  sharedAssets?: boolean; seed?: unknown;
+  custom?: { packages?: string; assets?: { url: string; dest: string }[]; installScript?: string; startCommand?: string };
 };
 type Data = {
   templates: { volid: string; file: string; os: string; size: number; format: string }[];
@@ -49,6 +54,7 @@ export default function TemplatesPage() {
   const { data: imgs, refresh: refreshImgs } = usePoll<{ images: Img[] }>("/api/images", 6000);
   const builtin = new Set(bps?.builtin ?? []);
   const CLONEABLE = new Set(["paper", "velocity", "nginx"]);
+  const [detail, setDetail] = useState<Blueprint | null>(null);
 
   async function buildImage(eggId: string) {
     await fetch("/api/images/build", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ eggId }) });
@@ -94,13 +100,18 @@ export default function TemplatesPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <div className="truncate font-semibold">{b.name}</div>
-                    {isBuiltin ? (
-                      <span className="shrink-0 rounded bg-accent px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">built-in</span>
-                    ) : (
-                      <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0 text-destructive/50 hover:bg-destructive/10 hover:text-destructive" onClick={() => delTemplate(b.id)} title="Delete">
-                        <Trash2 className="h-3 w-3" />
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground/50 hover:bg-accent hover:text-foreground" onClick={() => setDetail(b)} title="Details">
+                        <Info className="h-3.5 w-3.5" />
                       </Button>
-                    )}
+                      {isBuiltin ? (
+                        <span className="rounded bg-accent px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">built-in</span>
+                      ) : (
+                        <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive/50 hover:bg-destructive/10 hover:text-destructive" onClick={() => delTemplate(b.id)} title="Delete">
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                     <RoleDot role={b.role} label />
@@ -110,9 +121,11 @@ export default function TemplatesPage() {
                 </div>
               </div>
 
-              {/* Description */}
+              {/* Description — click to open the full detail view */}
               {b.description && (
-                <p className="line-clamp-2 px-4 text-[12px] leading-relaxed text-muted-foreground/80">{b.description}</p>
+                <button onClick={() => setDetail(b)} className="px-4 text-left">
+                  <span className="line-clamp-2 text-[12px] leading-relaxed text-muted-foreground/80 transition-colors hover:text-muted-foreground">{b.description}</span>
+                </button>
               )}
 
               {/* Spec strip */}
@@ -213,6 +226,8 @@ export default function TemplatesPage() {
           </tbody>
         </table>
       </div>
+
+      {detail && <EggDetailDialog egg={detail} open={!!detail} onOpenChange={(o) => !o && setDetail(null)} />}
     </>
   );
 }
