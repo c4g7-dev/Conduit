@@ -28,6 +28,8 @@ import {
   Minus,
   Trash2,
   Wrench,
+  Settings2,
+  Layers,
   Infinity as InfinityIcon,
   Terminal,
   FolderOpen,
@@ -79,6 +81,7 @@ export default function ServersPage() {
   );
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editGroup, setEditGroup] = useState<Group | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -101,10 +104,16 @@ export default function ServersPage() {
   async function scale(task: Task, delta: number) {
     set(task.id, true);
     try {
+      // Manual scale-up on a static task should raise its cap too, so `desired` isn't
+      // clamped back down by the engine (a static min=1/max=1 task could never grow otherwise).
+      const body: Record<string, number> = { delta };
+      if (!task.autoscale && delta > 0 && task.max > 0 && task.desired + delta > task.max) {
+        body.max = task.desired + delta;
+      }
       const res = await fetch(`/api/tasks/${task.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ delta }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error);
@@ -251,6 +260,9 @@ export default function ServersPage() {
                       </ContextMenuTrigger>
                       <ContextMenuContent>
                         <ContextMenuLabel>{group.name}</ContextMenuLabel>
+                        <ContextMenuItem onClick={() => setEditGroup(group)}>
+                          <Settings2 /> Settings (name · slots · maintenance)
+                        </ContextMenuItem>
                         <ContextMenuItem onClick={() => toggleMaintenance(group, !group.maintenance)}>
                           <Wrench /> {group.maintenance ? "Disable maintenance" : "Enable maintenance"}
                         </ContextMenuItem>
@@ -281,6 +293,12 @@ export default function ServersPage() {
                               >
                                 <RoleDot role={task.role} />
                                 <span className="flex-1 truncate">{task.name}</span>
+                                {!task.persistent && (
+                                  <span title="Ephemeral — instances are created from the template and discarded on scale-down (no persistent data)."
+                                    className="flex items-center gap-0.5 rounded bg-brand/10 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-brand/80">
+                                    <Layers className="h-2.5 w-2.5" /> temp
+                                  </span>
+                                )}
                                 <span
                                   className={cn(
                                     "tabular-nums text-[11px]",
@@ -382,6 +400,16 @@ export default function ServersPage() {
           </div>
         </div>
       )}
+
+      {editGroup && (
+        <EditGroupDialog
+          group={editGroup}
+          open={!!editGroup}
+          onOpenChange={(o) => { if (!o) setEditGroup(null); }}
+          showTrigger={false}
+          onSaved={() => { setEditGroup(null); refresh(); }}
+        />
+      )}
     </>
   );
 }
@@ -471,7 +499,7 @@ function OverviewTab({ task, metrics, busy, onScale }: { task: Task; metrics: Ma
               <div className="flex items-center gap-1">
                 <button className="flex h-7 w-7 items-center justify-center rounded border border-hairline text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30" disabled={busy || task.desired <= task.min} onClick={() => onScale(task, -1)}><Minus className="h-3.5 w-3.5" /></button>
                 <span className="w-7 text-center text-sm font-semibold tabular-nums">{task.desired}</span>
-                <button className="flex h-7 w-7 items-center justify-center rounded border border-hairline text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30" disabled={busy || (task.max > 0 && task.desired >= task.max)} onClick={() => onScale(task, +1)}><Plus className="h-3.5 w-3.5" /></button>
+                <button className="flex h-7 w-7 items-center justify-center rounded border border-hairline text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30" disabled={busy} onClick={() => onScale(task, +1)}><Plus className="h-3.5 w-3.5" /></button>
               </div>
             )}
           </div>
