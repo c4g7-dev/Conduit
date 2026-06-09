@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { cn } from "@/lib/utils";
-import { Globe2, Loader2, Map as MapIcon, Info } from "lucide-react";
+import { Globe2, Loader2, Map as MapIcon, Info, Plus } from "lucide-react";
 
 type Strip = { min: number; max: number };
 type Region = {
@@ -24,13 +24,39 @@ type Resp = { sharding: Sharding | null; grid: Grid | null };
 const BAND = ["#38bdf8", "#34d399", "#fb923c", "#a78bfa", "#f472b6", "#facc15", "#22d3ee", "#f87171"];
 const fmt = (n: number) => Math.abs(n) >= 1000 ? `${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}k` : `${n}`;
 
-export function ShardingPanel({ taskId, instanceCount }: { taskId: string; instanceCount: number }) {
+export function ShardingPanel({ taskId, instanceCount, taskMax }: { taskId: string; instanceCount: number; taskMax: number }) {
   const { data, refresh } = usePoll<Resp>(`/api/tasks/${taskId}/sharding`, 5000);
   const [saving, setSaving] = useState(false);
+  const [adding, setAdding] = useState(false);
   // local editable draft (seeded from server, only while not focused-saving)
   const cfg = data?.sharding ?? { enabled: false, world: "world", stripWidth: 5000, splitEnd: true, borderCancelRange: 30 };
   const [draft, setDraft] = useState<Sharding | null>(null);
   const s = draft ?? cfg;
+
+  // capped when max>0 and we've reached it (raise the task's max to add more regions).
+  const atCap = taskMax > 0 && (data?.grid?.regions.length ?? instanceCount) >= taskMax;
+
+  // "+" on the region map: add another region. Strips re-tile (auto east/west by instance order),
+  // so we bump desired by one (raising max if needed so the clamp doesn't swallow it).
+  async function addRegion() {
+    setAdding(true);
+    try {
+      const have = data?.grid?.regions.length ?? instanceCount;
+      const body: Record<string, number> = { delta: 1 };
+      if (taskMax > 0 && have + 1 > taskMax) body.max = have + 1;
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const j = await res.json();
+      if (j.error) throw new Error(j.error);
+      toast.success("Adding a region — it'll join the world once provisioned");
+      setTimeout(refresh, 600);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setAdding(false);
+    }
+  }
 
   async function save(next: Partial<Sharding>) {
     const merged = { ...s, ...next };
@@ -120,7 +146,7 @@ export function ShardingPanel({ taskId, instanceCount }: { taskId: string; insta
                   : "Waiting for instances to report (connector)…"}
               </div>
             ) : (
-              <RegionMap grid={data.grid} />
+              <RegionMap grid={data.grid} addRegion={addRegion} adding={adding} atCap={atCap} />
             )}
           </div>
         </div>
@@ -140,7 +166,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 /** Top-down strip map: the overworld border span split into per-instance colored bands. */
-function RegionMap({ grid }: { grid: Grid }) {
+function RegionMap({ grid, addRegion, adding, atCap }: { grid: Grid; addRegion?: () => void; adding: boolean; atCap: boolean }) {
   const centerWorld = grid.center.x * 8;
   const half = grid.border.world / 2;
   const left = centerWorld - half;
@@ -160,27 +186,54 @@ function RegionMap({ grid }: { grid: Grid }) {
 
   const totalOnline = grid.regions.reduce((n, r) => n + r.online, 0);
 
+  // Interior boundaries between adjacent strips (the X handed off to the neighbour). Each is a
+  // labelled marker + an add-region affordance. Outer edges get a "+" too.
+  const boundaries = bands.slice(1).map((b) => ({ x: b.lo, pct: ((b.lo - left) / span) * 100 }));
+
   return (
     <div>
       {/* the band */}
-      <div className="relative h-24 w-full overflow-hidden rounded-lg border border-hairline bg-[#0a0c10]">
-        {bands.map((b) => (
-          <div key={b.r.serverId} className="absolute top-0 flex h-full flex-col items-center justify-center overflow-hidden border-r border-black/40 text-center"
-            style={{ left: `${b.pct}%`, width: `${b.w}%`, background: `${BAND[b.i % BAND.length]}22` }}>
-            <span className="absolute inset-x-0 top-0 h-0.5" style={{ background: BAND[b.i % BAND.length] }} />
-            <span className="truncate px-1 text-[11px] font-semibold" style={{ color: BAND[b.i % BAND.length] }}>{b.r.name.replace(/^network-/, "")}</span>
-            <span className="text-[10px] tabular-nums text-slate-300">{fmt(b.lo)} … {fmt(b.hi)}</span>
-            <span className="mt-0.5 flex items-center gap-1 text-[10px] tabular-nums">
-              <span className={cn("h-1.5 w-1.5 rounded-full", b.r.reachable ? "bg-emerald-400" : "bg-slate-600")} />
-              <span className="text-emerald-300">{b.r.online}</span><span className="text-slate-500">/{b.r.max}</span>
-            </span>
+      <div className="relative h-28 w-full overflow-visible rounded-lg border border-hairline bg-[#0a0c10]">
+        <div className="absolute inset-0 overflow-hidden rounded-lg">
+          {bands.map((b) => (
+            <div key={b.r.serverId} className="absolute top-0 flex h-full flex-col items-center justify-center overflow-hidden border-r border-black/40 text-center"
+              style={{ left: `${b.pct}%`, width: `${b.w}%`, background: `${BAND[b.i % BAND.length]}22` }}>
+              <span className="absolute inset-x-0 top-0 h-0.5" style={{ background: BAND[b.i % BAND.length] }} />
+              <span className="truncate px-1 text-[11px] font-semibold" style={{ color: BAND[b.i % BAND.length] }}>{b.r.name.replace(/^network-/, "")}</span>
+              <span className="text-[10px] tabular-nums text-slate-300">{fmt(b.lo)} … {fmt(b.hi)}</span>
+              <span className="mt-0.5 flex items-center gap-1 text-[10px] tabular-nums">
+                <span className={cn("h-1.5 w-1.5 rounded-full", b.r.reachable ? "bg-emerald-400" : "bg-slate-600")} />
+                <span className="text-emerald-300">{b.r.online}</span><span className="text-slate-500">/{b.r.max}</span>
+              </span>
+            </div>
+          ))}
+          {/* center line */}
+          <div className="absolute top-0 h-full w-px bg-white/30" style={{ left: `${((centerWorld - left) / span) * 100}%` }} />
+        </div>
+
+        {/* boundary X coordinate labels (the handoff seam between regions) */}
+        {boundaries.map((bd, i) => (
+          <div key={i} className="pointer-events-none absolute -top-px z-10" style={{ left: `${bd.pct}%`, transform: "translateX(-50%)" }}>
+            <span className="rounded-b bg-white/10 px-1 text-[9px] tabular-nums text-slate-200">x {fmt(bd.x)}</span>
           </div>
         ))}
-        {/* center line */}
-        <div className="absolute top-0 h-full w-px bg-white/30" style={{ left: `${((centerWorld - left) / span) * 100}%` }} />
+
+        {/* "+" add-region affordances: each strip boundary + the two outer edges. Adding a
+            region re-tiles the strips (they auto-arrange east/west by instance order). */}
+        {addRegion && [
+          { key: "edgeL", pct: 0, tip: "Add region (west edge)" },
+          ...boundaries.map((bd, i) => ({ key: `b${i}`, pct: bd.pct, tip: `Add region at x ${fmt(bd.x)}` })),
+          { key: "edgeR", pct: 100, tip: "Add region (east edge)" },
+        ].map((m) => (
+          <button key={m.key} title={m.tip} disabled={atCap || adding} onClick={addRegion}
+            className="absolute bottom-0 z-20 flex h-5 w-5 -translate-x-1/2 translate-y-1/2 items-center justify-center rounded-full border border-hairline bg-panel text-brand shadow transition-colors hover:bg-brand hover:text-brand-foreground disabled:cursor-not-allowed disabled:opacity-30"
+            style={{ left: `${m.pct}%` }}>
+            {adding ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+          </button>
+        ))}
       </div>
       {/* ruler */}
-      <div className="mt-1 flex justify-between text-[10px] tabular-nums text-muted-foreground/60">
+      <div className="mt-2 flex justify-between text-[10px] tabular-nums text-muted-foreground/60">
         <span>{fmt(left)}</span>
         <span>center {fmt(centerWorld)}</span>
         <span>{fmt(right)}</span>
@@ -191,6 +244,7 @@ function RegionMap({ grid }: { grid: Grid }) {
         <span>strip <span className="font-medium tabular-nums text-foreground">{fmt(grid.tol * 8)}</span> (overworld)</span>
         <span><span className="font-medium tabular-nums text-foreground">{totalOnline}</span> online</span>
         {grid.splitEnd && <span className="text-muted-foreground/70">End sharded</span>}
+        {atCap && <span className="text-amber-400/80">at max — raise the task max to add more</span>}
       </div>
     </div>
   );

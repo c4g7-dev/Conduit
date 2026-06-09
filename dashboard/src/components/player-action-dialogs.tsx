@@ -12,12 +12,17 @@ const MC_COLORS: Record<string, string> = {
   "5": "#AA00AA", "6": "#FFAA00", "7": "#AAAAAA", "8": "#555555", "9": "#5555FF",
   a: "#55FF55", b: "#55FFFF", c: "#FF5555", d: "#FF55FF", e: "#FFFF55", f: "#FFFFFF",
 };
-const FORMATS: { code: string; label: string }[] = [
+// Format codes offered per platform. MC = full legacy set; Hytale = its native model
+// (colour + bold + italic + monospace, no underline/strike/obfuscate). `&p` = monospace (Hytale).
+const MC_FORMATS = [
   { code: "l", label: "Bold" }, { code: "o", label: "Italic" }, { code: "n", label: "Underline" },
   { code: "m", label: "Strike" }, { code: "r", label: "Reset" },
 ];
+const HYTALE_FORMATS = [
+  { code: "l", label: "Bold" }, { code: "o", label: "Italic" }, { code: "p", label: "Mono" }, { code: "r", label: "Reset" },
+];
 
-type Run = { text: string; color?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean };
+type Run = { text: string; color?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; mono?: boolean };
 function parseLegacy(s: string): Run[] {
   const runs: Run[] = [];
   let cur: Run = { text: "" };
@@ -26,11 +31,12 @@ function parseLegacy(s: string): Run[] {
     const c = s[i];
     if ((c === "&" || c === "§") && i + 1 < s.length) {
       const code = s[i + 1].toLowerCase();
-      if (MC_COLORS[code]) { push(); cur = { text: "", color: MC_COLORS[code] }; i++; continue; }
+      if (MC_COLORS[code]) { push(); cur = { text: "", color: MC_COLORS[code] }; i++; continue; } // colour resets format
       if (code === "l") { push(); cur = { ...cur, text: "", bold: true }; i++; continue; }
       if (code === "o") { push(); cur = { ...cur, text: "", italic: true }; i++; continue; }
       if (code === "n") { push(); cur = { ...cur, text: "", underline: true }; i++; continue; }
       if (code === "m") { push(); cur = { ...cur, text: "", strike: true }; i++; continue; }
+      if (code === "p") { push(); cur = { ...cur, text: "", mono: true }; i++; continue; }
       if (code === "r") { push(); cur = { text: "" }; i++; continue; }
     }
     cur.text += c;
@@ -48,6 +54,7 @@ function Preview({ value }: { value: string }) {
           color: r.color ?? "#FFFFFF",
           fontWeight: r.bold ? 700 : 400,
           fontStyle: r.italic ? "italic" : "normal",
+          fontFamily: r.mono ? "ui-monospace, monospace" : undefined,
           textDecoration: [r.underline && "underline", r.strike && "line-through"].filter(Boolean).join(" ") || "none",
         }}>{r.text}</span>
       ))}
@@ -57,14 +64,19 @@ function Preview({ value }: { value: string }) {
 
 /* ---- message composer (styled, with live preview) ------------------------------------- */
 
-export function MessageDialog({ open, onOpenChange, target, hint, onSend }: {
-  open: boolean; onOpenChange: (o: boolean) => void; target: string; hint?: string;
+export function MessageDialog({ open, onOpenChange, target, platform, onSend }: {
+  open: boolean; onOpenChange: (o: boolean) => void; target: string;
+  platform: "minecraft" | "hytale";
   onSend: (text: string) => Promise<void>;
 }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { if (open) setText(""); }, [open]);
+  const formats = platform === "hytale" ? HYTALE_FORMATS : MC_FORMATS;
+  const hint = platform === "hytale"
+    ? "Hytale-native styling — colour, bold, italic, mono. Rendered with Hytale's own formatting."
+    : "Minecraft & colour/format codes, rendered styled in chat.";
 
   function insert(code: string) {
     const el = ref.current;
@@ -84,9 +96,9 @@ export function MessageDialog({ open, onOpenChange, target, hint, onSend }: {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
-        <DialogHeader><DialogTitle>Message {target}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Message {target} <span className="ml-1 text-[11px] font-normal uppercase tracking-wide text-muted-foreground/60">{platform}</span></DialogTitle></DialogHeader>
         <div className="space-y-3">
-          {hint && <p className="text-[12px] text-muted-foreground">{hint}</p>}
+          <p className="text-[12px] text-muted-foreground">{hint}</p>
           {/* colour swatches */}
           <div className="flex flex-wrap gap-1">
             {Object.entries(MC_COLORS).map(([code, hex]) => (
@@ -94,7 +106,7 @@ export function MessageDialog({ open, onOpenChange, target, hint, onSend }: {
                 className="h-6 w-6 rounded border border-white/10 transition-transform hover:scale-110"
                 style={{ background: hex }} />
             ))}
-            {FORMATS.map((f) => (
+            {formats.map((f) => (
               <button key={f.code} title={`&${f.code} — ${f.label}`} onClick={() => insert(f.code)}
                 className="h-6 rounded border border-hairline bg-accent/40 px-2 text-[11px] font-medium hover:bg-accent">
                 &{f.code}

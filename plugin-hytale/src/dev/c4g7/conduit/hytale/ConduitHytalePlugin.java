@@ -109,11 +109,11 @@ public class ConduitHytalePlugin extends JavaPlugin {
                         if (hp.length == 2) ref.referToServer(hp[0], Integer.parseInt(hp[1]));
                     }
                 }
-                case "message" -> ref.sendMessage(Message.raw(strip(str(a, "text"))));
-                case "broadcast" -> ref.sendMessage(Message.raw(strip(str(a, "text"))));
+                case "message" -> ref.sendMessage(styled(str(a, "text")));
+                case "broadcast" -> ref.sendMessage(styled(str(a, "text")));
                 case "kick" -> {
                     String reason = str(a, "reason");
-                    ref.getPacketHandler().disconnect(Message.raw(reason == null || reason.isEmpty() ? "Kicked" : strip(reason)));
+                    ref.getPacketHandler().disconnect(reason == null || reason.isEmpty() ? Message.raw("Kicked") : styled(reason));
                 }
                 default -> {}
             }
@@ -176,9 +176,53 @@ public class ConduitHytalePlugin extends JavaPlugin {
         } catch (Throwable t) { return null; }
     }
 
-    /** Strip Minecraft &/§ colour codes (Hytale renders plain text). */
-    private static String strip(String s) {
-        return s == null ? "" : s.replaceAll("[&§][0-9A-Fa-fK-Ok-orR]", "");
+    // MC legacy colour code → hex (Hytale Message.color takes a hex string).
+    private static final Map<Character, String> COLORS = Map.ofEntries(
+            Map.entry('0', "#000000"), Map.entry('1', "#0000AA"), Map.entry('2', "#00AA00"),
+            Map.entry('3', "#00AAAA"), Map.entry('4', "#AA0000"), Map.entry('5', "#AA00AA"),
+            Map.entry('6', "#FFAA00"), Map.entry('7', "#AAAAAA"), Map.entry('8', "#555555"),
+            Map.entry('9', "#5555FF"), Map.entry('a', "#55FF55"), Map.entry('b', "#55FFFF"),
+            Map.entry('c', "#FF5555"), Map.entry('d', "#FF55FF"), Map.entry('e', "#FFFF55"),
+            Map.entry('f', "#FFFFFF"));
+
+    /**
+     * Parse Minecraft-style &/§ codes into a styled Hytale Message — colour (&0-&f), bold (&l),
+     * italic (&o), monospace (&p), reset (&r). Each run becomes a Message segment with the
+     * active styles applied, and segments are joined. Plain text (no codes) → Message.raw.
+     */
+    private static Message styled(String s) {
+        if (s == null || s.isEmpty()) return Message.raw("");
+        java.util.List<Message> parts = new java.util.ArrayList<>();
+        StringBuilder buf = new StringBuilder();
+        String color = null; boolean bold = false, italic = false, mono = false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if ((c == '&' || c == '§') && i + 1 < s.length()) {
+                char code = Character.toLowerCase(s.charAt(i + 1));
+                boolean handled = true;
+                if (buf.length() > 0) { parts.add(segment(buf.toString(), color, bold, italic, mono)); buf.setLength(0); }
+                if (COLORS.containsKey(code)) color = COLORS.get(code);
+                else if (code == 'l') bold = true;
+                else if (code == 'o') italic = true;
+                else if (code == 'p') mono = true;
+                else if (code == 'r') { color = null; bold = italic = mono = false; }
+                else handled = false;
+                if (handled) { i++; continue; }
+                buf.append(c);
+            } else buf.append(c);
+        }
+        if (buf.length() > 0) parts.add(segment(buf.toString(), color, bold, italic, mono));
+        if (parts.isEmpty()) return Message.raw("");
+        return parts.size() == 1 ? parts.get(0) : Message.join(parts.toArray(new Message[0]));
+    }
+
+    private static Message segment(String text, String color, boolean bold, boolean italic, boolean mono) {
+        Message m = Message.raw(text);
+        if (color != null) m = m.color(color);
+        if (bold) m = m.bold(true);
+        if (italic) m = m.italic(true);
+        if (mono) m = m.monospace(true);
+        return m;
     }
     private static String str(JsonObject o, String k) {
         return (o.has(k) && !o.get(k).isJsonNull()) ? o.get(k).getAsString() : null;

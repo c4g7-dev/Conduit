@@ -240,7 +240,7 @@ export default function PlayersPage() {
       {/* player-action dialogs (styled message, compatible-service move picker, kick) */}
       {dlg?.kind === "message" && (
         <MessageDialog open onOpenChange={(o) => !o && setDlg(null)} target={dlg.player.name}
-          hint="Supports & colour/format codes. Minecraft renders them styled; Hytale shows plain text."
+          platform={kindByTask.get(dlg.player.server) === "hytale" ? "hytale" : "minecraft"}
           onSend={(text) => playerAction("message", dlg.player, text)} />
       )}
       {dlg?.kind === "move" && (
