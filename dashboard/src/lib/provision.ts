@@ -614,6 +614,65 @@ export async function installNginx(vmid: number, host?: string): Promise<void> {
   await ctExec(vmid, nginxScript(), 240_000, host);
 }
 
+/* ---- Redis (player-data sync store) -------------------------------------- */
+
+function redisScript(password: string): string {
+  // Standalone master at install; the controller wires replication afterward (replicaof).
+  // requirepass + masterauth use the network-derived password; allkeys-lru since this is a
+  // short-TTL handoff cache, not a system of record. tmux gives the Console tab a shell.
+  const shellUnit = `[Unit]
+Description=Conduit redis shell (tmux)
+After=network-online.target
+[Service]
+Type=forking
+WorkingDirectory=/opt
+ExecStart=/usr/bin/tmux -L mc new-session -d -s mc -x 220 -y 50
+ExecStop=/usr/bin/tmux -L mc kill-session -t mc
+RemainAfterExit=yes
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target`;
+  return `set -e
+if [ -f /opt/.conduit-ready ]; then echo already-provisioned; exit 0; fi
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq || true
+apt-get install -y -qq redis-server tmux >/dev/null
+CONF=/etc/redis/redis.conf
+sed -i 's/^bind .*/bind 0.0.0.0 -::1/' "$CONF"
+sed -i 's/^protected-mode .*/protected-mode no/' "$CONF"
+sed -i 's/^# *requirepass .*/requirepass ${password}/' "$CONF"
+grep -q '^requirepass ' "$CONF" || echo 'requirepass ${password}' >> "$CONF"
+grep -q '^masterauth ' "$CONF" || echo 'masterauth ${password}' >> "$CONF"
+sed -i 's/^appendonly .*/appendonly yes/' "$CONF"
+grep -q '^maxmemory-policy ' "$CONF" || echo 'maxmemory-policy allkeys-lru' >> "$CONF"
+mkdir -p /opt
+cat > /etc/systemd/system/mc.service <<'UNIT'
+${shellUnit}
+UNIT
+systemctl daemon-reload
+systemctl enable redis-server >/dev/null 2>&1 || true
+systemctl restart redis-server
+systemctl enable mc >/dev/null 2>&1 || true; systemctl restart mc || true
+touch /opt/.conduit-ready
+echo CONDUIT_PROVISIONED_REDIS
+`;
+}
+
+export async function installRedis(vmid: number, password: string, host?: string): Promise<void> {
+  await ctExec(vmid, redisScript(password), 240_000, host);
+}
+
+/**
+ * Point a Redis instance at its role: `primaryIp=null` makes it a standalone master
+ * (`replicaof no one`); otherwise it replicates the primary. Idempotent (redis ignores no-ops).
+ */
+export async function setRedisReplication(vmid: number, password: string, primaryIp: string | null, host?: string): Promise<void> {
+  const cli = `redis-cli -a '${password}' --no-auth-warning`;
+  const cmd = primaryIp ? `${cli} replicaof ${primaryIp} 6379` : `${cli} replicaof no one`;
+  await ctExec(vmid, cmd, 20_000, host);
+}
+
 /* ---- Velocity (proxy) ---------------------------------------------------- */
 
 function velocityScript(task: Task, secret: string, build: Resolved, vmid: number): string {

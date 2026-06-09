@@ -8,6 +8,7 @@
 import { getDB, type Task } from "./store";
 import { liveServers } from "./connector";
 import { computeShardGrid, type ShardGrid, type ShardMember } from "./sharding";
+import { getRedisCluster } from "./redis-cluster";
 
 /** velocity server name = sanitized task name + vmid (must match syncVelocity in provision.ts). */
 function velocityName(taskName: string, vmid: number): string {
@@ -90,6 +91,8 @@ export type ShardConfig = {
   self: string;                              // this instance's connector serverId
   grid: ShardGrid;
   pending: { player: string; loc: string }[]; // coord-restores to apply on join
+  /** Redis endpoints (primary first) + auth for player-data sync; empty if no Redis is up. */
+  redis?: { endpoints: string[]; password: string };
 };
 
 /** Build the sharding config block for a backend connector (null if its task isn't sharded). */
@@ -102,5 +105,7 @@ export async function shardConfigForServer(serverId: string, taskName: string, g
   if (!grid) return null;
   // Only emit if THIS server is actually one of the regions (it registered & is in the grid).
   if (!grid.regions.some((r) => r.serverId === serverId)) return null;
-  return { self: serverId, grid, pending: drainPending(serverId) };
+  const rc = getRedisCluster();
+  const redis = rc && rc.endpoints.length > 0 ? { endpoints: rc.endpoints, password: rc.password } : undefined;
+  return { self: serverId, grid, pending: drainPending(serverId), redis };
 }

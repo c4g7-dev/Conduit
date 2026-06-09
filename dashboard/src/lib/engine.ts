@@ -17,6 +17,8 @@ import {
   installVelocity,
   installHytale,
   installNginx,
+  installRedis,
+  setRedisReplication,
   installConnector,
   installHytaleConnector,
   syncVelocity,
@@ -33,6 +35,7 @@ import { ensureServiceShare } from "./serviceshare";
 import { syncTaskFiles } from "./taskfile";
 import { assetNodePath } from "./assets";
 import { recordReconcile } from "./events";
+import { redisPassword, setRedisCluster, REDIS_PORT } from "./redis-cluster";
 
 export const CONDUIT_TAG = "conduit";
 export const READY_TAG = "ready";
@@ -127,6 +130,8 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
     await ctExec(inst.vmid, `echo "[conduit] MariaDB placeholder." > /opt/conduit-info.txt`, 30_000, host);
   } else if (kind === "nginx") {
     await installNginx(inst.vmid, host);
+  } else if (kind === "redis") {
+    await installRedis(inst.vmid, await redisPassword(), host);
   } else {
     // generic / unknown — bare OS, show in UI, configure manually
     pushInstallLog(inst.vmid, `[conduit] Blueprint "${bp.name}" (${kind}) — no install recipe. Bare Debian container.`);
@@ -256,6 +261,51 @@ async function velocityPass(
       }
     }
   }
+}
+
+// Track the last applied redis membership so we only re-issue replicaof on change.
+declare global { var __conduitRedisSig: string | undefined; }
+
+/**
+ * Designate a Redis cluster from the running redis-kind instances (lowest vmid = primary, rest
+ * replicate it) and publish the endpoint list for connectors. Re-wires replication only when
+ * membership changes; failover is the connector trying the published list in order.
+ */
+async function redisPass(
+  db: Awaited<ReturnType<typeof getDB>>,
+  all: Instance[],
+  log: string[],
+) {
+  const redisTasks = db.tasks.filter((t) => blueprint(t.blueprintId)?.software.kind === "redis");
+  if (redisTasks.length === 0) { setRedisCluster({ primary: null, endpoints: [], password: "", updatedAt: Date.now() }); return; }
+  const insts = redisTasks
+    .flatMap((t) => instancesOf(all, t.id))
+    .filter((i) => i.status === "running" && !!i.ip && i.ready)
+    .sort((a, b) => a.vmid - b.vmid);
+  const pw = await redisPassword();
+  if (insts.length === 0) { setRedisCluster({ primary: null, endpoints: [], password: pw, updatedAt: Date.now() }); return; }
+
+  const primary = insts[0];
+  setRedisCluster({
+    primary: { vmid: primary.vmid, ip: primary.ip! },
+    endpoints: insts.map((i) => `${i.ip}:${REDIS_PORT}`),
+    password: pw,
+    updatedAt: Date.now(),
+  });
+
+  const sig = insts.map((i) => `${i.vmid}@${i.ip}`).join(",") + `|p=${primary.vmid}`;
+  if (global.__conduitRedisSig === sig) return;
+  for (const i of insts) {
+    try {
+      const host = await nodeIp(i.node);
+      await setRedisReplication(i.vmid, pw, i.vmid === primary.vmid ? null : primary.ip!, host);
+    } catch (e) {
+      log.push(`! redis replication ${i.vmid}: ${String(e)}`);
+      return; // leave sig unset so we retry next pass
+    }
+  }
+  global.__conduitRedisSig = sig;
+  log.push(`= redis: primary ${primary.vmid} (${primary.ip}), ${insts.length - 1} replica(s)`);
 }
 
 /** All Conduit-managed containers grouped by task, with live IPs. */
@@ -636,6 +686,7 @@ export async function reconcileAll(): Promise<string[]> {
     // software provisioning (background) + proxy routing config push
     provisionPass(db, all, log);
     await velocityPass(db, all, log);
+    await redisPass(db, all, log);
 
     if (dirty) await saveDB(db).catch(() => {});
   } catch (e) {
