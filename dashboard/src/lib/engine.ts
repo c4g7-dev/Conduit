@@ -545,12 +545,18 @@ export async function destroyInstance(vmid: number): Promise<string | null> {
   if (!inst) return null;
   await destroy(inst);
   noteForget(inst.taskId, vmid);
-  // Drop the task's desired (and clamp min) by one so it isn't re-created next tick.
   if (inst.taskId) {
+    // Clamp the task target to the instances that remain — only LOWER desired when the deletion
+    // would otherwise leave fewer than wanted. Deleting a SURPLUS (over-provisioned) instance
+    // therefore leaves the wanted count untouched (e.g. want 2, had 3, delete 1 → still want 2,
+    // shows 2/2). Deleting one of the wanted instances lowers the target by one (want 2 → 1).
+    const remaining = all.filter(
+      (i) => i.taskId === inst.taskId && i.vmid !== vmid && !i.tags?.includes(PREPARED_TAG),
+    ).length;
     await mutate((db) => {
       const t = db.tasks.find((x) => x.id === inst.taskId);
       if (!t) return;
-      t.desired = Math.max(0, t.desired - 1);
+      t.desired = Math.min(t.desired, remaining);
       if (t.min > t.desired) t.min = t.desired;
     }).catch(() => {});
   }
