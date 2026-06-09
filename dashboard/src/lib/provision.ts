@@ -539,12 +539,29 @@ export async function installHytale(vmid: number, task: Task, sw: Software, host
 /* ---- nginx (web server) -------------------------------------------------- */
 
 function nginxScript(): string {
+  // tmux gives the Console tab a real shell in the container; /opt/nginx symlinks the config
+  // into the /opt files sandbox so the file manager can edit nginx.conf etc. (docroot = /opt/www).
+  const shellUnit = `[Unit]
+Description=Conduit nginx shell (tmux)
+After=network-online.target
+[Service]
+Type=forking
+WorkingDirectory=/opt/www
+ExecStart=/usr/bin/tmux -L mc new-session -d -s mc -x 220 -y 50
+ExecStop=/usr/bin/tmux -L mc kill-session -t mc
+RemainAfterExit=yes
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target`;
   return `set -e
 if [ -f /opt/.conduit-ready ]; then echo already-provisioned; exit 0; fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq || true
-apt-get install -y -qq nginx >/dev/null
+apt-get install -y -qq nginx tmux >/dev/null
 mkdir -p /opt/www
+# expose nginx config inside the /opt files sandbox (file manager can't see /etc)
+[ -e /opt/nginx ] || ln -s /etc/nginx /opt/nginx
 if [ ! -f /opt/www/index.html ]; then
 cat > /opt/www/index.html <<'HTML'
 <!doctype html>
@@ -566,6 +583,13 @@ server {
 NGINX
 systemctl enable nginx >/dev/null 2>&1 || true
 systemctl restart nginx
+# tmux shell session for the Console tab
+cat > /etc/systemd/system/mc.service <<'UNIT'
+${shellUnit}
+UNIT
+systemctl daemon-reload
+systemctl enable mc >/dev/null 2>&1 || true
+systemctl start mc || true
 touch /opt/.conduit-ready
 echo CONDUIT_PROVISIONED_NGINX
 `;
