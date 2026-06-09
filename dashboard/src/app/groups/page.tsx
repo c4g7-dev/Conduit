@@ -30,6 +30,7 @@ import {
   Wrench,
   Settings2,
   Layers,
+  ArrowRightLeft,
   Infinity as InfinityIcon,
   Terminal,
   FolderOpen,
@@ -83,6 +84,8 @@ export default function ServersPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editGroup, setEditGroup] = useState<Group | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
+  const { data: nodesData } = usePoll<{ nodes: { node: string; status: string }[] }>("/api/nodes", 15000);
+  const nodeNames = (nodesData?.nodes ?? []).filter((n) => n.status === "online").map((n) => n.node);
   const [tab, setTab] = useState<Tab>("overview");
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -155,6 +158,20 @@ export default function ServersPage() {
     await fetch(`/api/groups/${group.id}`, { method: "DELETE" });
     toast.success(`Group "${group.name}" removed`);
     refresh();
+  }
+
+  async function migrate(inst: Instance, target: string) {
+    set(`i${inst.vmid}`, true);
+    try {
+      const res = await fetch(`/api/containers/${inst.vmid}/migrate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target, node: inst.node }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      toast.success(`#${inst.vmid}: migrating → ${target}`);
+      setTimeout(refresh, 2000);
+    } catch (e) { toast.error(String(e)); } finally { set(`i${inst.vmid}`, false); }
   }
 
   async function instAction(inst: Instance, action: "start" | "shutdown" | "stop" | "reboot") {
@@ -377,7 +394,7 @@ export default function ServersPage() {
                     <OverviewTab task={selected} metrics={mByVmid} busy={!!pending[selected.id]} onScale={scale} />
                   )}
                   {tab === "instances" && (
-                    <InstancesTab task={selected} metrics={mByVmid} pending={pending} onAction={instAction} />
+                    <InstancesTab task={selected} metrics={mByVmid} pending={pending} onAction={instAction} onMigrate={migrate} nodes={nodeNames} />
                   )}
                   {tab === "routing" && selected.role === "proxy" && data && (
                     <RoutingTab
@@ -530,9 +547,11 @@ function OverviewTab({ task, metrics, busy, onScale }: { task: Task; metrics: Ma
 }
 
 /* ---- instances tab ------------------------------------------------------- */
-function InstancesTab({ task, metrics, pending, onAction }: {
+function InstancesTab({ task, metrics, pending, onAction, onMigrate, nodes }: {
   task: Task; metrics: Map<number, MetricRow>; pending: Record<string, boolean>;
   onAction: (i: Instance, a: "start" | "shutdown" | "stop" | "reboot") => void;
+  onMigrate: (i: Instance, target: string) => void;
+  nodes: string[];
 }) {
   if (task.instances.length === 0) {
     return <div className="py-16 text-center text-sm text-muted-foreground">No instances running.</div>;
@@ -599,6 +618,11 @@ function InstancesTab({ task, metrics, pending, onAction }: {
                   <ContextMenuItem onClick={() => onAction(inst, "start")}><Play /> Start</ContextMenuItem>
                   <ContextMenuItem onClick={() => onAction(inst, "reboot")}><RotateCw /> Reboot</ContextMenuItem>
                   <ContextMenuItem onClick={() => onAction(inst, "shutdown")}><Power /> Shutdown</ContextMenuItem>
+                  {nodes.filter((n) => n !== inst.node).length > 0 && <ContextMenuSeparator />}
+                  {nodes.filter((n) => n !== inst.node).map((n) => (
+                    <ContextMenuItem key={n} onClick={() => onMigrate(inst, n)}><ArrowRightLeft /> Move to {n}</ContextMenuItem>
+                  ))}
+                  <ContextMenuSeparator />
                   <ContextMenuItem variant="destructive" onClick={() => onAction(inst, "stop")}><Square /> Force stop</ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>

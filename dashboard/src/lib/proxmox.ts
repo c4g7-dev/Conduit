@@ -196,6 +196,13 @@ export const api = {
     pmx<string>(`/nodes/${node}/lxc`, { method: "POST", params }),
   deleteLxc: (vmid: number, node = NODE) =>
     pmx<string>(`/nodes/${node}/lxc/${vmid}?purge=1&force=1`, { method: "DELETE" }),
+  /** Migrate a container to another node. restart=1 does a (brief) restart-migration, which
+   *  works for running CTs on local storage; offline for stopped ones. */
+  migrateLxc: (vmid: number, target: string, node = NODE) =>
+    pmx<string>(`/nodes/${node}/lxc/${vmid}/migrate`, {
+      method: "POST",
+      params: { target, restart: 1 },
+    }),
   /** Full-clone a (stopped) container to a new vmid on the same node. */
   cloneLxc: (vmid: number, newid: number, params: Record<string, string | number>, node = NODE) =>
     pmx<string>(`/nodes/${node}/lxc/${vmid}/clone`, {
