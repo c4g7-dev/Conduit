@@ -20,7 +20,7 @@ type Metrics = { instances: MetricRow[]; totals: { players: number; capacity: nu
 type StTask = { softwareKind: string; name: string; instances: { vmid: number; status: string; ready: boolean }[] };
 type State = { groups: { id: string; name: string; tasks: StTask[] }[] };
 
-type PlayerRow = { name: string; server: string; vmid: number; role: string; uuid?: string; group?: string };
+type PlayerRow = { name: string; server: string; vmid: number; role: string; uuid?: string; group?: string; env?: string };
 type DialogState = { kind: "move" | "message" | "kick"; player: PlayerRow } | null;
 
 // Software kinds that represent a game/player service (vs db/web/generic).
@@ -28,7 +28,7 @@ const GAME_KINDS = new Set(["paper", "velocity", "hytale"]);
 // Kinds we get live player counts for. Hytale now reports via its own connector.
 const QUERYABLE = new Set(["paper", "velocity", "hytale"]);
 
-type Conn = { active: boolean; players: { uuid: string; name: string; server?: string }[]; servers: { task: string; group: string; env: string }[] };
+type Conn = { active: boolean; players: { uuid: string; name: string; server?: string }[]; servers: { id: string; task: string; group: string; env: string }[] };
 
 export default function PlayersPage() {
   const { data: metrics, loading, refresh } = usePoll<Metrics>("/api/metrics", 5000);
@@ -46,13 +46,26 @@ export default function PlayersPage() {
   // backend SLP samples (capped ~12/server) when no connector is reporting.
   const players = useMemo<PlayerRow[]>(() => {
     if (connActive) {
-      // map server task name → a vmid for the kick/console fallback + → group for move targets
+      // Drive everything from the connector itself: task → vmid (trailing number of the server
+      // id, e.g. network-hytale-203 → 203), task → group, and task → env ("hytale" vs "server").
+      // Partitioning by env is reliable even if /api/conduit/state lags (which previously dumped
+      // Hytale players into the MC table at vmid #0).
       const vmidByTask = new Map<string, number>();
-      for (const r of metrics?.instances ?? []) vmidByTask.set(r.taskName, r.vmid);
       const groupByTask = new Map<string, string>();
-      for (const s of conn!.servers ?? []) groupByTask.set(s.task, s.group);
-      return (conn!.players ?? []).map((p) => ({ name: p.name, uuid: p.uuid, server: p.server ?? "?", vmid: vmidByTask.get(p.server ?? "") ?? 0, role: "smp", group: groupByTask.get(p.server ?? "") }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+      const envByTask = new Map<string, string>();
+      for (const s of conn!.servers ?? []) {
+        groupByTask.set(s.task, s.group);
+        envByTask.set(s.task, s.env);
+        const m = /-(\d+)$/.exec(s.id);
+        if (m) vmidByTask.set(s.task, Number(m[1]));
+      }
+      // metrics vmid as a fallback when the connector id has no trailing number
+      for (const r of metrics?.instances ?? []) if (!vmidByTask.has(r.taskName)) vmidByTask.set(r.taskName, r.vmid);
+      return (conn!.players ?? []).map((p) => ({
+        name: p.name, uuid: p.uuid, server: p.server ?? "?",
+        vmid: vmidByTask.get(p.server ?? "") ?? 0, role: "smp",
+        group: groupByTask.get(p.server ?? ""), env: envByTask.get(p.server ?? "") ?? "server",
+      })).sort((a, b) => a.name.localeCompare(b.name));
     }
     const rows = (metrics?.instances ?? []).filter((r) => r.role !== "proxy" && r.reachable);
     const out: PlayerRow[] = [];
@@ -65,17 +78,13 @@ export default function PlayersPage() {
   const capacity = metrics?.totals.capacity ?? 0;
   const mByVmid = useMemo(() => new Map((metrics?.instances ?? []).map((r) => [r.vmid, r])), [metrics]);
 
-  // server (task) name → software kind, to split Minecraft vs Hytale players.
-  const kindByTask = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const g of state?.groups ?? []) for (const t of g.tasks ?? []) m.set(t.name, t.softwareKind);
-    return m;
-  }, [state]);
-  const hytalePlayers = useMemo(() => players.filter((p) => kindByTask.get(p.server) === "hytale"), [players, kindByTask]);
-  const mcPlayers = useMemo(() => players.filter((p) => kindByTask.get(p.server) !== "hytale"), [players, kindByTask]);
+  // Split by the connector's env ("hytale" vs MC) — reliable even if state lags.
+  const hytalePlayers = useMemo(() => players.filter((p) => p.env === "hytale"), [players]);
+  const mcPlayers = useMemo(() => players.filter((p) => p.env !== "hytale"), [players]);
   const hasHytale = useMemo(
-    () => (state?.groups ?? []).some((g) => (g.tasks ?? []).some((t) => t.softwareKind === "hytale")),
-    [state],
+    () => (conn?.servers ?? []).some((s) => s.env === "hytale")
+      || (state?.groups ?? []).some((g) => (g.tasks ?? []).some((t) => t.softwareKind === "hytale")),
+    [conn, state],
   );
 
   // All running game services (Minecraft + Hytale + …) for the presence strip.
@@ -240,12 +249,12 @@ export default function PlayersPage() {
       {/* player-action dialogs (styled message, compatible-service move picker, kick) */}
       {dlg?.kind === "message" && (
         <MessageDialog open onOpenChange={(o) => !o && setDlg(null)} target={dlg.player.name}
-          platform={kindByTask.get(dlg.player.server) === "hytale" ? "hytale" : "minecraft"}
+          platform={dlg.player.env === "hytale" ? "hytale" : "minecraft"}
           onSend={(text) => playerAction("message", dlg.player, text)} />
       )}
       {dlg?.kind === "move" && (
         <MoveDialog open onOpenChange={(o) => !o && setDlg(null)} player={dlg.player}
-          kindLabel={kindByTask.get(dlg.player.server) === "hytale" ? "Hytale" : "Minecraft"}
+          kindLabel={dlg.player.env === "hytale" ? "Hytale" : "Minecraft"}
           onMove={(target) => playerAction("move", dlg.player, target)} />
       )}
       {dlg?.kind === "kick" && (
@@ -253,6 +262,22 @@ export default function PlayersPage() {
           onKick={(reason) => playerAction("kick", dlg.player, reason || undefined)} />
       )}
     </>
+  );
+}
+
+/** Minecraft skin head (mc-heads.net, by UUID when known else name). Hytale has no MC skin —
+ *  show initials. Falls back to initials if the avatar fails to load. */
+function PlayerHead({ player }: { player: PlayerRow }) {
+  const [failed, setFailed] = useState(false);
+  const initials = (
+    <span className="flex h-6 w-6 items-center justify-center rounded bg-accent text-[11px] font-semibold uppercase text-muted-foreground">{player.name.slice(0, 2)}</span>
+  );
+  if (player.env === "hytale" || failed) return initials;
+  const key = player.uuid || player.name;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={`https://mc-heads.net/avatar/${encodeURIComponent(key)}/24`} alt={player.name}
+      width={24} height={24} className="h-6 w-6 rounded" onError={() => setFailed(true)} />
   );
 }
 
@@ -290,7 +315,7 @@ function PlayerTable({
                 <ContextMenuTrigger render={<tr className="group cursor-default border-b border-hairline transition-colors last:border-0 hover:bg-accent/40" />}>
                   <td className="px-4 py-2.5">
                     <span className="flex items-center gap-2.5">
-                      <span className="flex h-6 w-6 items-center justify-center rounded bg-accent text-[11px] font-semibold uppercase text-muted-foreground">{p.name.slice(0, 2)}</span>
+                      <PlayerHead player={p} />
                       <span className="font-medium">{p.name}</span>
                     </span>
                   </td>
