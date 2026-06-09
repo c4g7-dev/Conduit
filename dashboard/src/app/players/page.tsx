@@ -9,7 +9,7 @@ import {
   ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator,
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
-import { Users, Send, UserX, Radio, Loader2, MoveRight, MessageSquare } from "lucide-react";
+import { Users, Send, UserX, Radio, Loader2, MoveRight, MessageSquare, Gamepad2 } from "lucide-react";
 
 type MetricRow = {
   vmid: number; taskName: string; role: string; reachable: boolean;
@@ -237,6 +237,25 @@ export default function PlayersPage() {
         </table>
       </div>
       <p className="mt-2 text-[11px] text-muted-foreground/60">{connActive ? "Full player list via the Conduit connector — right-click a player for move/message/kick · in-game: /ct." : "Player names from Minecraft server-list-ping samples (capped at ~12 per server)."}</p>
+
+      {/* Hytale services — Hytale has no plugin/connector, so per-player names aren't queryable;
+          we list the running services + their online state. */}
+      {gameServices.some((s) => s.kind === "hytale") && (
+        <div className="mt-6">
+          <div className="mb-2 flex items-center gap-2"><Gamepad2 className="h-3.5 w-3.5 text-brand" /><span className="eyebrow">Hytale services</span></div>
+          <div className="overflow-hidden rounded-lg border border-hairline bg-panel">
+            {gameServices.filter((s) => s.kind === "hytale").map((s) => (
+              <a key={s.vmid} href={`/services/${s.vmid}`} className="flex items-center gap-3 border-b border-hairline px-4 py-2.5 text-sm transition-colors last:border-0 hover:bg-accent/40">
+                <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", s.online ? "bg-emerald-500" : "bg-muted-foreground/30")} />
+                <span className="font-medium">{s.name}</span>
+                <span className="font-mono text-[11px] text-muted-foreground/60">#{s.vmid}</span>
+                <span className="ml-auto text-xs text-muted-foreground">{s.online ? "online" : "starting…"}</span>
+              </a>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] text-muted-foreground/60">Hytale has no Conduit connector yet — per-player names aren’t available; this shows running services. Open one for its console.</p>
+        </div>
+      )}
     </>
   );
 }
