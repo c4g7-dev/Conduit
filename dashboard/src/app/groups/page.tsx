@@ -409,7 +409,7 @@ export default function ServersPage() {
                     />
                   )}
                   {tab === "world" && selected.softwareKind === "paper" && (
-                    <ShardingPanel taskId={selected.id} instanceCount={selected.running} />
+                    <ShardingPanel taskId={selected.id} instanceCount={selected.running} taskMax={selected.max} />
                   )}
                   {tab === "settings" && (
                     <SettingsTab

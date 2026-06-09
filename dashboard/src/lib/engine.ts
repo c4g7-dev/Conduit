@@ -158,9 +158,14 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
   }
 
   // Install the Conduit connector plugin into Paper/Velocity (CloudNet-Bridge equivalent).
+  // The jar lands AFTER installPaper/Velocity already booted the server and scanned plugins,
+  // so it must be restarted for the plugin to actually load (otherwise the instance runs
+  // without the connector → shows 0/0, no green dot, and can't shard). Velocity is restarted
+  // anyway by syncVelocity on the next routing pass; Paper backends need an explicit restart.
   if (kind === "paper" || kind === "velocity") {
     try {
       await installConnector(inst.vmid, host);
+      if (kind === "paper") await ctExec(inst.vmid, `systemctl restart mc 2>/dev/null || true`, 30_000, host);
     } catch (e) {
       pushInstallLog(inst.vmid, `[conduit] connector install skipped: ${String(e)}`);
     }
@@ -619,6 +624,13 @@ export async function reconcileAll(): Promise<string[]> {
         } else {
           const warm = preparedInsts.filter((i) => i.status === "stopped");
           for (let i = 0; i < desired - have; i++) {
+            // Hard ceiling on LIVE instances: never exceed the cap regardless of `have`. The
+            // in-memory in-flight dedup (`recent`) is lost on a panel restart, so without this
+            // a slow provision mid-restart could be re-issued and overshoot (e.g. 3 when max=2).
+            // Re-read live count each iteration since provision() can take minutes.
+            const liveNow = instancesOf(await discoverInstances(), task.id).filter((x) => !x.tags?.includes(PREPARED_TAG)).length;
+            const ceiling = cap > 0 ? cap : desired;
+            if (liveNow >= ceiling) { log.push(`= ${task.id}: at ceiling ${ceiling}, not provisioning more`); break; }
             try {
               const w = warm.shift();
               if (w) {
