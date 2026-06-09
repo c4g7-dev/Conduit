@@ -227,7 +227,7 @@ export default function PlayersPage() {
       {/* Broadcast bar */}
       <div className="panel mb-4 p-3">
         <div className="mb-2 flex items-center gap-2"><Radio className="h-3.5 w-3.5 text-brand" /><span className="eyebrow">Broadcast command</span></div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <select value={groupId} onChange={(e) => setGroupId(e.target.value)}
             className="shrink-0 rounded-md border border-hairline bg-accent/30 px-2.5 py-2 text-[13px] outline-none">
             <option value="__all">All groups</option>
@@ -236,7 +236,7 @@ export default function PlayersPage() {
           <input value={cmd} onChange={(e) => setCmd(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") broadcast(); }}
             placeholder='e.g. say Server restarting in 5 minutes'
-            className="w-full rounded-md border border-hairline bg-accent/30 px-3 py-2 font-mono text-[13px] outline-none placeholder:text-muted-foreground/50" />
+            className="min-w-[12rem] flex-1 rounded-md border border-hairline bg-accent/30 px-3 py-2 font-mono text-[13px] outline-none placeholder:text-muted-foreground/50" />
           <button onClick={broadcast} disabled={busy || !cmd.trim()}
             className="flex shrink-0 items-center gap-1.5 rounded-md bg-brand px-4 py-2 text-[13px] font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-40">
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Send
@@ -364,8 +364,8 @@ function PlayerTable({
         <span className="eyebrow">{label}</span>
         <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">{count}</span>
       </div>
-      <div className="overflow-hidden rounded-lg border border-hairline bg-panel">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto rounded-lg border border-hairline bg-panel">
+        <table className="w-full min-w-[420px] text-sm">
           <thead>
             <tr className="border-b border-hairline">
               {["Player", "Server", "Node #", ""].map((h, i) => (

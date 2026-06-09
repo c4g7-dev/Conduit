@@ -105,8 +105,8 @@ export default function OverviewPage() {
 
       <SectionLabel count={services.length}>Services</SectionLabel>
 
-      <div className="overflow-hidden rounded-lg border border-hairline bg-panel">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto rounded-lg border border-hairline bg-panel">
+        <table className="w-full min-w-[560px] text-sm">
           <thead>
             <tr className="border-b border-hairline">
               {["Service", "Status", "Role", "Software", "Group", "Node", "Address", "Players"].map((h, i) => (
