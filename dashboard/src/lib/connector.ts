@@ -79,14 +79,22 @@ export function liveServers(): ConnServer[] {
   return [...reg.servers.values()].filter((s) => now - s.lastSeen < STALE_MS);
 }
 
-/** Flattened player list across all backend servers (proxy duplicates filtered out). */
+/** Flattened player list across all backend servers (proxy duplicates filtered out). A player is
+ *  only ever on ONE backend, but during a server switch a stale backend can still list them for up
+ *  to STALE_MS — and if the two reports disagree on uuid presence, keying by uuid|name would show
+ *  the player twice. Dedup by lowercased NAME (always present, unique per network), keeping the
+ *  most-recently-seen backend so the listed server is the current one. */
 export function allPlayers(): ConnPlayer[] {
-  const out = new Map<string, ConnPlayer>();
+  const out = new Map<string, { p: ConnPlayer; seen: number }>();
   for (const s of liveServers()) {
     if (s.env === "proxy") continue; // attribute players to their backend, not the proxy
-    for (const p of s.players) out.set(p.uuid || p.name, { ...p, server: s.task });
+    for (const p of s.players) {
+      const key = p.name.toLowerCase();
+      const prev = out.get(key);
+      if (!prev || s.lastSeen > prev.seen) out.set(key, { p: { ...p, server: s.task }, seen: s.lastSeen });
+    }
   }
-  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...out.values()].map((e) => e.p).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function connectorActive(): boolean { return liveServers().length > 0; }
