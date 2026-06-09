@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { cn } from "@/lib/utils";
-import { Globe2, Loader2, Map as MapIcon, Info, Plus } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Globe2, Loader2, Map as MapIcon, Info, Plus, TriangleAlert, Dices } from "lucide-react";
 
 type Strip = { min: number; max: number };
 type Region = {
@@ -28,6 +29,7 @@ export function ShardingPanel({ taskId, instanceCount, taskMax }: { taskId: stri
   const { data, refresh } = usePoll<Resp>(`/api/tasks/${taskId}/sharding`, 5000);
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [enableOpen, setEnableOpen] = useState(false);
   // local editable draft (seeded from server, only while not focused-saving)
   const cfg = data?.sharding ?? { enabled: false, world: "world", stripWidth: 5000, splitEnd: true, borderCancelRange: 30 };
   const [draft, setDraft] = useState<Sharding | null>(null);
@@ -96,7 +98,7 @@ export function ShardingPanel({ taskId, instanceCount, taskMax }: { taskId: stri
           <span className="text-[13px] font-medium">Enable sharding</span>
           <button
             type="button" role="switch" aria-checked={s.enabled}
-            onClick={() => save({ enabled: !s.enabled })}
+            onClick={() => { if (s.enabled) save({ enabled: false }); else setEnableOpen(true); }}
             className={cn("relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors", s.enabled ? "bg-brand" : "bg-muted-foreground/30")}
           >
             <span className={cn("inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform", s.enabled ? "translate-x-[18px]" : "translate-x-0.5")} />
@@ -162,7 +164,71 @@ export function ShardingPanel({ taskId, instanceCount, taskMax }: { taskId: stri
           )}
         </div>
       </div>
+
+      <EnableShardingDialog
+        open={enableOpen}
+        onOpenChange={setEnableOpen}
+        instanceCount={data?.grid?.regions.length ?? instanceCount}
+        onConfirm={async (seed) => {
+          const res = await fetch(`/api/tasks/${taskId}/sharding`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seed }),
+          });
+          const j = await res.json();
+          if (j.error) throw new Error(j.error);
+          toast.success(`Sharding enabled — seed ${j.seed}, ${j.regenerated} server(s) regenerating`);
+          setTimeout(refresh, 1500);
+        }}
+      />
     </div>
+  );
+}
+
+/** Enabling sharding regenerates every region's world on a shared seed — gate it behind an
+ *  explicit warning + a seed choice (manual or auto). */
+function EnableShardingDialog({ open, onOpenChange, instanceCount, onConfirm }: {
+  open: boolean; onOpenChange: (o: boolean) => void; instanceCount: number;
+  onConfirm: (seed: string) => Promise<void>;
+}) {
+  const [seed, setSeed] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (open) setSeed(""); }, [open]);
+  async function go() {
+    setBusy(true);
+    try { await onConfirm(seed.trim()); onOpenChange(false); }
+    catch (e) { toast.error(String(e)); }
+    finally { setBusy(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><TriangleAlert className="h-4 w-4 text-amber-400" /> Enable seamless world</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200">
+            All <span className="font-semibold">{instanceCount}</span> server(s) in this task will be <span className="font-semibold">rebooted</span> and their worlds <span className="font-semibold">regenerated</span> on one shared seed so the terrain is continuous across shards. Current world data on these instances is lost. This is not meant for already-populated persistent worlds.
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Shared seed</label>
+            <div className="flex gap-2">
+              <input value={seed} onChange={(e) => setSeed(e.target.value)} placeholder="leave blank to auto-generate"
+                className="w-full rounded-md border border-hairline bg-accent/30 px-3 py-2 font-mono text-[13px] outline-none placeholder:text-muted-foreground/40" />
+              <button type="button" title="Random seed" onClick={() => setSeed(String(Math.floor(Math.random() * 9_000_000_000) + 1_000_000_000))}
+                className="flex shrink-0 items-center justify-center rounded-md border border-hairline px-2.5 hover:bg-accent">
+                <Dices className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => onOpenChange(false)} className="rounded-md px-3 py-2 text-[13px] text-muted-foreground hover:text-foreground">Cancel</button>
+            <button onClick={go} disabled={busy}
+              className="flex items-center gap-1.5 rounded-md bg-amber-600 px-4 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-40">
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe2 className="h-3.5 w-3.5" />} Enable & regenerate
+            </button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

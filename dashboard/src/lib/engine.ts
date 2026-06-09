@@ -21,6 +21,7 @@ import {
   setRedisReplication,
   installConnector,
   installHytaleConnector,
+  regenWorldWithSeed,
   syncVelocity,
   forgetVelocity,
   nodeExec,
@@ -522,6 +523,44 @@ async function destroy(inst: Instance) {
   const upid = await api.deleteLxc(inst.vmid, inst.node).catch(() => null);
   if (upid) await waitTask(upid, inst.node).catch(() => {});
   forgetVelocity(inst.vmid);
+}
+
+/**
+ * Enable world-sharding on a task and apply ONE shared seed across every region instance,
+ * regenerating each world so the terrain is continuous (different seeds = same X/Z is different
+ * terrain). DESTRUCTIVE — wipes each instance's current world; the explicit operator-approved
+ * "enable sharding" flow calls this. `seed` empty → mint a fresh one. Returns {seed, regenerated}.
+ */
+export async function enableShardingWithSeed(taskId: string, seed?: string): Promise<{ seed: string; regenerated: number }> {
+  const finalSeed = (seed && seed.trim()) ? seed.trim() : String(Math.floor(Math.random() * 9_000_000_000) + 1_000_000_000);
+  let cfg: Task["sharding"] | undefined;
+  await mutate((db) => {
+    const t = db.tasks.find((x) => x.id === taskId);
+    if (!t) throw new Error("task not found");
+    t.sharding = {
+      enabled: true,
+      world: t.sharding?.world ?? "world",
+      stripWidth: t.sharding?.stripWidth ?? 5000,
+      splitEnd: t.sharding?.splitEnd ?? true,
+      borderCancelRange: t.sharding?.borderCancelRange ?? 30,
+      seed: finalSeed,
+    };
+    cfg = t.sharding;
+  });
+  void cfg;
+  const all = await discoverInstances();
+  const mine = instancesOf(all, taskId).filter((i) => i.status === "running" && !i.tags?.includes(PREPARED_TAG));
+  let regenerated = 0;
+  for (const inst of mine) {
+    try {
+      const host = await nodeIp(inst.node);
+      await regenWorldWithSeed(inst.vmid, finalSeed, host);
+      regenerated++;
+    } catch (e) {
+      console.error(`[conduitd] regen ${inst.vmid} failed:`, String(e));
+    }
+  }
+  return { seed: finalSeed, regenerated };
 }
 
 /** Destroy every live instance of a task (used when a task/group is deleted). */

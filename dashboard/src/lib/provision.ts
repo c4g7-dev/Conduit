@@ -190,6 +190,31 @@ export async function reidentifyConnector(vmid: number, task: Task, host?: strin
   );
 }
 
+/**
+ * Apply a shared world seed to a Paper region and regenerate its world so all shards share one
+ * continuous terrain. DESTRUCTIVE: stops the server, sets level-seed, deletes the overworld /
+ * nether / end folders, and restarts (the world regenerates from the shared seed on boot). Only
+ * invoked by the explicit, operator-approved "enable sharding" flow.
+ */
+export async function regenWorldWithSeed(vmid: number, seed: string, host?: string): Promise<void> {
+  const s = seed.replace(/[^A-Za-z0-9_-]/g, ""); // sanitize (seeds are numeric/word)
+  await ctExec(
+    vmid,
+    `set -e
+systemctl stop mc 2>/dev/null || true
+sleep 2
+if grep -q '^level-seed=' /opt/mc/server.properties 2>/dev/null; then
+  sed -i 's/^level-seed=.*/level-seed=${s}/' /opt/mc/server.properties
+else
+  echo 'level-seed=${s}' >> /opt/mc/server.properties
+fi
+rm -rf /opt/mc/world /opt/mc/world_nether /opt/mc/world_the_end
+systemctl start mc
+echo CONDUIT_REGEN_DONE`,
+    180_000, host,
+  );
+}
+
 /** Push the connector jar (from the shared store) into a container's plugins dir. */
 export async function installConnector(vmid: number, host?: string): Promise<void> {
   const jar = "/var/lib/conduit/connector/conduit-connector.jar";
