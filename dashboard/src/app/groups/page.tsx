@@ -82,6 +82,7 @@ export default function ServersPage() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editGroup, setEditGroup] = useState<Group | null>(null);
+  const [editTask, setEditTask] = useState<Task | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -261,7 +262,7 @@ export default function ServersPage() {
                       <ContextMenuContent>
                         <ContextMenuLabel>{group.name}</ContextMenuLabel>
                         <ContextMenuItem onClick={() => setEditGroup(group)}>
-                          <Settings2 /> Settings (name · slots · maintenance)
+                          <Settings2 /> Settings
                         </ContextMenuItem>
                         <ContextMenuItem onClick={() => toggleMaintenance(group, !group.maintenance)}>
                           <Wrench /> {group.maintenance ? "Disable maintenance" : "Enable maintenance"}
@@ -310,6 +311,9 @@ export default function ServersPage() {
                               </ContextMenuTrigger>
                               <ContextMenuContent>
                                 <ContextMenuLabel>{task.name}</ContextMenuLabel>
+                                <ContextMenuItem onClick={() => setEditTask(task)}>
+                                  <Settings2 /> Settings
+                                </ContextMenuItem>
                                 <ContextMenuItem onClick={() => { setSelectedId(task.id); setTab("instances"); }}>
                                   <ServerCog /> View instances
                                 </ContextMenuItem>
@@ -408,6 +412,16 @@ export default function ServersPage() {
           onOpenChange={(o) => { if (!o) setEditGroup(null); }}
           showTrigger={false}
           onSaved={() => { setEditGroup(null); refresh(); }}
+        />
+      )}
+      {editTask && (
+        <EditTaskDialog
+          task={editTask}
+          frontCandidates={frontCandidates.filter((c) => c.id !== editTask.id)}
+          open={!!editTask}
+          onOpenChange={(o) => { if (!o) setEditTask(null); }}
+          showTrigger={false}
+          onSaved={() => { setEditTask(null); refresh(); }}
         />
       )}
     </>

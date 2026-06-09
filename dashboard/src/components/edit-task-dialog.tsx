@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -9,7 +9,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Pencil, Cpu, MemoryStick, HardDrive, Users, Globe, Plug, Plus, X } from "lucide-react";
+import { Pencil, Cpu, Users, Globe, Plug, Plus, X, Infinity as InfinityIcon, Pin, Package } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+type Asset = { kind: string; name: string; ref: string; size: number };
 
 const ROLE_COLOR: Record<string, string> = {
   proxy: "#f97316",
@@ -62,12 +65,22 @@ export function EditTaskDialog({
   task,
   frontCandidates = [],
   onSaved,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+  showTrigger = true,
 }: {
   task: {
     id: string;
     name: string;
     role: string;
     fronts: string[];
+    mode?: "dynamic" | "static";
+    persistent?: boolean;
+    autoscale?: boolean;
+    playersPerInstance?: number;
+    scaleUpPercent?: number;
+    scaleDownAfterSec?: number;
+    preparedPool?: number;
     min: number;
     max: number;
     cores: number;
@@ -77,10 +90,21 @@ export function EditTaskDialog({
   };
   frontCandidates?: FrontCandidate[];
   onSaved: () => void;
+  open?: boolean;
+  onOpenChange?: (o: boolean) => void;
+  showTrigger?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const controlled = controlledOpen !== undefined;
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlled ? controlledOpen : internalOpen;
+  const setOpen = (o: boolean) => (controlled ? controlledOnOpenChange?.(o) : setInternalOpen(o));
+  const [mode, setMode] = useState<"dynamic" | "static">(task.mode ?? "static");
   const [min, setMin] = useState(task.min);
   const [max, setMax] = useState(task.max);
+  const [pps, setPps] = useState(task.playersPerInstance ?? 50);
+  const [scaleUpPercent, setScaleUpPercent] = useState(task.scaleUpPercent ?? 100);
+  const [scaleDownAfterSec, setScaleDownAfterSec] = useState(task.scaleDownAfterSec ?? 60);
+  const [preparedPool, setPreparedPool] = useState(task.preparedPool ?? 0);
   const [cores, setCores] = useState(task.cores);
   const [memory, setMemory] = useState(task.memory);
   const [disk, setDisk] = useState(task.disk);
@@ -88,15 +112,28 @@ export function EditTaskDialog({
   const [worldUrl, setWorldUrl] = useState(task.seed?.worldUrl ?? "");
   const [plugins, setPlugins] = useState<string[]>(task.seed?.plugins ?? []);
   const [pluginInput, setPluginInput] = useState("");
+  const [assets, setAssets] = useState<Asset[]>([]);
   const [busy, setBusy] = useState(false);
 
   const color = ROLE_COLOR[task.role] ?? ROLE_COLOR.generic;
   const isSeedable = task.role !== "proxy";
+  const canBeDynamic = !task.persistent;
+
+  // load uploaded assets so the user can pick worlds/plugins instead of pasting URLs
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/assets").then((r) => r.json()).then((j) => setAssets(j.assets ?? [])).catch(() => {});
+  }, [open]);
 
   function onOpenChange(o: boolean) {
     if (o) {
+      setMode(task.mode ?? "static");
       setMin(task.min);
       setMax(task.max);
+      setPps(task.playersPerInstance ?? 50);
+      setScaleUpPercent(task.scaleUpPercent ?? 100);
+      setScaleDownAfterSec(task.scaleDownAfterSec ?? 60);
+      setPreparedPool(task.preparedPool ?? 0);
       setCores(task.cores);
       setMemory(task.memory);
       setDisk(task.disk);
@@ -126,7 +163,14 @@ export function EditTaskDialog({
   async function submit() {
     setBusy(true);
     try {
-      const body: Record<string, unknown> = { min, max, cores, memory, disk };
+      const body: Record<string, unknown> = {
+        min, max, cores, memory, disk, mode, autoscale: mode === "dynamic", playersPerInstance: pps,
+      };
+      if (mode === "dynamic") {
+        body.scaleUpPercent = scaleUpPercent;
+        body.scaleDownAfterSec = scaleDownAfterSec;
+        body.preparedPool = preparedPool;
+      }
       if (task.role === "proxy") body.fronts = fronts;
       if (isSeedable) {
         body.seed = {
@@ -153,16 +197,18 @@ export function EditTaskDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogTrigger
-        render={
-          <button
-            className="flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand/10 px-2.5 py-1.5 text-[13px] font-medium text-brand transition-colors hover:bg-brand/20"
-            title="Edit server"
-          />
-        }
-      >
-        <Pencil className="h-3.5 w-3.5" /> Edit
-      </DialogTrigger>
+      {showTrigger && (
+        <DialogTrigger
+          render={
+            <button
+              className="flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand/10 px-2.5 py-1.5 text-[13px] font-medium text-brand transition-colors hover:bg-brand/20"
+              title="Edit server"
+            />
+          }
+        >
+          <Pencil className="h-3.5 w-3.5" /> Edit
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
@@ -172,6 +218,27 @@ export function EditTaskDialog({
         </DialogHeader>
 
         <div className="space-y-5 py-1">
+          {/* Mode (proxies are always static singletons) */}
+          {isSeedable && (
+            <div>
+              <FieldLabel>Scaling mode</FieldLabel>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => setMode("static")}
+                  className={cn("flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                    mode === "static" ? "border-brand/50 bg-brand/10 text-white/90" : "border-white/[0.08] text-white/40 hover:bg-white/[0.04]")}>
+                  <Pin className="h-3.5 w-3.5" /><span><span className="block">Static</span><span className="block text-[10px] text-white/35">fixed count</span></span>
+                </button>
+                <button type="button" onClick={() => canBeDynamic && setMode("dynamic")} disabled={!canBeDynamic}
+                  title={canBeDynamic ? "" : "Persistent service — can't be dynamic (owns unique data)."}
+                  className={cn("flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                    mode === "dynamic" ? "border-brand/50 bg-brand/10 text-white/90" : "border-white/[0.08] text-white/40 hover:bg-white/[0.04]")}>
+                  <InfinityIcon className="h-3.5 w-3.5" /><span><span className="block">Dynamic</span><span className="block text-[10px] text-white/35">autoscaled</span></span>
+                </button>
+              </div>
+              {!canBeDynamic && <p className="mt-1 text-[10px] text-amber-400/80">Persistent service — stays static (data is per-instance).</p>}
+            </div>
+          )}
+
           {/* Scaling */}
           <div>
             <div className="mb-2 flex items-center gap-2">
@@ -180,16 +247,27 @@ export function EditTaskDialog({
                 Scaling limits
               </span>
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <div>
-                <FieldLabel>Min instances</FieldLabel>
+                <FieldLabel>Min</FieldLabel>
                 <NumInput value={min} onChange={setMin} min={0} />
               </div>
               <div>
-                <FieldLabel>Max instances (0 = ∞)</FieldLabel>
-                <NumInput value={max} onChange={setMax} min={0} />
+                <FieldLabel>{mode === "dynamic" ? "Max (0=∞)" : "Count"}</FieldLabel>
+                <NumInput value={mode === "dynamic" ? max : min} onChange={mode === "dynamic" ? setMax : (v) => { setMin(v); setMax(v); }} min={0} />
+              </div>
+              <div>
+                <FieldLabel>Players/inst</FieldLabel>
+                <NumInput value={pps} onChange={setPps} min={1} />
               </div>
             </div>
+            {mode === "dynamic" && (
+              <div className="mt-2 grid grid-cols-3 gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
+                <div><FieldLabel>Warm pool</FieldLabel><NumInput value={preparedPool} onChange={setPreparedPool} min={0} /></div>
+                <div><FieldLabel>Scale-up</FieldLabel><NumInput value={scaleUpPercent} onChange={setScaleUpPercent} min={1} suffix="%" /></div>
+                <div><FieldLabel>Idle drain</FieldLabel><NumInput value={scaleDownAfterSec} onChange={setScaleDownAfterSec} min={0} suffix="s" /></div>
+              </div>
+            )}
           </div>
 
           {/* Resources */}
@@ -283,6 +361,18 @@ export function EditTaskDialog({
                 <p className="mt-1 text-[11px] text-white/25">
                   Leave blank to use the blueprint default. Only applied if no world exists yet.
                 </p>
+                {/* Pick an uploaded world asset (replicated across nodes via the shared store) */}
+                {assets.filter((a) => a.kind === "worlds").length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {assets.filter((a) => a.kind === "worlds").map((a) => (
+                      <button key={a.ref} type="button" onClick={() => setWorldUrl(a.ref)}
+                        className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors",
+                          worldUrl === a.ref ? "border-brand/50 bg-brand/10 text-white/85" : "border-white/[0.08] text-white/40 hover:bg-white/[0.04]")}>
+                        <Package className="h-3 w-3" /> {a.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -307,6 +397,22 @@ export function EditTaskDialog({
                     <Plus className="h-3.5 w-3.5" />
                   </button>
                 </div>
+                {/* Pick uploaded plugin assets (shared store, cross-node) */}
+                {assets.filter((a) => a.kind === "plugins").length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {assets.filter((a) => a.kind === "plugins").map((a) => {
+                      const on = plugins.includes(a.ref);
+                      return (
+                        <button key={a.ref} type="button"
+                          onClick={() => setPlugins((p) => on ? p.filter((x) => x !== a.ref) : [...p, a.ref])}
+                          className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors",
+                            on ? "border-brand/50 bg-brand/10 text-white/85" : "border-white/[0.08] text-white/40 hover:bg-white/[0.04]")}>
+                          <Package className="h-3 w-3" /> {a.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 {plugins.length > 0 && (
                   <div className="mt-2 space-y-1">
                     {plugins.map((p) => (
