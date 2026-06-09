@@ -2,8 +2,11 @@ package dev.c4g7.conduit.velocity;
 
 import com.google.gson.JsonObject;
 import com.google.inject.Inject;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.tree.LiteralCommandNode;
+import com.velocitypowered.api.command.BrigadierCommand;
+import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
-import com.velocitypowered.api.command.RawCommand;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.LoginEvent;
@@ -65,35 +68,45 @@ public class ConduitVelocityPlugin {
             proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder(name).build(), hub);
         }
 
-        // /conduit (aliases /ct /cloud) → network control. RawCommand passes the whole arg
-        // line through (no Brigadier arg-tree that rejects args with "Incorrect argument").
-        RawCommand conduit = new RawCommand() {
-            @Override public void execute(Invocation inv) {
-                if (!inv.source().hasPermission("conduit.admin")) {
-                    inv.source().sendMessage(LEGACY.deserialize(" &b&lConduit &8» &cNo permission.")); return;
-                }
-                ConduitCommands.run(client, splitArgs(inv.arguments()), line -> inv.source().sendMessage(LEGACY.deserialize(line)));
-            }
-            @Override public List<String> suggest(Invocation inv) {
-                if (!inv.source().hasPermission("conduit.admin")) return List.of();
-                List<String> players = proxy.getAllPlayers().stream().map(Player::getUsername).toList();
-                List<String> servers = proxy.getAllServers().stream().map(s -> s.getServerInfo().getName()).toList();
-                return ConduitCommands.complete(splitArgs(inv.arguments()), players, servers);
-            }
-            @Override public boolean hasPermission(Invocation inv) { return inv.source().hasPermission("conduit.admin"); }
-        };
-        proxy.getCommandManager().register(
-                proxy.getCommandManager().metaBuilder("conduit").aliases("ct", "cloud").build(), conduit);
+        // /conduit /ct /cloud → network control. Explicit Brigadier nodes (greedy-string arg
+        // with a real suggestion provider) — each alias registered independently so a name
+        // collision can't strip the argument node (the "Incorrect argument for command" bug).
+        for (String name : new String[]{"conduit", "ct", "cloud"}) {
+            proxy.getCommandManager().register(new BrigadierCommand(buildBrigadier(name)));
+        }
 
         proxy.getScheduler().buildTask(this, this::tick)
                 .repeat(3, TimeUnit.SECONDS).delay(2, TimeUnit.SECONDS).schedule();
     }
 
-    /** Split a RawCommand argument line, keeping a trailing empty token (so completion knows a
-     *  new argument has started after a space). Empty line → empty array. */
+    /** Split an argument line, keeping a trailing empty token so completion advances per arg. */
     private static String[] splitArgs(String raw) {
         if (raw == null || raw.isEmpty()) return new String[0];
         return raw.split(" ", -1);
+    }
+
+    /** Build a Brigadier command tree for one alias: `/name [greedy args]` with suggestions. */
+    private LiteralCommandNode<CommandSource> buildBrigadier(String name) {
+        return BrigadierCommand.literalArgumentBuilder(name)
+                .requires(src -> src.hasPermission("conduit.admin"))
+                .executes(ctx -> { runCmd(ctx.getSource(), new String[0]); return 1; })
+                .then(BrigadierCommand.requiredArgumentBuilder("args", StringArgumentType.greedyString())
+                        .suggests((ctx, builder) -> {
+                            String remaining = builder.getRemaining();
+                            String[] parts = remaining.isEmpty() ? new String[]{""} : remaining.split(" ", -1);
+                            String token = parts[parts.length - 1];
+                            List<String> players = proxy.getAllPlayers().stream().map(Player::getUsername).toList();
+                            List<String> servers = proxy.getAllServers().stream().map(s -> s.getServerInfo().getName()).toList();
+                            var off = builder.createOffset(builder.getStart() + remaining.length() - token.length());
+                            for (String s : ConduitCommands.complete(parts, players, servers)) off.suggest(s);
+                            return off.buildFuture();
+                        })
+                        .executes(ctx -> { runCmd(ctx.getSource(), splitArgs(StringArgumentType.getString(ctx, "args"))); return 1; }))
+                .build();
+    }
+
+    private void runCmd(CommandSource src, String[] args) {
+        ConduitCommands.run(client, args, line -> src.sendMessage(LEGACY.deserialize(line)));
     }
 
     private void tick() {
