@@ -33,6 +33,7 @@ export async function PATCH(
       if (typeof body.spawnCooldownSec === "number") t.spawnCooldownSec = body.spawnCooldownSec;
       if (typeof body.maxServices === "number") t.maxServices = body.maxServices;
       if (typeof body.splitOverNodes === "boolean") t.splitOverNodes = body.splitOverNodes;
+      if (body.node !== undefined) t.node = (typeof body.node === "string" && body.node.trim()) ? body.node.trim() : undefined;
 
       // resources: only affect newly provisioned instances (existing LXCs aren't resized)
       if (typeof body.cores === "number") t.cores = body.cores;

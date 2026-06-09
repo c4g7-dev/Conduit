@@ -145,6 +145,15 @@
   }
   html {
     @apply font-sans;
+    /* Render native controls (incl. <select> dropdowns, date pickers) in dark mode so the
+       OS-drawn option list matches the panel theme instead of white-bg/blue-highlight. */
+    color-scheme: dark;
+  }
+  /* Native <option> popups inherit OS colors; nudge them toward the panel palette where
+     supported (Chromium honors this for the dropdown list). */
+  select option {
+    background-color: var(--panel);
+    color: var(--foreground);
   }
   /* Thin, unobtrusive scrollbars to match the dense control-plane look. */
   * {

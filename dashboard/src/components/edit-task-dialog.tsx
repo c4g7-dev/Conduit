@@ -76,6 +76,7 @@ export function EditTaskDialog({
     fronts: string[];
     mode?: "dynamic" | "static";
     persistent?: boolean;
+    node?: string;
     autoscale?: boolean;
     playersPerInstance?: number;
     scaleUpPercent?: number;
@@ -113,16 +114,19 @@ export function EditTaskDialog({
   const [plugins, setPlugins] = useState<string[]>(task.seed?.plugins ?? []);
   const [pluginInput, setPluginInput] = useState("");
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [node, setNode] = useState(task.node ?? "");
+  const [nodes, setNodes] = useState<{ node: string; status: string }[]>([]);
   const [busy, setBusy] = useState(false);
 
   const color = ROLE_COLOR[task.role] ?? ROLE_COLOR.generic;
   const isSeedable = task.role !== "proxy";
   const canBeDynamic = !task.persistent;
 
-  // load uploaded assets so the user can pick worlds/plugins instead of pasting URLs
+  // load uploaded assets + nodes so the user can pick worlds/plugins + a pinned node
   useEffect(() => {
     if (!open) return;
     fetch("/api/assets").then((r) => r.json()).then((j) => setAssets(j.assets ?? [])).catch(() => {});
+    fetch("/api/nodes").then((r) => r.json()).then((j) => setNodes(j.nodes ?? [])).catch(() => {});
   }, [open]);
 
   function onOpenChange(o: boolean) {
@@ -137,6 +141,7 @@ export function EditTaskDialog({
       setCores(task.cores);
       setMemory(task.memory);
       setDisk(task.disk);
+      setNode(task.node ?? "");
       setFronts(task.fronts);
       setWorldUrl(task.seed?.worldUrl ?? "");
       setPlugins(task.seed?.plugins ?? []);
@@ -165,6 +170,7 @@ export function EditTaskDialog({
     try {
       const body: Record<string, unknown> = {
         min, max, cores, memory, disk, mode, autoscale: mode === "dynamic", playersPerInstance: pps,
+        node: node || "",
       };
       if (mode === "dynamic") {
         body.scaleUpPercent = scaleUpPercent;
@@ -292,6 +298,16 @@ export function EditTaskDialog({
                 <NumInput value={disk} onChange={setDisk} min={1} suffix="GB" />
               </div>
             </div>
+          </div>
+
+          {/* Node pinning */}
+          <div>
+            <FieldLabel>Pinned node (new instances)</FieldLabel>
+            <select value={node} onChange={(e) => setNode(e.target.value)}
+              className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm text-white/80 outline-none">
+              <option value="">Auto (least-loaded)</option>
+              {nodes.map((n) => <option key={n.node} value={n.node} disabled={n.status !== "online"}>{n.node}{n.status !== "online" ? " (offline)" : ""}</option>)}
+            </select>
           </div>
 
           {/* Fronts */}

@@ -63,6 +63,8 @@ export type Task = {
   maxServices?: number;
   /** spread instances across nodes rather than packing one node */
   splitOverNodes?: boolean;
+  /** preferred Proxmox node for this task's instances (undefined = auto / least-loaded) */
+  node?: string;
   createdAt: number;
 };
 

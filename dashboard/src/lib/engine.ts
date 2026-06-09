@@ -324,6 +324,15 @@ async function ensurePool(group: Group) {
   }
 }
 
+/** Use a pinned node when it's set and currently online; otherwise auto-pick. */
+async function resolveNode(pinned?: string): Promise<string> {
+  if (pinned) {
+    const nodes = await api.nodes().catch(() => []);
+    if (nodes.some((n) => n.node === pinned && n.status === "online")) return pinned;
+  }
+  return pickNode();
+}
+
 /**
  * Pick the online node with the fewest Conduit containers (spreads load across the
  * cluster). Falls back to the configured NODE on any error / single-node setup.
@@ -352,7 +361,8 @@ async function provision(task: Task, group: Group): Promise<number> {
   if (!bp) throw new Error(`unknown blueprint ${task.blueprintId}`);
   await ensurePool(group);
 
-  const node = await pickNode();
+  // Honor a pinned node if set + still valid; otherwise auto-pick the least-loaded one.
+  const node = await resolveNode(task.node);
 
   // FAST PATH: if a golden image exists for this egg on the picked node, linked-clone it
   // (seconds) instead of a from-scratch install (minutes). Software is already baked.
