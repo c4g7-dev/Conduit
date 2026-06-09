@@ -61,8 +61,9 @@ export function FilesPanel({ backend, roots }: { backend: FsBackend; roots: { la
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setPath(roots[0]?.path ?? "/opt/mc"); }, [rootSig]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (showSkeleton = false) => {
     setLoading(true); setError(null);
+    if (showSkeleton) setEntries(null); // blank old list → skeleton shows instantly on navigate
     try {
       const r = await fetch(`${base}?path=${encodeURIComponent(path)}`, { cache: "no-store" });
       const j = await r.json();
@@ -72,7 +73,9 @@ export function FilesPanel({ backend, roots }: { backend: FsBackend; roots: { la
     finally { setLoading(false); }
   }, [base, path]);
 
-  useEffect(() => { load(); setSelected(new Set()); }, [load]);
+  // On a path change show the skeleton immediately (no stale-dir flash); other reloads keep
+  // the current list visible to avoid flicker.
+  useEffect(() => { load(true); setSelected(new Set()); }, [path]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const segments = path.replace(/^\//, "").split("/").filter(Boolean);
   const parent = path === defaultRoot ? null : path.slice(0, path.lastIndexOf("/")) || "/";
@@ -207,8 +210,12 @@ export function FilesPanel({ backend, roots }: { backend: FsBackend; roots: { la
       {/* Listing — background right-click = paste/new-folder/upload */}
       <ContextMenu>
         <ContextMenuTrigger render={<div className="relative min-h-[40vh]" />}>
-          {/* loading bar */}
-          {loading && <div className="absolute inset-x-0 top-0 h-0.5 animate-pulse bg-brand/60" />}
+          {/* loading bar — indeterminate sweep across the top while listing */}
+          {loading && (
+            <div className="absolute inset-x-0 top-0 h-0.5 overflow-hidden bg-brand/10">
+              <div className="h-full w-1/3 rounded-full bg-brand/80 [animation:fm-sweep_0.9s_ease-in-out_infinite]" />
+            </div>
+          )}
           <div key={path} className="animate-in fade-in-0 duration-150">
             {parent && (
               <button onClick={() => setPath(parent)} className="flex w-full items-center gap-2 border-b border-hairline px-4 py-2 text-left text-sm hover:bg-accent/40">
