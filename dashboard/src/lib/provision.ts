@@ -199,6 +199,19 @@ export async function installConnector(vmid: number, host?: string): Promise<voi
   );
 }
 
+/**
+ * Push the Hytale connector jar into the Hytale server's external-plugins dir.
+ * Hytale loads external plugins from `mods/` relative to the server CWD, which is
+ * `${HYTALE_DIR}/data` (start.sh does `cd .../data`) → `${HYTALE_DIR}/data/mods`.
+ */
+export async function installHytaleConnector(vmid: number, host?: string): Promise<void> {
+  const jar = "/var/lib/conduit/connector/conduit-hytale.jar";
+  await nodeExec(
+    `if [ -f '${jar}' ]; then pct exec ${vmid} -- mkdir -p ${HYTALE_DIR}/data/mods && pct push ${vmid} '${jar}' ${HYTALE_DIR}/data/mods/conduit-hytale.jar; fi`,
+    60_000, host,
+  );
+}
+
 const sysdUnit = (desc: string, exec: string, workDir = "/opt/mc", useConnectorEnv = false) => `[Unit]
 Description=${desc}
 After=network-online.target
@@ -480,12 +493,14 @@ async function ensureHytaleAssets(vmid: number, sw: Software, host: string): Pro
 
 const HYTALE_DIR = "/opt/hytale";
 
-function hytaleScript(task: Task): string {
+function hytaleScript(vmid: number, task: Task): string {
   const mem = heap(task.memory, 1024, 2048);
-  const unit = sysdUnit(`Conduit Hytale (${task.name})`, `${HYTALE_DIR}/start.sh`, HYTALE_DIR);
+  // Source the connector identity (CONDUIT_*) so the conduit-hytale mod reports players.
+  const unit = sysdUnit(`Conduit Hytale (${task.name})`, `${HYTALE_DIR}/start.sh`, HYTALE_DIR, true);
   return `set -e
 DIR=${HYTALE_DIR}
-mkdir -p "$DIR/data/backups" "$DIR/logs"
+mkdir -p "$DIR/data/backups" "$DIR/data/mods" "$DIR/logs"
+${connectorEnvScript(vmid, task)}
 if [ -f "$DIR/.conduit-ready" ]; then echo "already-provisioned"; exit 0; fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -533,7 +548,7 @@ echo CONDUIT_PROVISIONED_HYTALE
 export async function installHytale(vmid: number, task: Task, sw: Software, host?: string): Promise<void> {
   const h = host ?? SSH_HOST;
   await ensureHytaleAssets(vmid, sw, h);
-  await ctExec(vmid, hytaleScript(task), 180_000, host);
+  await ctExec(vmid, hytaleScript(vmid, task), 180_000, host);
 }
 
 /* ---- nginx (web server) -------------------------------------------------- */
