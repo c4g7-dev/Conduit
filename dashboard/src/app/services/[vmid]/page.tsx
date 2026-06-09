@@ -15,7 +15,6 @@ import {
   Loader2,
   Activity,
 } from "lucide-react";
-import { Sparkline } from "@/components/sparkline";
 import { MetricsPanel as RrdMetricsPanel } from "@/components/metrics-panel";
 import { FilesPanel } from "@/components/files-panel";
 import AnsiToHtml from "ansi-to-html";
@@ -416,59 +415,8 @@ function ConsolePanel({
 /* ---- Metrics (live rolling graphs) --------------------------------------- */
 
 function MetricsPanel({ vmid }: { vmid: number }) {
-  const { data: containers } = usePoll<{ containers: { vmid: number; cpu: number; maxcpu: number; mem: number; maxmem: number; status: string }[] }>("/api/containers", 4000);
-  const { data: metrics } = usePoll<{ instances: { vmid: number; online: number; max: number; reachable: boolean }[] }>("/api/metrics", 4000);
-
-  const c = containers?.containers.find((x) => x.vmid === vmid);
-  const m = metrics?.instances.find((x) => x.vmid === vmid);
-  const cpu = c && c.maxcpu ? (c.cpu / 1) * 100 : 0; // cpu is already 0..1 fraction of total
-  const memPct = c && c.maxmem ? (c.mem / c.maxmem) * 100 : 0;
-  const players = m?.online ?? 0;
-
-  // Rolling client-side history (live monitor; resets on reload).
-  const [hist, setHist] = useState<{ cpu: number[]; mem: number[]; players: number[] }>({ cpu: [], mem: [], players: [] });
-  const lastKey = useRef("");
-  useEffect(() => {
-    if (!c) return;
-    const key = `${c.cpu}|${c.mem}|${players}`;
-    if (key === lastKey.current) return;
-    lastKey.current = key;
-    setHist((h) => ({
-      cpu: [...h.cpu, Math.round(cpu)].slice(-60),
-      mem: [...h.mem, Math.round(memPct)].slice(-60),
-      players: [...h.players, players].slice(-60),
-    }));
-  }, [c, cpu, memPct, players]);
-
-  const cards: { label: string; value: string; series: number[]; color: string; max?: number }[] = [
-    { label: "CPU", value: `${Math.round(cpu)}%`, series: hist.cpu, color: "#7c83ff", max: 100 },
-    { label: "Memory", value: c ? `${bytes(c.mem)} / ${bytes(c.maxmem)}` : "—", series: hist.mem, color: "#38bdf8", max: 100 },
-    { label: "Players", value: `${players}${m ? ` / ${m.max}` : ""}`, series: hist.players, color: "#34d399" },
-  ];
-
-  return (
-    <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-3">
-        {cards.map((card) => (
-          <div key={card.label} className="panel p-4">
-            <div className="flex items-center justify-between">
-              <span className="eyebrow">{card.label}</span>
-              <span className="text-base font-semibold tabular-nums">{card.value}</span>
-            </div>
-            <div className="mt-3">
-              {card.series.length < 2 ? (
-                <div className="flex h-12 items-center text-xs text-muted-foreground/60">Collecting…</div>
-              ) : (
-                <Sparkline data={card.series} color={card.color} max={card.max} height={48} label={card.label} />
-              )}
-            </div>
-          </div>
-        ))}
-        <p className="sm:col-span-3 text-[11px] text-muted-foreground/60">Live rolling metrics (this session). Players via the connector.</p>
-      </div>
-      {/* Historical Proxmox RRD metrics with a range selector — shows immediately. */}
-      <RrdMetricsPanel vmid={vmid} />
-    </div>
-  );
+  // Unified ranged metrics (Players / CPU / Memory over 5m·1h·24h·30d), same as the dashboard —
+  // Proxmox RRD for cpu/mem, sampled history for this instance's players. Shows immediately.
+  return <RrdMetricsPanel vmid={vmid} />;
 }
 

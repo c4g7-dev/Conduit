@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getHistory, pushSample, type Sample } from "@/lib/history";
 import { api, vmidNode } from "@/lib/proxmox";
-import { seriesAt } from "@/lib/metrics-history";
+import { seriesAt, seriesAtVmid } from "@/lib/metrics-history";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -79,11 +79,14 @@ export async function GET(req: NextRequest) {
       }));
     }
     if (r.keep) points = points.slice(-r.keep);
-    // Enrich cluster series with players/containers history (RRD doesn't track these), aligned
-    // to the RRD timestamps. Per-container series get only the container's own cpu/mem.
+    // Enrich with players history (RRD doesn't track it), aligned to the RRD timestamps:
+    // cluster → total players + containers; per-container → that instance's own player count.
     if (!vmidParam) {
       const extra = seriesAt(points.map((p) => p.t));
       points = points.map((p, i) => ({ ...p, players: extra[i].players, containers: extra[i].containers }));
+    } else {
+      const pl = seriesAtVmid(points.map((p) => p.t), Number(vmidParam));
+      points = points.map((p, i) => ({ ...p, players: pl[i] }));
     }
     cache.set(key, { at: Date.now(), data: points });
     return NextResponse.json({ range, points });

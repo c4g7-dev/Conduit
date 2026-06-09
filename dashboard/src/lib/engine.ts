@@ -640,10 +640,12 @@ export async function reconcileAll(): Promise<string[]> {
     const db = await getDB();
     const all = await discoverInstances();
 
-    // Sample players + live containers into the metrics history (for the ranged charts).
+    // Sample players + live containers (+ per-vmid players) into the metrics history.
     try {
       const running = all.filter((i) => i.status === "running").length;
-      recordMetrics(allPlayers().length, running);
+      const perVmid: Record<number, number> = {};
+      for (const [vmid, s] of connServersByVmid()) perVmid[vmid] = s.online ?? 0;
+      recordMetrics(allPlayers().length, running, perVmid);
     } catch { /* non-critical */ }
 
     // SAFETY: never act on a suspiciously-empty desired state while real conduit
