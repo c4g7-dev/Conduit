@@ -12,6 +12,7 @@ import { MotdDialog } from "@/components/motd-dialog";
 import { StatusBadge } from "@/components/status-badge";
 import { RoleDot, roleColor } from "@/components/role-dot";
 import { FlowGraph } from "@/components/flow-graph";
+import { ShardingPanel } from "@/components/sharding-panel";
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -64,7 +65,7 @@ type State = { groups: Group[]; routing: Routing[]; blueprints: any[] };
 type MetricRow = { vmid: number; role: string; reachable: boolean; online: number; max: number; sample: { name: string }[] };
 type Metrics = { instances: MetricRow[]; totals: { players: number; capacity: number } };
 
-type Tab = "overview" | "instances" | "routing" | "settings";
+type Tab = "overview" | "instances" | "routing" | "world" | "settings";
 
 export default function ServersPage() {
   const { data, loading, refresh } = usePoll<State>("/api/conduit/state", 4000);
@@ -101,6 +102,7 @@ export default function ServersPage() {
   // Routing tab only applies to proxies.
   useEffect(() => {
     if (tab === "routing" && selected?.role !== "proxy") setTab("overview");
+    if (tab === "world" && selected?.softwareKind !== "paper") setTab("overview");
   }, [selected, tab]);
 
   const set = (k: string, v: boolean) => setPending((p) => ({ ...p, [k]: v }));
@@ -374,7 +376,7 @@ export default function ServersPage() {
               <>
                 <DetailHeader task={selected} group={selectedGroup} metrics={mByVmid} />
                 <div className="flex gap-1 border-b border-hairline px-3">
-                  {(["overview", "instances", ...(selected.role === "proxy" ? ["routing"] : []), "settings"] as Tab[]).map((t) => (
+                  {(["overview", "instances", ...(selected.role === "proxy" ? ["routing"] : []), ...(selected.softwareKind === "paper" ? ["world"] : []), "settings"] as Tab[]).map((t) => (
                     <button
                       key={t}
                       onClick={() => setTab(t)}
@@ -405,6 +407,9 @@ export default function ServersPage() {
                       state={data}
                       metrics={metrics ?? null}
                     />
+                  )}
+                  {tab === "world" && selected.softwareKind === "paper" && (
+                    <ShardingPanel taskId={selected.id} instanceCount={selected.running} />
                   )}
                   {tab === "settings" && (
                     <SettingsTab

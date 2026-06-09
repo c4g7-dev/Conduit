@@ -16,7 +16,8 @@ const WORLD_EDGE = 3749998; // vanilla world border max half-extent
 export type Strip = { min: number; max: number };
 export type RegionWorlds = { world: Strip; world_nether: Strip; world_the_end?: Strip };
 export type ShardRegion = {
-  serverId: string; // connector/transfer identity, e.g. "network-world-202"
+  serverId: string; // connector identity, e.g. "network-world-202"
+  target: string;   // velocity server name for transfers, e.g. "world-202"
   name: string;     // human label
   index: number;    // 1-based order (strip assignment)
   vmid: number;
@@ -34,7 +35,7 @@ export type ShardGrid = {
 };
 
 /** A region instance, in strip order. */
-export type ShardMember = { serverId: string; name: string; vmid: number };
+export type ShardMember = { serverId: string; target: string; name: string; vmid: number };
 
 /** east = even index, west = odd index (matches serverlogic.sk mod-2 split). */
 function isOuter(index: number, n: number): "east" | "west" | "no" {
@@ -85,7 +86,7 @@ export function computeShardGrid(cfg: Sharding, members: ShardMember[]): ShardGr
     };
     if (cfg.splitEnd) worlds.world_the_end = { min: nMin * 8, max: nMax * 8 };
 
-    return { serverId: m.serverId, name: m.name, index, vmid: m.vmid, worlds };
+    return { serverId: m.serverId, target: m.target, name: m.name, index, vmid: m.vmid, worlds };
   });
 
   const centerX = n % 2 === 0 ? tol / 2 : 0;

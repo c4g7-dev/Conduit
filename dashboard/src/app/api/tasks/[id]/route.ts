@@ -35,6 +35,22 @@ export async function PATCH(
       if (typeof body.splitOverNodes === "boolean") t.splitOverNodes = body.splitOverNodes;
       if (body.node !== undefined) t.node = (typeof body.node === "string" && body.node.trim()) ? body.node.trim() : undefined;
 
+      // seamless world sharding (opt-in)
+      if (body.sharding !== undefined) {
+        if (body.sharding === null) {
+          t.sharding = undefined;
+        } else {
+          const s = body.sharding;
+          t.sharding = {
+            enabled: typeof s.enabled === "boolean" ? s.enabled : (t.sharding?.enabled ?? false),
+            world: typeof s.world === "string" && s.world.trim() ? s.world.trim() : (t.sharding?.world ?? "world"),
+            stripWidth: typeof s.stripWidth === "number" && s.stripWidth > 0 ? Math.round(s.stripWidth) : (t.sharding?.stripWidth ?? 5000),
+            splitEnd: typeof s.splitEnd === "boolean" ? s.splitEnd : (t.sharding?.splitEnd ?? true),
+            borderCancelRange: typeof s.borderCancelRange === "number" && s.borderCancelRange >= 0 ? Math.round(s.borderCancelRange) : (t.sharding?.borderCancelRange ?? 30),
+          };
+        }
+      }
+
       // resources: only affect newly provisioned instances (existing LXCs aren't resized)
       if (typeof body.cores === "number") t.cores = body.cores;
       if (typeof body.memory === "number") t.memory = body.memory;
