@@ -108,24 +108,39 @@ export default function PlayersPage() {
     [conn, state],
   );
 
-  // All running game services (Minecraft + Hytale + …) for the presence strip.
-  const gameServices = useMemo(() => {
-    const out: { vmid: number; name: string; kind: string; online: boolean; players: number | null; max: number }[] = [];
+  // Running game services grouped by task — so a scaled-up task (e.g. two `world` servers) is
+  // ONE card listing its instances (vmid + player count), not N separate cards.
+  type Inst = { vmid: number; online: boolean; players: number | null; max: number };
+  type SvcGroup = { name: string; kind: string; queryable: boolean; instances: Inst[]; players: number | null; max: number; anyOnline: boolean };
+  const gameServices = useMemo<SvcGroup[]>(() => {
+    const groups: SvcGroup[] = [];
     for (const g of state?.groups ?? [])
-      for (const t of g.tasks ?? [])
-        if (GAME_KINDS.has(t.softwareKind))
-          for (const i of t.instances ?? [])
-            if (i.status === "running") {
-              const m = mByVmid.get(i.vmid);
-              out.push({
-                vmid: i.vmid, name: t.name, kind: t.softwareKind,
-                online: QUERYABLE.has(t.softwareKind) ? !!m?.reachable : i.ready,
-                players: QUERYABLE.has(t.softwareKind) ? (m?.online ?? 0) : null,
-                max: m?.max ?? 0,
-              });
-            }
-    return out;
+      for (const t of g.tasks ?? []) {
+        if (!GAME_KINDS.has(t.softwareKind)) continue;
+        const queryable = QUERYABLE.has(t.softwareKind);
+        const instances: Inst[] = [];
+        for (const i of t.instances ?? []) {
+          if (i.status !== "running") continue;
+          const m = mByVmid.get(i.vmid);
+          instances.push({
+            vmid: i.vmid,
+            online: queryable ? !!m?.reachable : i.ready,
+            players: queryable ? (m?.online ?? 0) : null,
+            max: m?.max ?? 0,
+          });
+        }
+        if (instances.length === 0) continue;
+        instances.sort((a, b) => a.vmid - b.vmid);
+        groups.push({
+          name: t.name, kind: t.softwareKind, queryable, instances,
+          players: queryable ? instances.reduce((n, i) => n + (i.players ?? 0), 0) : null,
+          max: instances.reduce((n, i) => n + i.max, 0),
+          anyOnline: instances.some((i) => i.online),
+        });
+      }
+    return groups;
   }, [state, mByVmid]);
+  const totalGameInstances = useMemo(() => gameServices.reduce((n, g) => n + g.instances.length, 0), [gameServices]);
 
   async function broadcast() {
     const c = cmd.trim();
@@ -197,30 +212,56 @@ export default function PlayersPage() {
     <>
       <PageHeader
         title="Players"
-        subtitle={`${connActive ? visible.length : total}/${capacity} online · ${gameServices.length} game service(s)${connActive ? " · live" : " · SLP (sample)"}`}
+        subtitle={`${connActive ? visible.length : total}/${capacity} online · ${totalGameInstances} instance(s) across ${gameServices.length} service(s)${connActive ? " · live" : " · SLP (sample)"}`}
         onRefresh={refresh}
         loading={loading}
       />
 
-      {/* Game services presence strip (Minecraft + Hytale + …) */}
+      {/* Game services presence strip — one card per server task; scaled tasks list their
+          instances (vmid + count) inside, with an aggregate header. */}
       {gameServices.length > 0 && (
-        <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-          {gameServices.map((s) => (
-            <a key={s.vmid} href={`/services/${s.vmid}`} className="panel flex items-center justify-between gap-2 p-3 transition-colors hover:border-white/15">
-              <span className="flex min-w-0 items-center gap-2">
-                <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", s.online ? "bg-emerald-500" : "bg-muted-foreground/30")} />
-                <span className="min-w-0">
-                  <span className="block truncate text-[13px] font-medium">{s.name}</span>
-                  <span className="block text-[10px] uppercase tracking-wider text-muted-foreground/70">{s.kind}</span>
-                </span>
-              </span>
-              <span className="shrink-0 text-right text-xs tabular-nums">
-                {s.players === null
-                  ? <span className="text-muted-foreground/60">{s.online ? "online" : "—"}</span>
-                  : <span className="text-emerald-400">{s.players}/{s.max}</span>}
-              </span>
-            </a>
-          ))}
+        <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {gameServices.map((s) => {
+            const scaled = s.instances.length > 1;
+            return (
+              <div key={s.name} className="panel overflow-hidden p-0 transition-colors hover:border-white/15">
+                {/* header — task name, kind, aggregate count + instance badge */}
+                <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className={cn("relative flex h-2 w-2 shrink-0", s.anyOnline ? "" : "opacity-40")}>
+                      {s.anyOnline && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />}
+                      <span className={cn("relative inline-flex h-2 w-2 rounded-full", s.anyOnline ? "bg-emerald-500" : "bg-muted-foreground/30")} />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-1.5">
+                        <span className="truncate text-[13px] font-semibold">{s.name}</span>
+                        {scaled && <span className="rounded-full bg-accent px-1.5 py-px text-[9px] font-semibold tabular-nums text-muted-foreground">×{s.instances.length}</span>}
+                      </span>
+                      <span className="block text-[10px] uppercase tracking-wider text-muted-foreground/60">{s.kind}</span>
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-right text-[13px] font-semibold tabular-nums">
+                    {s.players === null
+                      ? <span className="text-muted-foreground/60">{s.anyOnline ? "online" : "—"}</span>
+                      : <span className="text-emerald-400">{s.players}<span className="text-muted-foreground/50">/{s.max}</span></span>}
+                  </span>
+                </div>
+                {/* instances — vmid chips with per-instance counts (always shown so the ids are visible) */}
+                <div className="flex flex-wrap gap-1.5 border-t border-hairline bg-black/20 px-3 py-2">
+                  {s.instances.map((i) => (
+                    <a key={i.vmid} href={`/services/${i.vmid}`} title={`Open #${i.vmid}`}
+                      className="group flex items-center gap-1.5 rounded-md border border-hairline bg-panel px-2 py-1 transition-colors hover:border-white/20 hover:bg-accent/50">
+                      <span className={cn("h-1.5 w-1.5 rounded-full", i.online ? "bg-emerald-500" : "bg-muted-foreground/30")} />
+                      <span className="font-mono text-[11px] text-muted-foreground group-hover:text-foreground">#{i.vmid}</span>
+                      {i.players === null
+                        ? <span className="text-[11px] text-muted-foreground/50">{i.online ? "up" : "—"}</span>
+                        : <span className="text-[11px] tabular-nums text-emerald-400/90">{i.players}/{i.max}</span>}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
