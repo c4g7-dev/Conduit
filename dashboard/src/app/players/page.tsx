@@ -29,7 +29,7 @@ const GAME_KINDS = new Set(["paper", "velocity", "hytale"]);
 // Kinds we get live player counts for. Hytale now reports via its own connector.
 const QUERYABLE = new Set(["paper", "velocity", "hytale"]);
 
-type Conn = { active: boolean; players: { uuid: string; name: string; server?: string }[]; servers: { id: string; task: string; group: string; env: string }[] };
+type Conn = { active: boolean; players: { uuid: string; name: string; server?: string; serverId?: string }[]; servers: { id: string; task: string; group: string; env: string }[] };
 
 export default function PlayersPage() {
   const { data: metrics, loading, refresh } = usePoll<Metrics>("/api/metrics", 5000);
@@ -55,25 +55,28 @@ export default function PlayersPage() {
       // id, e.g. network-hytale-203 → 203), task → group, and task → env ("hytale" vs "server").
       // Partitioning by env is reliable even if /api/conduit/state lags (which previously dumped
       // Hytale players into the MC table at vmid #0).
-      const vmidByTask = new Map<string, number>();
-      const groupByTask = new Map<string, string>();
-      const envByTask = new Map<string, string>();
-      const idByTask = new Map<string, string>(); // task → connector serverId (for scoped actions)
+      // Index connector servers by their per-INSTANCE id (e.g. network-world-204), so a player
+      // resolves to the exact instance they're on — not just any instance sharing the task name
+      // (which made a scaled task always map to one vmid). Fall back to task-name when a player
+      // record lacks a serverId.
+      const byId = new Map<string, { task: string; group: string; env: string; vmid: number }>();
+      const byTask = new Map<string, { group: string; env: string; vmid: number }>();
       for (const s of conn!.servers ?? []) {
-        groupByTask.set(s.task, s.group);
-        envByTask.set(s.task, s.env);
-        idByTask.set(s.task, s.id);
         const m = /-(\d+)$/.exec(s.id);
-        if (m) vmidByTask.set(s.task, Number(m[1]));
+        const vmid = m ? Number(m[1]) : 0;
+        byId.set(s.id, { task: s.task, group: s.group, env: s.env, vmid });
+        if (!byTask.has(s.task)) byTask.set(s.task, { group: s.group, env: s.env, vmid });
       }
-      // metrics vmid as a fallback when the connector id has no trailing number
-      for (const r of metrics?.instances ?? []) if (!vmidByTask.has(r.taskName)) vmidByTask.set(r.taskName, r.vmid);
-      return (conn!.players ?? []).map((p) => ({
-        name: p.name, uuid: p.uuid, server: p.server ?? "?",
-        vmid: vmidByTask.get(p.server ?? "") ?? 0, role: "smp",
-        group: groupByTask.get(p.server ?? ""), env: envByTask.get(p.server ?? "") ?? "server",
-        serverId: idByTask.get(p.server ?? ""),
-      })).sort((a, b) => a.name.localeCompare(b.name));
+      return (conn!.players ?? []).map((p) => {
+        const inst = (p.serverId && byId.get(p.serverId)) || byTask.get(p.server ?? "");
+        return {
+          name: p.name, uuid: p.uuid, server: p.server ?? "?", role: "smp",
+          vmid: inst?.vmid ?? 0,
+          group: inst?.group,
+          env: inst?.env ?? "server",
+          serverId: p.serverId,
+        };
+      }).sort((a, b) => a.name.localeCompare(b.name));
     }
     const rows = (metrics?.instances ?? []).filter((r) => r.role !== "proxy" && r.reachable);
     const out: PlayerRow[] = [];

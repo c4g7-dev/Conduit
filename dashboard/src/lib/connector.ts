@@ -7,7 +7,7 @@
  * Lives on a Node global so it survives Next hot-reloads and is shared across route handlers
  * in one process. The VIP-holding panel is the one the plugins talk to.
  */
-export type ConnPlayer = { uuid: string; name: string; server?: string; ping?: number };
+export type ConnPlayer = { uuid: string; name: string; server?: string; serverId?: string; ping?: number };
 export type ConnServer = {
   id: string;            // service id, e.g. "Lobby-1" or the conduit task-instance id
   task: string;          // task/egg name
@@ -96,7 +96,9 @@ export function allPlayers(): ConnPlayer[] {
     for (const p of s.players) {
       const key = p.uuid && p.uuid.length ? `u:${p.uuid}` : `n:${p.name.toLowerCase()}|${s.env}`;
       const prev = out.get(key);
-      if (!prev || s.lastSeen > prev.seen) out.set(key, { p: { ...p, server: s.task }, seen: s.lastSeen });
+      // server = task name (display); serverId = the specific instance, so a scaled task resolves
+      // to the RIGHT vmid (was always mapping to the last instance sharing the task name).
+      if (!prev || s.lastSeen > prev.seen) out.set(key, { p: { ...p, server: s.task, serverId: s.id }, seen: s.lastSeen });
     }
   }
   return [...out.values()].map((e) => e.p).sort((a, b) => a.name.localeCompare(b.name));

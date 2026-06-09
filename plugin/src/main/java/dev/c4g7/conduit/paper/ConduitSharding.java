@@ -201,7 +201,14 @@ final class ConduitSharding {
             Long tt = transferring.get(key);
             if (tt == null) {
                 transferring.put(key, now);
-                String locStr = x + ";" + loc.getY() + ";" + loc.getZ() + ";" + world + ";" + loc.getYaw() + ";" + loc.getPitch();
+                // loc carries flight state too (air/gliding/velocity) so a player crossing the seam
+                // mid-air keeps their height + elytra glide on the destination instead of being
+                // dropped to the ground. Format: x;y;z;world;yaw;pitch;air;gliding;vx;vy;vz
+                org.bukkit.util.Vector vel = p.getVelocity();
+                boolean airborne = isAirborne(p);
+                String locStr = x + ";" + loc.getY() + ";" + loc.getZ() + ";" + world + ";" + loc.getYaw() + ";" + loc.getPitch()
+                        + ";" + (airborne ? 1 : 0) + ";" + (p.isGliding() ? 1 : 0)
+                        + ";" + vel.getX() + ";" + vel.getY() + ";" + vel.getZ();
                 final Region target = own;
                 // Capture full player state on the main thread, then async: stash it in Redis
                 // (keyed by uuid, short TTL) + report the cross to the panel (queues the move).
@@ -265,7 +272,10 @@ final class ConduitSharding {
         double dir = x < s.min() ? -1 : 1; // sign of how far past (west = below min)
         Location l = p.getLocation();
         l.setX(edge + dir * CAP_BACK); // CAP_BACK blocks past the seam, no further
-        p.teleport(safeY(l));
+        // Keep the player's height if airborne (don't yank a flyer to the ground); else surface-safe.
+        boolean wasGliding = p.isGliding();
+        p.teleport(isAirborne(p) ? l : safeY(l));
+        if (wasGliding) p.setGliding(true);
     }
 
     private void applyPending(JsonArray pending) {
@@ -284,7 +294,24 @@ final class ConduitSharding {
         applied.put(p.getName().toLowerCase(), loc);
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             Location l = parseLoc(loc);
-            if (l != null) p.teleport(safeY(l));
+            if (l == null) return;
+            String[] a = loc.split(";");
+            boolean airborne = a.length > 6 && "1".equals(a[6]);
+            boolean gliding = a.length > 7 && "1".equals(a[7]);
+            // Airborne crossings keep their EXACT y (you stay at the height you passed the border);
+            // grounded crossings snap to the surface so you don't suffocate on uneven terrain.
+            p.teleport(airborne ? l : safeY(l));
+            if (airborne && a.length > 10) {
+                try {
+                    double vx = Double.parseDouble(a[8]), vy = Double.parseDouble(a[9]), vz = Double.parseDouble(a[10]);
+                    if (gliding) p.setGliding(true); // resume elytra flight
+                    // Re-apply velocity next tick (teleport resets it), plus a small forward boost
+                    // while gliding so you keep flying along instead of stalling at the seam.
+                    final org.bukkit.util.Vector v = new org.bukkit.util.Vector(vx, vy, vz);
+                    if (gliding) v.add(p.getLocation().getDirection().multiply(0.4));
+                    plugin.getServer().getScheduler().runTask(plugin, () -> { if (p.isOnline()) p.setVelocity(v); });
+                } catch (NumberFormatException ignored) {}
+            }
         });
         final UUID uuid = p.getUniqueId();
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
@@ -314,6 +341,14 @@ final class ConduitSharding {
             if (a.length > 5) { l.setYaw(Float.parseFloat(a[4])); l.setPitch(Float.parseFloat(a[5])); }
             return l;
         } catch (Exception e) { return null; }
+    }
+
+    /** Airborne = gliding/flying, or there's no solid ground within ~3 blocks below the feet. */
+    private static boolean isAirborne(Player p) {
+        if (p.isGliding() || p.isFlying()) return true;
+        Location l = p.getLocation();
+        for (int dy = 1; dy <= 3; dy++) if (!l.clone().add(0, -dy, 0).getBlock().isPassable()) return false;
+        return true;
     }
 
     /**
