@@ -7,7 +7,7 @@
  */
 import { getDB, type Task } from "./store";
 import { liveServers } from "./connector";
-import { computeShardGrid, type ShardGrid, type ShardMember } from "./sharding";
+import { computeShardGrid, DEFAULT_SHARDING, type ShardGrid, type ShardMember } from "./sharding";
 import { getRedisCluster } from "./redis-cluster";
 
 /** velocity server name = sanitized task name + vmid (must match syncVelocity in provision.ts). */
@@ -34,12 +34,16 @@ function membersForTask(t: Task): ShardMember[] {
   return out.sort((a, b) => a.vmid - b.vmid);
 }
 
-/** The full grid for a sharded task (null if sharding is off or no instances are up). */
+/**
+ * The full strip grid for a task's live instances. Pure geometry — computed even when sharding
+ * is disabled, so the UI can show a live PREVIEW of how the world would shard before you enable
+ * it. The connector path (shardConfigForServer) separately gates on `enabled`, so a disabled
+ * task is never actually told to shard.
+ */
 export function gridForTask(t: Task): ShardGrid | null {
-  if (!t.sharding?.enabled) return null;
   const members = membersForTask(t);
   if (members.length === 0) return null;
-  return computeShardGrid(t.sharding, members);
+  return computeShardGrid(t.sharding ?? DEFAULT_SHARDING, members);
 }
 
 /* ---- pending transfers (player coords staged for the destination) ---------------------- */

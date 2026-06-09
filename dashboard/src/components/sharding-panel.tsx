@@ -129,28 +129,35 @@ export function ShardingPanel({ taskId, instanceCount, taskMax }: { taskId: stri
         )}
       </div>
 
-      {/* region grid visualization */}
-      {s.enabled && (
-        <div className="panel overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-hairline px-4 py-2.5">
-            <MapIcon className="h-3.5 w-3.5 text-brand" />
-            <div className="eyebrow">Region map · overworld</div>
-            <div className="ml-auto text-[11px] text-muted-foreground/70">X axis →</div>
-          </div>
-          <div className="p-4">
-            {!data?.grid || data.grid.regions.length === 0 ? (
-              <div className="py-10 text-center text-sm text-muted-foreground">
-                <Info className="mx-auto mb-2 h-5 w-5 opacity-40" />
-                {instanceCount < 2
-                  ? "Scale this task to 2+ instances to form a sharded world."
-                  : "Waiting for instances to report (connector)…"}
-              </div>
-            ) : (
-              <RegionMap grid={data.grid} addRegion={addRegion} adding={adding} atCap={atCap} />
-            )}
-          </div>
+      {/* region grid visualization — always shown (live preview even when disabled) so you can
+          see how the world would shard before flipping the toggle. */}
+      <div className="panel overflow-hidden">
+        <div className="flex items-center gap-2 border-b border-hairline px-4 py-2.5">
+          <MapIcon className="h-3.5 w-3.5 text-brand" />
+          <div className="eyebrow">Region map · overworld</div>
+          {!s.enabled && <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">preview · sharding off</span>}
+          <div className="ml-auto text-[11px] text-muted-foreground/70">X axis →</div>
         </div>
-      )}
+        <div className="p-4">
+          {!data?.grid || data.grid.regions.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              <Info className="mx-auto mb-2 h-5 w-5 opacity-40" />
+              {instanceCount < 1
+                ? "No instances yet — scale this task up to form regions."
+                : "Waiting for instances to report (connector)…"}
+            </div>
+          ) : (
+            <>
+              {!s.enabled && (
+                <p className="mb-3 text-[12px] text-muted-foreground">
+                  This is how the world would split across the current instances. Enable sharding above to make it live.
+                </p>
+              )}
+              <RegionMap grid={data.grid} addRegion={addRegion} adding={adding} atCap={atCap} />
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

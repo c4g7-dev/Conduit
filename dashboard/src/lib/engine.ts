@@ -11,7 +11,7 @@
  */
 import { api, lxcIp, waitTask, nodeIp, NODE } from "./proxmox";
 import { blueprint, loadBlueprints, type Blueprint, type Seed } from "./blueprints";
-import { getDB, saveDB, getNetwork, type Task, type Group, type ImageStatus } from "./store";
+import { getDB, saveDB, getNetwork, mutate, type Task, type Group, type ImageStatus } from "./store";
 import {
   installPaper,
   installVelocity,
@@ -531,6 +531,30 @@ export async function decommissionTask(taskId: string): Promise<number> {
   for (const inst of mine) await destroy(inst).catch(() => {});
   recent.delete(taskId);
   return mine.length;
+}
+
+/**
+ * Permanently delete a single instance and lower its task's target so the controller doesn't
+ * immediately re-provision it (otherwise reconcile restarts/recreates it). This is the explicit
+ * operator delete — the only way a persistent instance is destroyed (auto-GC never touches them).
+ * Returns the task id, or null if the vmid isn't a Conduit instance.
+ */
+export async function destroyInstance(vmid: number): Promise<string | null> {
+  const all = await discoverInstances();
+  const inst = all.find((i) => i.vmid === vmid);
+  if (!inst) return null;
+  await destroy(inst);
+  noteForget(inst.taskId, vmid);
+  // Drop the task's desired (and clamp min) by one so it isn't re-created next tick.
+  if (inst.taskId) {
+    await mutate((db) => {
+      const t = db.tasks.find((x) => x.id === inst.taskId);
+      if (!t) return;
+      t.desired = Math.max(0, t.desired - 1);
+      if (t.min > t.desired) t.min = t.desired;
+    }).catch(() => {});
+  }
+  return inst.taskId || null;
 }
 
 /** One reconcile pass over every task. Returns a short action log. */

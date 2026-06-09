@@ -13,6 +13,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { RoleDot, roleColor } from "@/components/role-dot";
 import { FlowGraph } from "@/components/flow-graph";
 import { ShardingPanel } from "@/components/sharding-panel";
+import { ConfirmDeleteDialog } from "@/components/confirm-delete-dialog";
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -187,6 +188,21 @@ export default function ServersPage() {
       const json = await res.json();
       if (json.error) throw new Error(json.error);
       toast.success(`#${inst.vmid}: ${action}`);
+      setTimeout(refresh, 1200);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      set(`i${inst.vmid}`, false);
+    }
+  }
+
+  async function deleteInstance(inst: Instance) {
+    set(`i${inst.vmid}`, true);
+    try {
+      const res = await fetch(`/api/containers/${inst.vmid}`, { method: "DELETE" });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      toast.success(`#${inst.vmid} deleted`);
       setTimeout(refresh, 1200);
     } catch (e) {
       toast.error(String(e));
@@ -396,7 +412,7 @@ export default function ServersPage() {
                     <OverviewTab task={selected} metrics={mByVmid} busy={!!pending[selected.id]} onScale={scale} />
                   )}
                   {tab === "instances" && (
-                    <InstancesTab task={selected} metrics={mByVmid} pending={pending} onAction={instAction} onMigrate={migrate} nodes={nodeNames} />
+                    <InstancesTab task={selected} metrics={mByVmid} pending={pending} onAction={instAction} onMigrate={migrate} onDelete={deleteInstance} nodes={nodeNames} />
                   )}
                   {tab === "routing" && selected.role === "proxy" && data && (
                     <RoutingTab
@@ -552,12 +568,14 @@ function OverviewTab({ task, metrics, busy, onScale }: { task: Task; metrics: Ma
 }
 
 /* ---- instances tab ------------------------------------------------------- */
-function InstancesTab({ task, metrics, pending, onAction, onMigrate, nodes }: {
+function InstancesTab({ task, metrics, pending, onAction, onMigrate, onDelete, nodes }: {
   task: Task; metrics: Map<number, MetricRow>; pending: Record<string, boolean>;
   onAction: (i: Instance, a: "start" | "shutdown" | "stop" | "reboot") => void;
   onMigrate: (i: Instance, target: string) => void;
+  onDelete: (i: Instance) => Promise<void>;
   nodes: string[];
 }) {
+  const [del, setDel] = useState<Instance | null>(null);
   if (task.instances.length === 0) {
     return <div className="py-16 text-center text-sm text-muted-foreground">No instances running.</div>;
   }
@@ -629,12 +647,22 @@ function InstancesTab({ task, metrics, pending, onAction, onMigrate, nodes }: {
                   ))}
                   <ContextMenuSeparator />
                   <ContextMenuItem variant="destructive" onClick={() => onAction(inst, "stop")}><Square /> Force stop</ContextMenuItem>
+                  <ContextMenuItem variant="destructive" onClick={() => setDel(inst)}><Trash2 /> Delete instance…</ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
             );
           })}
         </tbody>
       </table>
+      {del && (
+        <ConfirmDeleteDialog
+          open onOpenChange={(o) => !o && setDel(null)}
+          title={`Delete instance #${del.vmid}`}
+          confirmText={del.name}
+          warning={`This permanently destroys the container ${del.name} (#${del.vmid}) and its disk${task.persistent ? " — including its world/data, which is NOT backed up" : ""}. The task target is lowered so it won't respawn. This cannot be undone.`}
+          onConfirm={() => onDelete(del)}
+        />
+      )}
     </div>
   );
 }
