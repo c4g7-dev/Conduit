@@ -226,7 +226,9 @@ final class ConduitSharding {
         if (s == null) return;
         double d = Math.min(x - s.min(), s.max() - x);
         if (d > 150 || d < 0) return;
-        String msg = (d < cancelRange ? "§c" : "§e") + "Region border " + Math.round(d) + "m";
+        // graduated proximity colour: 150..100 green, 100..30 yellow, <30 red
+        String color = d > 100 ? "§a" : d >= 30 ? "§e" : "§c";
+        String msg = color + "Region border " + Math.round(d) + "m";
         p.spigot().sendMessage(ChatMessageType.ACTION_BAR, TextComponent.fromLegacyText(msg));
     }
 
