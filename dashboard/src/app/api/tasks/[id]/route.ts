@@ -41,12 +41,18 @@ export async function PATCH(
           t.sharding = undefined;
         } else {
           const s = body.sharding;
+          const enabled = typeof s.enabled === "boolean" ? s.enabled : (t.sharding?.enabled ?? false);
+          // Shared seed: keep an explicit one, else carry the existing, else mint one when first
+          // enabling (so every region instance generates identical, continuous terrain).
+          let seed = typeof s.seed === "string" && s.seed.trim() ? s.seed.trim() : t.sharding?.seed;
+          if (enabled && !seed) seed = String(Math.floor(Math.random() * 9e18) - 4.5e18 | 0) + String(Math.floor(Math.random() * 1e6));
           t.sharding = {
-            enabled: typeof s.enabled === "boolean" ? s.enabled : (t.sharding?.enabled ?? false),
+            enabled,
             world: typeof s.world === "string" && s.world.trim() ? s.world.trim() : (t.sharding?.world ?? "world"),
             stripWidth: typeof s.stripWidth === "number" && s.stripWidth > 0 ? Math.round(s.stripWidth) : (t.sharding?.stripWidth ?? 5000),
             splitEnd: typeof s.splitEnd === "boolean" ? s.splitEnd : (t.sharding?.splitEnd ?? true),
             borderCancelRange: typeof s.borderCancelRange === "number" && s.borderCancelRange >= 0 ? Math.round(s.borderCancelRange) : (t.sharding?.borderCancelRange ?? 30),
+            seed,
           };
         }
       }

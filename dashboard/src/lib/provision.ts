@@ -278,6 +278,9 @@ function paperScript(task: Task, secret: string, seed: Seed, build: Resolved, vm
     "allow-nether": "true",
     "enable-command-block": "true",
   };
+  // Sharded tasks: every region instance MUST share one world seed so terrain is continuous
+  // across strips (else the same X/Z is different terrain on each server).
+  if (task.sharding?.enabled && task.sharding.seed) baseProps["level-seed"] = task.sharding.seed;
   const props = Object.entries({ ...baseProps, ...(seed.properties ?? {}) })
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
