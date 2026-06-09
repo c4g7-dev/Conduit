@@ -2,15 +2,23 @@
  * Connector plugin → periodic heartbeat with full player list + counts (+ TPS).
  * The proxy heartbeat also receives any pending actions to execute (move/message/kick)
  * AND a `config` block (routing fallbacks, MOTD, maintenance, tablist) built from Conduit
- * state — so the plugin stays generic and behaviour is configured server-side.
+ * state. Every heartbeat carries a light `names` snapshot for plugin tab-completion.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { heartbeat, drainActions } from "@/lib/connector";
+import { heartbeat, drainActions, liveServers, allPlayers } from "@/lib/connector";
 import { connectorAuthed } from "@/lib/connector-auth";
 import { buildProxyConfig } from "@/lib/proxy-config";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+/** Light name snapshot for plugin tab-completion (server + player names). */
+function nameSnapshot() {
+  return {
+    servers: liveServers().map((s) => s.id.replace(/^network-/, "")),
+    players: allPlayers().map((p) => p.name),
+  };
+}
 
 export async function POST(req: NextRequest) {
   if (!connectorAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -18,12 +26,13 @@ export async function POST(req: NextRequest) {
     const b = await req.json();
     if (!b.id) return NextResponse.json({ error: "id required" }, { status: 400 });
     heartbeat(b.id, b);
+    const names = nameSnapshot();
     if (b.env === "proxy") {
       const actions = drainActions(Number(b.ackActionId ?? 0));
       const config = await buildProxyConfig(String(b.task ?? ""), String(b.group ?? "")).catch(() => null);
-      return NextResponse.json({ ok: true, actions, config });
+      return NextResponse.json({ ok: true, actions, config, names });
     }
-    return NextResponse.json({ ok: true, actions: [] });
+    return NextResponse.json({ ok: true, actions: [], names });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 400 });
   }
