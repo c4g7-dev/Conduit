@@ -64,17 +64,24 @@ public class ConduitVelocityPlugin {
             proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder(name).build(), hub);
         }
 
-        // /ct (alias /conduit) → network control, permission-gated
-        SimpleCommand ct = new SimpleCommand() {
+        // /conduit (aliases /ct /cloud) → network control, permission-gated, with completion.
+        SimpleCommand conduit = new SimpleCommand() {
             @Override public void execute(Invocation inv) {
                 if (!inv.source().hasPermission("conduit.admin")) {
-                    inv.source().sendMessage(LEGACY.deserialize("&cNo permission.")); return;
+                    inv.source().sendMessage(LEGACY.deserialize(" &b&lConduit &8» &cNo permission.")); return;
                 }
                 ConduitCommands.run(client, inv.arguments(), line -> inv.source().sendMessage(LEGACY.deserialize(line)));
             }
+            @Override public List<String> suggest(Invocation inv) {
+                if (!inv.source().hasPermission("conduit.admin")) return List.of();
+                List<String> players = proxy.getAllPlayers().stream().map(Player::getUsername).toList();
+                List<String> servers = proxy.getAllServers().stream().map(s -> s.getServerInfo().getName()).toList();
+                return ConduitCommands.complete(inv.arguments(), players, servers);
+            }
             @Override public boolean hasPermission(Invocation inv) { return inv.source().hasPermission("conduit.admin"); }
         };
-        proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder("ct").aliases("conduit").build(), ct);
+        proxy.getCommandManager().register(
+                proxy.getCommandManager().metaBuilder("conduit").aliases("ct", "cloud").build(), conduit);
 
         proxy.getScheduler().buildTask(this, this::tick)
                 .repeat(3, TimeUnit.SECONDS).delay(2, TimeUnit.SECONDS).schedule();

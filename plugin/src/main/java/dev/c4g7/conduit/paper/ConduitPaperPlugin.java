@@ -64,11 +64,22 @@ public class ConduitPaperPlugin extends JavaPlugin implements Listener {
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         if (!sender.hasPermission("conduit.admin")) { sender.sendMessage(ChatColor.RED + "No permission."); return true; }
-        // Run the command core async (it does HTTP); reply on the main thread.
+        // Run the command core async (it does HTTP); reply on the main thread via the scheduler.
         getServer().getScheduler().runTaskAsynchronously(this, () ->
                 ConduitCommands.run(client, args, line ->
-                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', line))));
+                        getServer().getScheduler().runTask(this, () ->
+                                sender.sendMessage(ChatColor.translateAlternateColorCodes('&', line)))));
         return true;
+    }
+
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command cmd, String alias, String[] args) {
+        if (!sender.hasPermission("conduit.admin")) return List.of();
+        // Runs on the main thread — keep it non-blocking: subcommands + a cached server/player
+        // snapshot refreshed by the heartbeat (no HTTP here). Local players always available.
+        List<String> players = new ArrayList<>(Bukkit.getOnlinePlayers().stream().map(Player::getName).toList());
+        for (String n : client.cachedPlayers()) if (!players.contains(n)) players.add(n);
+        return ConduitCommands.complete(args, players, client.cachedServers());
     }
 
     @EventHandler

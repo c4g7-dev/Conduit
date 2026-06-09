@@ -32,6 +32,11 @@ public final class ConduitClient {
     public volatile long ackActionId = 0;
     /** Latest proxy config pushed by the panel via the heartbeat response (routing/MOTD/tablist). */
     public volatile JsonObject config = null;
+    // Lightweight name snapshot from the heartbeat response — for tab-completion without HTTP.
+    private volatile java.util.List<String> cachedServers = java.util.List.of();
+    private volatile java.util.List<String> cachedPlayers = java.util.List.of();
+    public java.util.List<String> cachedServers() { return cachedServers; }
+    public java.util.List<String> cachedPlayers() { return cachedPlayers; }
 
     public ConduitClient(String endpoint, String token, String id, String task, String group, String env) {
         this.endpoint = endpoint.replaceAll("/+$", "");
@@ -92,6 +97,11 @@ public final class ConduitClient {
                 JsonObject r = GSON.fromJson(resp.body(), JsonObject.class);
                 if (r != null && r.has("config") && r.get("config").isJsonObject()) {
                     this.config = r.getAsJsonObject("config");
+                }
+                if (r != null && r.has("names") && r.get("names").isJsonObject()) {
+                    JsonObject n = r.getAsJsonObject("names");
+                    if (n.has("servers")) cachedServers = jsonToList(n.getAsJsonArray("servers"));
+                    if (n.has("players")) cachedPlayers = jsonToList(n.getAsJsonArray("players"));
                 }
                 if (r != null && r.has("actions") && r.get("actions").isJsonArray()) {
                     for (var el : r.getAsJsonArray("actions")) {
@@ -155,5 +165,10 @@ public final class ConduitClient {
 
     private static String str(JsonObject o, String k) {
         return (o.has(k) && !o.get(k).isJsonNull()) ? o.get(k).getAsString() : null;
+    }
+    private static java.util.List<String> jsonToList(com.google.gson.JsonArray a) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (var el : a) out.add(el.getAsString());
+        return out;
     }
 }

@@ -25,7 +25,7 @@ import {
   ctExec,
   type ProxyServer,
 } from "./provision";
-import { pingMc } from "./mcping";
+import { connServersByVmid } from "./metrics-source";
 import { applyTemplate, serviceDir } from "./templates";
 import { ensureServiceShare } from "./serviceshare";
 import { syncTaskFiles } from "./taskfile";
@@ -277,23 +277,15 @@ export function instancesOf(all: Instance[], taskId: string): Instance[] {
 }
 
 /** Live online-player count per vmid via SLP (best-effort; unreachable → absent). */
-async function playerCounts(
-  insts: Instance[],
-  portOf: (i: Instance) => number,
-): Promise<Map<number, number>> {
+/** Live player counts per instance, from the connector registry (SLP is gone). Instances
+ *  not yet reporting are simply absent (treated as 0 by callers). */
+function playerCounts(insts: Instance[]): Map<number, number> {
+  const conn = connServersByVmid();
   const out = new Map<number, number>();
-  await Promise.all(
-    insts
-      .filter((i) => i.status === "running" && i.ip && i.ready)
-      .map(async (i) => {
-        try {
-          const p = await pingMc(i.ip!, portOf(i), 2000);
-          out.set(i.vmid, p.online);
-        } catch {
-          /* not up yet / unreachable — leave absent */
-        }
-      }),
-  );
+  for (const i of insts) {
+    const s = conn.get(i.vmid);
+    if (s) out.set(i.vmid, s.online);
+  }
   return out;
 }
 
@@ -441,17 +433,10 @@ export async function reconcileAll(): Promise<string[]> {
       }
     }
 
-    // Gather live player counts once if any task autoscales (drives desired + safe drain).
+    // Live player counts from the connector (drives desired + safe drain).
     const autoTasks = db.tasks.filter((t) => t.autoscale);
-    const portOf = (i: Instance) => {
-      const t = db.tasks.find((x) => x.id === i.taskId);
-      return (t ? blueprint(t.blueprintId)?.port : undefined) ?? 25565;
-    };
     const players = autoTasks.length
-      ? await playerCounts(
-          autoTasks.flatMap((t) => instancesOf(all, t.id)),
-          portOf,
-        )
+      ? playerCounts(autoTasks.flatMap((t) => instancesOf(all, t.id)))
       : new Map<number, number>();
 
     for (const task of db.tasks) {

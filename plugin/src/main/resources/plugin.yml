@@ -5,10 +5,10 @@ api-version: "1.20"
 author: c4g7
 description: Conduit network connector (backend reporter).
 commands:
-  ct:
+  conduit:
     description: Conduit network control
-    aliases: [conduit]
-    usage: /ct help
+    aliases: [ct, cloud]
+    usage: /conduit help
 permissions:
   conduit.admin:
     description: Use /ct network control commands
