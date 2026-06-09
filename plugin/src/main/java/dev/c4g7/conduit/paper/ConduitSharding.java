@@ -1,5 +1,6 @@
 package dev.c4g7.conduit.paper;
 
+import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
@@ -17,6 +18,7 @@ import net.md_5.bungee.api.chat.TextComponent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 import dev.c4g7.conduit.ConduitClient;
@@ -39,8 +41,11 @@ import dev.c4g7.conduit.ConduitClient;
  * player data, like separate servers.)
  */
 final class ConduitSharding {
+    private static final Gson GSON = new Gson();
+    private static final String PD_KEY = "conduit:pd:"; // + uuid
     private final JavaPlugin plugin;
     private final ConduitClient client;
+    private final RedisClient redis = new RedisClient(List.of(), "");
 
     private record Strip(double min, double max) {}
     private record Region(String serverId, String target, String name, Map<String, Strip> worlds) {}
@@ -106,6 +111,15 @@ final class ConduitSharding {
                 gridSig = sig;
                 parseGrid(grid);
                 plugin.getServer().getScheduler().runTask(plugin, this::applyBorders);
+            }
+            // Redis endpoints for player-data sync (primary first; connector fails over the list).
+            if (sharding.has("redis") && sharding.get("redis").isJsonObject()) {
+                JsonObject rc = sharding.getAsJsonObject("redis");
+                List<String> eps = new ArrayList<>();
+                if (rc.has("endpoints")) for (var el : rc.getAsJsonArray("endpoints")) eps.add(el.getAsString());
+                redis.configure(eps, rc.has("password") ? rc.get("password").getAsString() : "");
+            } else {
+                redis.configure(List.of(), "");
             }
             if (sharding.has("pending") && sharding.get("pending").isJsonArray())
                 applyPending(sharding.getAsJsonArray("pending"));
@@ -188,8 +202,14 @@ final class ConduitSharding {
                 transferring.put(key, now);
                 String locStr = x + ";" + loc.getY() + ";" + loc.getZ() + ";" + world + ";" + loc.getYaw() + ";" + loc.getPitch();
                 final Region target = own;
-                plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () ->
-                        client.transfer(p.getName(), target.target(), target.serverId(), locStr));
+                // Capture full player state on the main thread, then async: stash it in Redis
+                // (keyed by uuid, short TTL) + report the cross to the panel (queues the move).
+                final String pd = redis.available() ? PlayerState.capture(p) : null;
+                final UUID uuid = p.getUniqueId();
+                plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+                    if (pd != null) redis.setex(PD_KEY + uuid, 60, pd);
+                    client.transfer(p.getName(), target.target(), target.serverId(), locStr);
+                });
                 pushInward(p, world, x);
             } else {
                 pushInward(p, world, x);
@@ -237,9 +257,23 @@ final class ConduitSharding {
             Location l = parseLoc(loc);
             if (l != null) p.teleport(l);
         });
-        // ack so the panel stops re-sending it
-        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () ->
-                client.apiGet("/api/connector/pending?id=" + url(self) + "&ack=" + url(p.getName())));
+        final UUID uuid = p.getUniqueId();
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            // Pull the player's state from Redis (written by the source region) and apply it,
+            // then delete it — so the handoff carries inventory/HP/XP, not just position.
+            if (redis.available()) {
+                String pd = redis.get(PD_KEY + uuid);
+                if (pd != null && !pd.isEmpty()) {
+                    try {
+                        JsonObject o = GSON.fromJson(pd, JsonObject.class);
+                        plugin.getServer().getScheduler().runTask(plugin, () -> { if (p.isOnline()) PlayerState.apply(p, o); });
+                    } catch (Throwable ignored) {}
+                    redis.del(PD_KEY + uuid);
+                }
+            }
+            // ack so the panel stops re-sending it
+            client.apiGet("/api/connector/pending?id=" + url(self) + "&ack=" + url(p.getName()));
+        });
     }
 
     private static Location parseLoc(String s) {
