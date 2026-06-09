@@ -560,6 +560,14 @@ export async function destroyInstance(vmid: number): Promise<string | null> {
       if (t.min > t.desired) t.min = t.desired;
     }).catch(() => {});
   }
+  // Immediately drop the stale routing entry: re-render every proxy's velocity.toml from the
+  // now-live backends (the deleted vmid is gone from a fresh discovery) and reload Velocity.
+  // Done inline (not just via the post-delete reconcile, which may be skipped if one is busy).
+  try {
+    const db = await getDB();
+    const fresh = await discoverInstances();
+    await velocityPass(db, fresh, []);
+  } catch { /* the next reconcile will reconcile routing anyway */ }
   return inst.taskId || null;
 }
 
