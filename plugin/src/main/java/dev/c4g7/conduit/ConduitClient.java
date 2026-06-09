@@ -30,9 +30,10 @@ public final class ConduitClient {
             .connectTimeout(Duration.ofSeconds(5)).build();
     private final String endpoint, token, id, task, group, env;
     public volatile long ackActionId = 0;
-    // Heartbeat health, to throttle failure logging (log on transition, not every attempt).
+    // Heartbeat health, to throttle failure logging: log the first 10 misses, then once/minute.
     private volatile boolean hbOk = true;
     private volatile int hbFails = 0;
+    private volatile long hbLastLog = 0;
     /** Latest proxy config pushed by the panel via the heartbeat response (routing/MOTD/tablist). */
     public volatile JsonObject config = null;
     // Lightweight name snapshot from the heartbeat response — for tab-completion without HTTP.
@@ -98,7 +99,7 @@ public final class ConduitClient {
             o.add("players", arr);
             HttpResponse<String> resp = post("/api/connector/heartbeat", o);
             if (resp.statusCode() == 200) {
-                if (!hbOk) { System.out.println("[Conduit] heartbeat recovered after " + hbFails + " missed beat(s)"); hbOk = true; hbFails = 0; }
+                if (!hbOk) { System.out.println("[Conduit] heartbeat recovered after " + hbFails + " missed beat(s)"); hbOk = true; hbFails = 0; hbLastLog = 0; }
                 JsonObject r = GSON.fromJson(resp.body(), JsonObject.class);
                 if (r != null && r.has("config") && r.get("config").isJsonObject()) {
                     this.config = r.getAsJsonObject("config");
@@ -123,10 +124,18 @@ public final class ConduitClient {
                 }
             }
         } catch (Throwable t) {
-            // Throttle: log only the FIRST miss (e.g. the panel VIP briefly down during a panel
-            // restart) then stay quiet until it recovers — otherwise a 1s tick floods the console.
+            // Throttle so a 1s tick can't flood the console: log the first 10 misses, then at most
+            // once per minute (still visible if it's ongoing), and a recovery line when it returns.
+            hbOk = false;
             hbFails++;
-            if (hbOk) { hbOk = false; System.out.println("[Conduit] heartbeat lost (" + t + ") — retrying quietly until it recovers"); }
+            long now = System.currentTimeMillis();
+            if (hbFails <= 10) {
+                System.out.println("[Conduit] heartbeat failed, retrying… (" + hbFails + ") " + t);
+                hbLastLog = now;
+            } else if (now - hbLastLog >= 60_000) {
+                System.out.println("[Conduit] heartbeat still failing — " + hbFails + " missed beat(s) so far (" + t + ")");
+                hbLastLog = now;
+            }
         }
         return out;
     }
