@@ -20,7 +20,7 @@ const STORE_ROOTS = [
 // In-container roots per service kind (absolute paths).
 function serviceRoots(kind: string): { label: string; path: string }[] {
   if (kind === "hytale") return [{ label: "Server data", path: "/opt/hytale/data" }, { label: "Launcher", path: "/opt/hytale" }, { label: "Shared", path: "/opt/shared" }];
-  if (kind === "nginx") return [{ label: "Web root", path: "/opt/www" }];
+  if (kind === "nginx") return [{ label: "Web root", path: "/opt/www" }, { label: "Config", path: "/opt/nginx" }];
   return [{ label: "Server", path: "/opt/mc" }, { label: "Shared", path: "/opt/shared" }];
 }
 

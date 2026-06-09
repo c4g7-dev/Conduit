@@ -61,6 +61,12 @@ function filePanelRoots(softwareKind?: string): { label: string; path: string }[
       { label: "Launcher", path: "/opt/hytale" },
     ];
   }
+  if (softwareKind === "nginx") {
+    return [
+      { label: "Web root", path: "/opt/www" },
+      { label: "Config", path: "/opt/nginx" },
+    ];
+  }
   return [{ label: "Server", path: "/opt/mc" }];
 }
 

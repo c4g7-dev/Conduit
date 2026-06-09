@@ -203,7 +203,8 @@ export async function GET(
     }
 
     const out = await nodeExec(
-      `pct exec ${id} -- bash -c 'p="$(echo ${b64Path} | base64 -d)"; ls -la --time-style=+%s "$p"'`,
+      // -H follows a symlinked operand (e.g. /opt/nginx → /etc/nginx) so we list its contents.
+      `pct exec ${id} -- bash -c 'p="$(echo ${b64Path} | base64 -d)"; ls -laH --time-style=+%s "$p"'`,
       20_000,
       host,
     );
