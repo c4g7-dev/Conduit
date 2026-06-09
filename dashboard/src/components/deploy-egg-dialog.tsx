@@ -6,6 +6,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
 import { RoleDot, roleColor } from "@/components/role-dot";
+import { HelpButton } from "@/components/help-center";
 import { cn } from "@/lib/utils";
 import {
   Rocket, Cpu, MemoryStick, HardDrive, Users, Infinity as InfinityIcon, Pin, Plus, Package,
@@ -18,10 +19,12 @@ type Blueprint = {
 };
 type Group = { id: string; name: string };
 
-function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
+function Field({ label, children, hint, help }: { label: string; children: React.ReactNode; hint?: string; help?: string }) {
   return (
     <div>
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{label}</div>
+      <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+        {label}{help && <HelpButton topic={help} />}
+      </div>
       {children}
       {hint && <p className="mt-1 text-[11px] text-muted-foreground/70">{hint}</p>}
     </div>
@@ -198,7 +201,7 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
                 </select>
               </Field>
             )}
-            <Field label="Deploy node">
+            <Field label="Deploy node" help="node-pin">
               <select value={node} onChange={(e) => setNode(e.target.value)}
                 className="w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-sm outline-none">
                 <option value="">Auto (least-loaded)</option>
@@ -212,6 +215,7 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
             <div className="mb-2 flex items-center gap-2">
               <Users className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Scaling</span>
+              <HelpButton topic="mode" />
             </div>
             <div className="mb-3 grid grid-cols-2 gap-2">
               {(["static", "dynamic"] as const).map((md) => (
@@ -231,24 +235,24 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
             {mode === "dynamic" ? (
               <>
                 <div className="grid grid-cols-3 gap-2">
-                  <Field label="Min"><Num value={min} onChange={setMin} min={0} /></Field>
-                  <Field label="Max (0=∞)"><Num value={max} onChange={setMax} min={0} /></Field>
-                  <Field label="Players / inst"><Num value={pps} onChange={setPps} min={1} /></Field>
+                  <Field label="Min" help="min-max-desired"><Num value={min} onChange={setMin} min={0} /></Field>
+                  <Field label="Max (0=∞)" help="min-max-desired"><Num value={max} onChange={setMax} min={0} /></Field>
+                  <Field label="Players / inst" help="players-per-instance"><Num value={pps} onChange={setPps} min={1} /></Field>
                 </div>
                 <div className="mt-2 grid grid-cols-3 gap-2">
-                  <Field label="Warm pool" hint="Pre-cloned instances kept ready for instant scale-up (needs a fast image).">
+                  <Field label="Warm pool" help="prepared-pool" hint="Pre-cloned instances kept ready for instant scale-up (needs a fast image).">
                     <Num value={preparedPool} onChange={setPreparedPool} min={0} />
                   </Field>
-                  <Field label="Scale-up %" hint="Spawn a spare once a server passes this % full.">
+                  <Field label="Scale-up %" help="scale-up-percent" hint="Spawn a spare once a server passes this % full.">
                     <Num value={scaleUpPercent} onChange={setScaleUpPercent} min={1} suffix="%" />
                   </Field>
-                  <Field label="Idle drain" hint="Reap an empty instance after this idle time.">
+                  <Field label="Idle drain" help="scale-down-after" hint="Reap an empty instance after this idle time.">
                     <Num value={scaleDownAfterSec} onChange={setScaleDownAfterSec} min={0} suffix="s" />
                   </Field>
                 </div>
               </>
             ) : (
-              <Field label="Instance count" hint="Fixed number of always-on instances.">
+              <Field label="Instance count" help="min-max-desired" hint="Fixed number of always-on instances.">
                 <Num value={min} onChange={(v) => { setMin(v); setMax(v); }} min={1} />
               </Field>
             )}
@@ -259,6 +263,7 @@ export function DeployEggDialog({ egg, onDeployed }: { egg: Blueprint; onDeploye
             <div className="mb-2 flex items-center gap-2">
               <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Resources / instance</span>
+              <HelpButton topic="resources" />
             </div>
             <div className="grid grid-cols-3 gap-2">
               <Field label="Cores"><Num value={cores} onChange={setCores} min={1} /></Field>

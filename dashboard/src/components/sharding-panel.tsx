@@ -6,6 +6,7 @@ import { usePoll } from "@/hooks/use-poll";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Globe2, Loader2, Map as MapIcon, Info, Plus, TriangleAlert, Dices } from "lucide-react";
+import { HelpButton } from "@/components/help-center";
 
 type Strip = { min: number; max: number };
 type Region = {
@@ -85,6 +86,7 @@ export function ShardingPanel({ taskId, instanceCount, taskMax }: { taskId: stri
         <div className="mb-1 flex items-center gap-2">
           <Globe2 className="h-4 w-4 text-brand" />
           <h3 className="text-sm font-semibold">Seamless world (sharding)</h3>
+          <HelpButton topic="sharding-enable" />
           {saving && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
         </div>
         <p className="mb-3 text-[12px] text-muted-foreground">
@@ -114,18 +116,18 @@ export function ShardingPanel({ taskId, instanceCount, taskMax }: { taskId: stri
             {/* Region width in overworld CHUNKS (the intuitive MC unit). 1 chunk = 16 blocks;
                 the overworld strip is stripWidth×8 blocks, so chunks = stripWidth/2 and
                 stripWidth = chunks×2. The nether strip is chunks/8 (MC's 1:8 scale). */}
-            <Field label="Chunks / region" hint={`${(s.stripWidth * 8).toLocaleString()} blocks overworld`}>
+            <Field label="Chunks / region" help="shard-chunks" hint={`${(s.stripWidth * 8).toLocaleString()} blocks overworld`}>
               <input type="number" min={16} step={16} value={Math.round(s.stripWidth / 2)}
                 onChange={(e) => setDraft({ ...s, stripWidth: Math.max(2, Number(e.target.value) * 2) })}
                 onBlur={(e) => save({ stripWidth: Math.max(2, Number(e.target.value) * 2) })}
                 className="w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-[13px] tabular-nums outline-none" />
             </Field>
-            <Field label="Seam buffer" hint="no-build blocks at edge">
+            <Field label="Seam buffer" help="shard-seam" hint="no-build blocks at edge">
               <input type="number" min={0} step={5} value={s.borderCancelRange}
                 onChange={(e) => setDraft({ ...s, borderCancelRange: Number(e.target.value) })} onBlur={(e) => save({ borderCancelRange: Number(e.target.value) })}
                 className="w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-[13px] tabular-nums outline-none" />
             </Field>
-            <Field label="Split End" hint="shard the End too">
+            <Field label="Split End" help="shard-splitend" hint="shard the End too">
               <button onClick={() => save({ splitEnd: !s.splitEnd })}
                 className={cn("w-full rounded-md border px-2.5 py-1.5 text-[13px] font-medium transition-colors", s.splitEnd ? "border-brand/40 bg-brand/10 text-brand" : "border-hairline text-muted-foreground")}>
                 {s.splitEnd ? "On" : "Off"}
@@ -232,10 +234,12 @@ function EnableShardingDialog({ open, onOpenChange, instanceCount, onConfirm }: 
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Field({ label, hint, help, children }: { label: string; hint?: string; help?: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="mb-1 flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}{help && <HelpButton topic={help} />}
+      </span>
       {children}
       {hint && <span className="mt-0.5 block text-[10px] text-muted-foreground/60">{hint}</span>}
     </label>
