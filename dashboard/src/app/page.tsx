@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
 import { Sparkline } from "@/components/sparkline";
+import { MetricsPanel } from "@/components/metrics-panel";
 import { StatusBadge } from "@/components/status-badge";
 import { RoleDot } from "@/components/role-dot";
 import { bytes, pct, uptime } from "@/lib/format";
@@ -147,12 +148,15 @@ export default function OverviewPage() {
         <StatTile icon={Users} label="Players" value={m ? `${m.players}` : "0"} sub={m ? `of ${m.capacity} slots` : undefined} loading={first} />
       </div>
 
-      {/* Sparklines — all cluster-wide */}
+      {/* Sparklines — all cluster-wide (live session) */}
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         <ChartCard label="Players" value={`${players}`} series={playerSeries} color="#34d399" />
         <ChartCard label="Cluster CPU" value={`${Math.round(clusterCpu * 100)}%`} series={cpuSeries} color="#f6821f" max={100} />
         <ChartCard label="Cluster Memory" value={`${Math.round(clusterMem * 100)}%`} series={memSeries} color="#38bdf8" max={100} />
       </div>
+
+      {/* Historical Proxmox RRD metrics with a range selector (5m/1h/24h/30d) — shows instantly */}
+      <MetricsPanel className="mt-6" />
 
       <SectionLabel count={services.length}>Services</SectionLabel>
 
