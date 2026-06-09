@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { heartbeat, drainActions, liveServers, allPlayers } from "@/lib/connector";
 import { connectorAuthed } from "@/lib/connector-auth";
 import { buildProxyConfig } from "@/lib/proxy-config";
+import { shardConfigForServer } from "@/lib/shard-state";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -32,7 +33,9 @@ export async function POST(req: NextRequest) {
       const config = await buildProxyConfig(String(b.task ?? ""), String(b.group ?? "")).catch(() => null);
       return NextResponse.json({ ok: true, actions, config, names });
     }
-    return NextResponse.json({ ok: true, actions: [], names });
+    // Backends: hand a sharded task's instance its strip grid + pending coord-restores.
+    const shard = await shardConfigForServer(String(b.id), String(b.task ?? ""), String(b.group ?? "")).catch(() => null);
+    return NextResponse.json({ ok: true, actions: [], names, config: shard ? { sharding: shard } : undefined });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 400 });
   }

@@ -1,0 +1,197 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
+import { usePoll } from "@/hooks/use-poll";
+import { cn } from "@/lib/utils";
+import { Globe2, Loader2, Map as MapIcon, Info } from "lucide-react";
+
+type Strip = { min: number; max: number };
+type Region = {
+  serverId: string; target: string; name: string; index: number; vmid: number;
+  worlds: { world: Strip; world_nether: Strip; world_the_end?: Strip };
+  online: number; max: number; reachable: boolean;
+};
+type Grid = {
+  world: string; tol: number; splitEnd: boolean; cancelRange: number;
+  center: { x: number; z: number };
+  border: { world: number; world_nether: number; world_the_end?: number };
+  regions: Region[];
+};
+type Sharding = { enabled: boolean; world: string; stripWidth: number; splitEnd: boolean; borderCancelRange: number };
+type Resp = { sharding: Sharding | null; grid: Grid | null };
+
+const BAND = ["#38bdf8", "#34d399", "#fb923c", "#a78bfa", "#f472b6", "#facc15", "#22d3ee", "#f87171"];
+const fmt = (n: number) => Math.abs(n) >= 1000 ? `${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}k` : `${n}`;
+
+export function ShardingPanel({ taskId, instanceCount }: { taskId: string; instanceCount: number }) {
+  const { data, refresh } = usePoll<Resp>(`/api/tasks/${taskId}/sharding`, 5000);
+  const [saving, setSaving] = useState(false);
+  // local editable draft (seeded from server, only while not focused-saving)
+  const cfg = data?.sharding ?? { enabled: false, world: "world", stripWidth: 5000, splitEnd: true, borderCancelRange: 30 };
+  const [draft, setDraft] = useState<Sharding | null>(null);
+  const s = draft ?? cfg;
+
+  async function save(next: Partial<Sharding>) {
+    const merged = { ...s, ...next };
+    setDraft(merged);
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sharding: merged }),
+      });
+      const j = await res.json();
+      if (j.error) throw new Error(j.error);
+      setTimeout(() => { setDraft(null); refresh(); }, 400);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="panel p-4">
+        <div className="mb-1 flex items-center gap-2">
+          <Globe2 className="h-4 w-4 text-brand" />
+          <h3 className="text-sm font-semibold">Seamless world (sharding)</h3>
+          {saving && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+        </div>
+        <p className="mb-3 text-[12px] text-muted-foreground">
+          Split one world across this task&apos;s instances along the X axis — each instance owns a vertical
+          strip and players are handed off seamlessly (keeping their exact position) when they cross a
+          boundary. Same seed everywhere ⇒ one continuous world. Inspired by TMregion.
+        </p>
+
+        {/* enable toggle */}
+        <label className="flex cursor-pointer items-center justify-between rounded-md border border-hairline bg-accent/30 px-3 py-2.5">
+          <span className="text-[13px] font-medium">Enable sharding</span>
+          <button
+            role="switch" aria-checked={s.enabled}
+            onClick={() => save({ enabled: !s.enabled })}
+            className={cn("relative h-5 w-9 rounded-full transition-colors", s.enabled ? "bg-brand" : "bg-muted-foreground/30")}
+          >
+            <span className={cn("absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform", s.enabled ? "translate-x-4" : "translate-x-0.5")} />
+          </button>
+        </label>
+
+        {s.enabled && (
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Field label="World" hint="overworld name">
+              <input value={s.world} onChange={(e) => setDraft({ ...s, world: e.target.value })} onBlur={(e) => save({ world: e.target.value })}
+                className="w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-[13px] outline-none" />
+            </Field>
+            <Field label="Strip width" hint="nether blocks (×8 overworld)">
+              <input type="number" min={500} step={500} value={s.stripWidth}
+                onChange={(e) => setDraft({ ...s, stripWidth: Number(e.target.value) })} onBlur={(e) => save({ stripWidth: Number(e.target.value) })}
+                className="w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-[13px] tabular-nums outline-none" />
+            </Field>
+            <Field label="Seam buffer" hint="no-build blocks at edge">
+              <input type="number" min={0} step={5} value={s.borderCancelRange}
+                onChange={(e) => setDraft({ ...s, borderCancelRange: Number(e.target.value) })} onBlur={(e) => save({ borderCancelRange: Number(e.target.value) })}
+                className="w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-[13px] tabular-nums outline-none" />
+            </Field>
+            <Field label="Split End" hint="shard the End too">
+              <button onClick={() => save({ splitEnd: !s.splitEnd })}
+                className={cn("w-full rounded-md border px-2.5 py-1.5 text-[13px] font-medium transition-colors", s.splitEnd ? "border-brand/40 bg-brand/10 text-brand" : "border-hairline text-muted-foreground")}>
+                {s.splitEnd ? "On" : "Off"}
+              </button>
+            </Field>
+          </div>
+        )}
+      </div>
+
+      {/* region grid visualization */}
+      {s.enabled && (
+        <div className="panel overflow-hidden">
+          <div className="flex items-center gap-2 border-b border-hairline px-4 py-2.5">
+            <MapIcon className="h-3.5 w-3.5 text-brand" />
+            <div className="eyebrow">Region map · overworld</div>
+            <div className="ml-auto text-[11px] text-muted-foreground/70">X axis →</div>
+          </div>
+          <div className="p-4">
+            {!data?.grid || data.grid.regions.length === 0 ? (
+              <div className="py-10 text-center text-sm text-muted-foreground">
+                <Info className="mx-auto mb-2 h-5 w-5 opacity-40" />
+                {instanceCount < 2
+                  ? "Scale this task to 2+ instances to form a sharded world."
+                  : "Waiting for instances to report (connector)…"}
+              </div>
+            ) : (
+              <RegionMap grid={data.grid} />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+      {children}
+      {hint && <span className="mt-0.5 block text-[10px] text-muted-foreground/60">{hint}</span>}
+    </label>
+  );
+}
+
+/** Top-down strip map: the overworld border span split into per-instance colored bands. */
+function RegionMap({ grid }: { grid: Grid }) {
+  const centerWorld = grid.center.x * 8;
+  const half = grid.border.world / 2;
+  const left = centerWorld - half;
+  const right = centerWorld + half;
+  const span = right - left || 1;
+
+  const bands = useMemo(() => {
+    return grid.regions
+      .map((r, i) => {
+        const lo = Math.max(left, r.worlds.world.min);
+        const hi = Math.min(right, r.worlds.world.max);
+        return { r, i, lo, hi, pct: ((lo - left) / span) * 100, w: ((hi - lo) / span) * 100 };
+      })
+      .filter((b) => b.w > 0)
+      .sort((a, b) => a.lo - b.lo);
+  }, [grid, left, right, span]);
+
+  const totalOnline = grid.regions.reduce((n, r) => n + r.online, 0);
+
+  return (
+    <div>
+      {/* the band */}
+      <div className="relative h-24 w-full overflow-hidden rounded-lg border border-hairline bg-[#0a0c10]">
+        {bands.map((b) => (
+          <div key={b.r.serverId} className="absolute top-0 flex h-full flex-col items-center justify-center overflow-hidden border-r border-black/40 text-center"
+            style={{ left: `${b.pct}%`, width: `${b.w}%`, background: `${BAND[b.i % BAND.length]}22` }}>
+            <span className="absolute inset-x-0 top-0 h-0.5" style={{ background: BAND[b.i % BAND.length] }} />
+            <span className="truncate px-1 text-[11px] font-semibold" style={{ color: BAND[b.i % BAND.length] }}>{b.r.name.replace(/^network-/, "")}</span>
+            <span className="text-[10px] tabular-nums text-slate-300">{fmt(b.lo)} … {fmt(b.hi)}</span>
+            <span className="mt-0.5 flex items-center gap-1 text-[10px] tabular-nums">
+              <span className={cn("h-1.5 w-1.5 rounded-full", b.r.reachable ? "bg-emerald-400" : "bg-slate-600")} />
+              <span className="text-emerald-300">{b.r.online}</span><span className="text-slate-500">/{b.r.max}</span>
+            </span>
+          </div>
+        ))}
+        {/* center line */}
+        <div className="absolute top-0 h-full w-px bg-white/30" style={{ left: `${((centerWorld - left) / span) * 100}%` }} />
+      </div>
+      {/* ruler */}
+      <div className="mt-1 flex justify-between text-[10px] tabular-nums text-muted-foreground/60">
+        <span>{fmt(left)}</span>
+        <span>center {fmt(centerWorld)}</span>
+        <span>{fmt(right)}</span>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+        <span><span className="font-medium text-foreground">{grid.regions.length}</span> regions</span>
+        <span>border <span className="font-medium tabular-nums text-foreground">{fmt(grid.border.world)}</span> blocks</span>
+        <span>strip <span className="font-medium tabular-nums text-foreground">{fmt(grid.tol * 8)}</span> (overworld)</span>
+        <span><span className="font-medium tabular-nums text-foreground">{totalOnline}</span> online</span>
+        {grid.splitEnd && <span className="text-muted-foreground/70">End sharded</span>}
+      </div>
+    </div>
+  );
+}
