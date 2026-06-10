@@ -19,7 +19,7 @@ async function instancesForGroup(groupId: string) {
 }
 
 /** Send one console command into a container's tmux session. */
-async function sendKeys(vmid: number, command: string) {
+export async function sendKeys(vmid: number, command: string) {
   const host = await vmidHost(vmid);
   const line = command.replace(/[\r\n]+/g, " ").trim();
   const b64 = Buffer.from(line, "utf8").toString("base64");
