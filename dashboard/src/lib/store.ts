@@ -77,6 +77,10 @@ export type Task = {
   seed?: Seed;
   /** optional per-task software/version override (e.g. a different MC version) */
   software?: Software;
+  /** auto-apply hotfixes (new BUILDS of the pinned version line) — never a new full version */
+  autoUpdate?: boolean;
+  /** newest upstream build installed across this task's instances (hotfix tracking) */
+  installedBuild?: number;
   /** server list MOTD (supports & colour codes); applied to this task's instances */
   motd?: string;
   /** for dynamic tasks: the golden template CT (stopped) that scale-ups clone from */

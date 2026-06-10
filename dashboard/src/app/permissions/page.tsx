@@ -742,12 +742,27 @@ function AddNodeBar({ busy, groups, onAdd }: { busy: boolean; groups: string[]; 
   const suggestions = useMemo(() => {
     if (kind !== "permission" || lastTok.length < 1) return [];
     const q = lastTok.toLowerCase();
-    return known.filter((p) => p.toLowerCase().includes(q) && p !== lastTok).slice(0, 12);
-  }, [known, lastTok, kind]);
+    // structured-node skeletons complete too (weight.<n>, prefix.<prio>.<text>, …) so the raw
+    // permission field can author ANY LuckPerms node, same as in-game tab completion
+    const structured = ["group.", "weight.", "prefix.100.", "suffix.100.", "meta.", "displayname."]
+      .filter((s) => s.startsWith(q) && s !== lastTok);
+    // after "group." complete the actual group names; after "weight." offer common weights
+    const expanded: string[] = [];
+    if (q.startsWith("group.")) {
+      for (const g of groups) { const full = `group.${g}`; if (full.startsWith(q) && full !== lastTok) expanded.push(full); }
+    }
+    if (q.startsWith("weight.")) {
+      for (const w of ["10", "50", "100", "500"]) { const full = `weight.${w}`; if (full.startsWith(q) && full !== lastTok) expanded.push(full); }
+    }
+    const matches = known.filter((p) => p.toLowerCase().includes(q) && p !== lastTok);
+    return [...expanded, ...structured, ...matches].slice(0, 12);
+  }, [known, lastTok, kind, groups]);
   function accept(s: string) {
     const idx = perm.lastIndexOf(lastTok);
     setPerm(idx >= 0 ? perm.slice(0, idx) + s : s);
-    setSugOpen(false);
+    // a skeleton (trailing dot) keeps the dropdown open to complete the next segment
+    setSugOpen(s.endsWith("."));
+    setSugIdx(0);
   }
 
   function submit() {

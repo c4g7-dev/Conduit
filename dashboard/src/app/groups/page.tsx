@@ -8,6 +8,7 @@ import { NewGroupDialog } from "@/components/new-group-dialog";
 import { NewSubgroupDialog } from "@/components/new-subgroup-dialog";
 import { DeployServerDialog } from "@/components/deploy-server-dialog";
 import { SubgroupSettingsDialog } from "@/components/subgroup-settings-dialog";
+import { VersionCard, type TaskVersionStatus } from "@/components/version-card";
 import { EditGroupDialog } from "@/components/edit-group-dialog";
 import { EditTaskDialog } from "@/components/edit-task-dialog";
 import { MotdDialog } from "@/components/motd-dialog";
@@ -55,6 +56,7 @@ import {
   Hourglass,
   Star,
   X,
+  ArrowUpCircle,
 } from "lucide-react";
 
 /* ---- types (mirror /api/conduit/state) ----------------------------------- */
@@ -86,6 +88,9 @@ export default function ServersPage() {
   const { data: metrics } = usePoll<Metrics>("/api/metrics", 5000);
   // live subgroup join queues, reported by the proxy connector each heartbeat
   const { data: connData, refresh: refreshConn } = usePoll<ConnQueues>("/api/connector/servers", 5000);
+  // software version status (hotfix/update-available) — slow-moving, poll lazily
+  const { data: verData, refresh: refreshVers } = usePoll<{ tasks: TaskVersionStatus[] }>("/api/versions/status", 60000);
+  const verByTask = useMemo(() => new Map((verData?.tasks ?? []).map((v) => [v.taskId, v])), [verData]);
   const queuesById = useMemo(() => {
     const m = new Map<string, { uuid: string; name: string; priority?: boolean }[]>();
     for (const s of connData?.servers ?? []) {
@@ -425,6 +430,16 @@ export default function ServersPage() {
                       >
                         <RoleDot role={task.role} />
                         <span className="flex-1 truncate">{task.name}</span>
+                        {(() => {
+                          const v = verByTask.get(task.id);
+                          if (!v || (!v.hotfixAvailable && !v.updateAvailable)) return null;
+                          return (
+                            <ArrowUpCircle
+                              className={cn("h-3 w-3 shrink-0", v.updateAvailable ? "text-brand" : "text-amber-400")}
+                              aria-label={v.updateAvailable ? `update available: ${v.latestVersion}` : `hotfix available: build ${v.latestBuild}`}
+                            />
+                          );
+                        })()}
                         {inMaint && <Wrench className="h-3 w-3 shrink-0 text-amber-400" />}
                         {!task.persistent && (
                           <span title="Ephemeral — instances are created from the template and discarded on scale-down (no persistent data)."
@@ -662,13 +677,18 @@ export default function ServersPage() {
                     <ShardingPanel taskId={selected.id} instanceCount={selected.running} taskMax={selected.max} />
                   )}
                   {tab === "settings" && (
-                    <SettingsTab
-                      task={selected}
-                      frontCandidates={frontCandidates.filter((c) => c.id !== selected.id)}
-                      taskNameById={taskNameById}
-                      onSaved={refresh}
-                      onDelete={() => delTask(selected)}
-                    />
+                    <div className="space-y-4">
+                      {verByTask.get(selected.id) && (
+                        <VersionCard status={verByTask.get(selected.id)!} onChanged={() => { refreshVers(); refresh(); }} />
+                      )}
+                      <SettingsTab
+                        task={selected}
+                        frontCandidates={frontCandidates.filter((c) => c.id !== selected.id)}
+                        taskNameById={taskNameById}
+                        onSaved={refresh}
+                        onDelete={() => delTask(selected)}
+                      />
+                    </div>
                   )}
                 </div>
               </>

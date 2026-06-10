@@ -133,8 +133,17 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
   const host = await nodeIp(inst.node);
   const kind = bp.software.kind;
 
+  // remember the upstream build that landed, so version tracking can flag hotfixes
+  const noteBuild = async (b: number) => {
+    if (!b) return;
+    await mutate((d) => {
+      const x = d.tasks.find((y) => y.id === task.id);
+      if (x && (!x.installedBuild || b > x.installedBuild)) x.installedBuild = b;
+    }).catch(() => {});
+  };
+
   if (kind === "velocity") {
-    await installVelocity(inst.vmid, task, net.forwardingSecret, version, host);
+    await noteBuild(await installVelocity(inst.vmid, task, net.forwardingSecret, version, host));
   } else if (kind === "paper") {
     const merged = {
       ...bp.seed,
@@ -143,7 +152,7 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
       plugins: [...(bp.seed?.plugins ?? []), ...(task.seed?.plugins ?? [])],
     };
     const seed = await resolveSeedAssets(inst, merged);
-    await installPaper(inst.vmid, task, net.forwardingSecret, seed, version, host);
+    await noteBuild(await installPaper(inst.vmid, task, net.forwardingSecret, seed, version, host));
   } else if (kind === "hytale") {
     // Hytale uses the shared /assets mount (sharedAssets: true on the blueprint).
     // ensureHytaleAssets runs first: auto-downloads the binary when downloadUrl is set,
@@ -356,6 +365,49 @@ async function pgPass(db: Awaited<ReturnType<typeof getDB>>, all: Instance[]) {
     primary: insts[0] ? { vmid: insts[0].vmid, ip: insts[0].ip! } : null,
     updatedAt: Date.now(),
   });
+}
+
+/**
+ * Auto-hotfix (ideas.md §1): for tasks with autoUpdate on, apply newer BUILDS of the pinned
+ * version line. Only instances with 0 players are touched (a hotfix restart never kicks
+ * anyone); occupied ones retry next pass. Full version upgrades are NEVER automatic.
+ * Throttled to one upstream check per 10 min.
+ */
+async function autoUpdatePass(
+  db: Awaited<ReturnType<typeof getDB>>,
+  all: Instance[],
+  log: string[],
+) {
+  const g = global as unknown as { __conduitAutoUpdAt?: number };
+  if (Date.now() - (g.__conduitAutoUpdAt ?? 0) < 600_000) return;
+  g.__conduitAutoUpdAt = Date.now();
+
+  const { jarFor, effectiveVersion } = await import("./version-status");
+  const { applyJarUpdate } = await import("./provision");
+  const byVmidPlayers = connServersByVmid();
+
+  for (const t of db.tasks) {
+    if (!t.autoUpdate) continue;
+    const { kind, version } = effectiveVersion(t);
+    if (kind !== "paper" && kind !== "velocity") continue;
+    try {
+      const jar = await jarFor(kind, version);
+      if (!t.installedBuild || jar.build <= t.installedBuild) continue;
+      let allDone = true;
+      for (const inst of instancesOf(all, t.id)) {
+        if (inst.status !== "running" || !inst.ready) continue;
+        const players = byVmidPlayers.get(inst.vmid)?.online ?? 0;
+        if (players > 0) { allDone = false; continue; } // never kick players for a hotfix
+        await applyJarUpdate(inst.vmid, kind, jar.jarUrl, await nodeIp(inst.node));
+        log.push(`^ hotfix ${t.name} #${inst.vmid}: ${kind} ${version} build ${t.installedBuild} → ${jar.build}`);
+      }
+      if (allDone) {
+        await mutate((d) => { const x = d.tasks.find((y) => y.id === t.id); if (x) x.installedBuild = jar.build; });
+      }
+    } catch (e) {
+      log.push(`! hotfix ${t.name}: ${String(e)}`);
+    }
+  }
 }
 
 /** All Conduit-managed containers grouped by task, with live IPs. */
@@ -847,6 +899,7 @@ export async function reconcileAll(): Promise<string[]> {
     await velocityPass(db, all, log);
     await redisPass(db, all, log);
     await pgPass(db, all);
+    await autoUpdatePass(db, all, log);
 
     if (dirty) await saveDB(db).catch(() => {});
   } catch (e) {

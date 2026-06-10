@@ -40,7 +40,7 @@ ${JAVA_BIN} -version 2>&1 | head -1`;
  * Resolve a Paper/Velocity version to its newest build's jar URL + required Java major,
  * via the PaperMC v3 "Fill" API (the v2 API is frozen and misses newer MC versions).
  */
-type Resolved = { javaMajor: number; jarUrl: string };
+type Resolved = { javaMajor: number; jarUrl: string; build: number };
 async function resolveBuild(project: "paper" | "velocity", version: string): Promise<Resolved> {
   const base = `https://fill.papermc.io/v3/projects/${project}`;
   const meta = await fetch(`${base}/versions/${version}`).then((r) => r.json());
@@ -49,7 +49,29 @@ async function resolveBuild(project: "paper" | "velocity", version: string): Pro
   const first = Array.isArray(builds) ? builds[0] : builds?.builds?.[0];
   const jarUrl: string | undefined = first?.downloads?.["server:default"]?.url;
   if (!jarUrl) throw new Error(`no ${project} build for ${version}`);
-  return { javaMajor, jarUrl };
+  return { javaMajor, jarUrl, build: Number(first?.id ?? 0) };
+}
+
+/** Latest build (hotfix) of a version line — version tracking + auto-update use this. */
+export async function latestBuildFor(project: "paper" | "velocity", version: string): Promise<Resolved> {
+  return resolveBuild(project, version);
+}
+
+/**
+ * Hot-swap the server jar in a RUNNING instance and restart it — the auto-hotfix / manual
+ * update path (no reprovision; world/config/plugins untouched).
+ */
+export async function applyJarUpdate(vmid: number, kind: "paper" | "velocity", jarUrl: string, host?: string): Promise<void> {
+  const jar = kind === "paper" ? "/opt/mc/server.jar" : "/opt/mc/velocity.jar";
+  await ctExec(
+    vmid,
+    `set -e
+curl -fsSL -o ${jar}.new '${jarUrl}'
+mv ${jar}.new ${jar}
+systemctl restart mc
+echo CONDUIT_JAR_UPDATED`,
+    300_000, host,
+  );
 }
 
 /**
@@ -400,9 +422,10 @@ export async function installPaper(
   seed: Seed = {},
   version = "1.20.4",
   host?: string,
-): Promise<void> {
+): Promise<number> {
   const build = await resolveBuild("paper", version);
   await ctExec(vmid, paperScript(task, secret, seed, build, vmid), 360_000, host);
+  return build.build;
 }
 
 /* ---- Hytale (shared-asset mount) ----------------------------------------- */
@@ -878,9 +901,10 @@ export async function installVelocity(
   secret: string,
   version = "3.3.0-SNAPSHOT",
   host?: string,
-): Promise<void> {
+): Promise<number> {
   const build = await resolveBuild("velocity", version);
   await ctExec(vmid, velocityScript(task, secret, build, vmid), 360_000, host);
+  return build.build;
 }
 
 /** Default MOTD for a task when none is set (MiniMessage format for Velocity). */
