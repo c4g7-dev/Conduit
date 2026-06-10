@@ -14,14 +14,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { RoleDot } from "@/components/role-dot";
-import { cn } from "@/lib/utils";
-import { FileStack, Plus, Trash2, Settings2, FolderOpen, Loader2 } from "lucide-react";
+import { TargetPickerDialog, expandToTaskIds, type PickGroup, type PickTarget } from "@/components/target-picker-dialog";
+import { FileStack, Plus, Trash2, Settings2, FolderOpen, Loader2, Crosshair, ChevronDown } from "lucide-react";
 
 type GlobalTemplate = { id: string; name: string; taskIds: string[]; createdAt: number };
-type Task = { id: string; name: string; role: string };
-type Group = { id: string; name: string; tasks: Task[] };
-type State = { groups: Group[] };
+type State = { groups: PickGroup[] };
 
 export function GlobalTemplatesSection() {
   const { data, refresh } = usePoll<{ templates: GlobalTemplate[] }>("/api/global-templates", 20000);
@@ -39,7 +36,7 @@ export function GlobalTemplatesSection() {
     });
     const json = await res.json();
     if (json.error) return toast.error(json.error);
-    toast.success(`Template "${name}" created — edit its files in the file manager`);
+    toast.success(`Template "${name}" created — add its files in the Files tab under overlays/_tpl`);
     setCreating(false);
     refresh();
   }
@@ -64,7 +61,7 @@ export function GlobalTemplatesSection() {
         {templates.length === 0 && (
           <div className="col-span-full rounded-lg border border-dashed border-hairline py-10 text-center text-sm text-muted-foreground">
             No global templates yet. Create one, pick its services, then drop shared config/plugins
-            into <code className="rounded bg-muted px-1 font-mono text-xs">/var/lib/conduit/overlays/_tpl/&lt;id&gt;</code> via the file manager.
+            into <code className="rounded bg-muted px-1 font-mono text-xs">overlays/_tpl/&lt;id&gt;</code> in the Files tab.
           </div>
         )}
         {templates.map((t) => (
@@ -98,7 +95,7 @@ export function GlobalTemplatesSection() {
 
             <div className="mt-3 flex items-center gap-2 border-t border-hairline pt-3 text-[11px] text-muted-foreground">
               <FolderOpen className="h-3 w-3" />
-              <span>Edit files via the file manager · applies on deploy / re-sync</span>
+              <span>Files tab → <code className="font-mono">overlays/_tpl/{t.id}</code> · applies on deploy / re-sync</span>
             </div>
           </div>
         ))}
@@ -125,8 +122,8 @@ function CreateDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (n
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><FileStack className="h-4 w-4 text-brand" /> New global template</DialogTitle>
           <DialogDescription>
-            A named set of files applied to any services you pick. After creating it, add files to
-            its folder in the file manager and choose its member services.
+            A named set of files applied to any services you pick. After creating it, add files in
+            the Files tab under <code>overlays/_tpl/&lt;id&gt;</code> and choose its member services.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2 py-2">
@@ -145,24 +142,29 @@ function CreateDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (n
 }
 
 function MembersDialog({ tpl, groups, onClose, onSaved }: {
-  tpl: GlobalTemplate; groups: Group[]; onClose: () => void; onSaved: () => void;
+  tpl: GlobalTemplate; groups: PickGroup[]; onClose: () => void; onSaved: () => void;
 }) {
   const [name, setName] = useState(tpl.name);
-  const [picked, setPicked] = useState<Set<string>>(new Set(tpl.taskIds));
+  // membership is a flat task list — seed the tree picker with task targets
+  const [picked, setPicked] = useState<Map<string, PickTarget>>(
+    new Map(tpl.taskIds.map((id) => [`t:${id}`, { type: "task" as const, id }])),
+  );
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const toggle = (id: string) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const taskName = useMemo(() => new Map(groups.flatMap((g) => g.tasks.map((t) => [t.id, t.name] as const))), [groups]);
+  const taskIds = useMemo(() => expandToTaskIds(groups, picked), [groups, picked]);
 
   async function save() {
     setBusy(true);
     try {
       const res = await fetch(`/api/global-templates/${tpl.id}?apply=1`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, taskIds: [...picked] }),
+        body: JSON.stringify({ name, taskIds }),
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error);
-      toast.success(`"${name}" saved — files re-synced to ${picked.size} service(s)`);
+      toast.success(`"${name}" saved — files re-synced to ${taskIds.length} service(s)`);
       onSaved();
     } catch (e) {
       toast.error(String(e));
@@ -172,47 +174,57 @@ function MembersDialog({ tpl, groups, onClose, onSaved }: {
   }
 
   return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><FileStack className="h-4 w-4 text-brand" /> {tpl.name}</DialogTitle>
-          <DialogDescription>Pick which services receive this template&apos;s files. Saving re-syncs the files to every affected service (no restart).</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="space-y-2">
-            <Label htmlFor="gt-rename">Name</Label>
-            <Input id="gt-rename" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <div className="space-y-2">
-            <Label>Member services</Label>
-            <div className="space-y-3 rounded-md border border-hairline p-3">
-              {groups.map((g) => (
-                <div key={g.id}>
-                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{g.name}</div>
-                  <div className="space-y-0.5">
-                    {g.tasks.map((t) => (
-                      <label key={t.id} className={cn(
-                        "flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-[13px] transition-colors hover:bg-accent/50",
-                        picked.has(t.id) && "bg-accent/40",
-                      )}>
-                        <input type="checkbox" checked={picked.has(t.id)} onChange={() => toggle(t.id)} className="h-3.5 w-3.5 accent-[var(--brand,#7c83ff)]" />
-                        <RoleDot role={t.role} />
-                        <span>{t.name}</span>
-                      </label>
+    <>
+      <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><FileStack className="h-4 w-4 text-brand" /> {tpl.name}</DialogTitle>
+            <DialogDescription>Pick which services receive this template&apos;s files. Saving re-syncs the files to every affected service (no restart).</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="gt-rename">Name</Label>
+              <Input id="gt-rename" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Member services</Label>
+              <button
+                onClick={() => setPickerOpen(true)}
+                className="flex w-full items-center gap-2 rounded-md border border-hairline bg-accent/30 px-2.5 py-2 text-left text-sm outline-none transition-colors hover:bg-accent/50"
+              >
+                <Crosshair className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                {taskIds.length === 0 ? (
+                  <span className="text-muted-foreground/60">Choose groups, subgroups or services…</span>
+                ) : (
+                  <span className="flex min-w-0 flex-1 flex-wrap gap-1">
+                    {taskIds.slice(0, 5).map((id) => (
+                      <span key={id} className="rounded bg-accent px-1.5 py-0.5 text-[11px]">{taskName.get(id) ?? id}</span>
                     ))}
-                    {g.tasks.length === 0 && <span className="px-2 text-[11px] text-muted-foreground/50">no servers</span>}
-                  </div>
-                </div>
-              ))}
-              {groups.length === 0 && <span className="text-[11px] text-muted-foreground/50">no servers yet</span>}
+                    {taskIds.length > 5 && <span className="rounded bg-accent px-1.5 py-0.5 text-[11px]">+{taskIds.length - 5}</span>}
+                  </span>
+                )}
+                <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              </button>
+              <p className="text-xs text-muted-foreground">Selecting a group/subgroup includes all its services. Dynamic services receive the files on every fresh provision.</p>
             </div>
           </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={save} disabled={!name.trim() || busy}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Save &amp; apply</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={save} disabled={!name.trim() || busy}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Save &amp; apply</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {pickerOpen && (
+        <TargetPickerDialog
+          groups={groups}
+          picked={picked}
+          onClose={() => setPickerOpen(false)}
+          onSave={(next) => { setPicked(next); setPickerOpen(false); }}
+          title="Choose member services"
+          description="Templates apply per service — a whole service gets the files (all instances, never a subset). Selecting a parent includes everything inside it."
+          allowInstances={false}
+        />
+      )}
+    </>
   );
 }

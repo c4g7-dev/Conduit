@@ -4,13 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { RoleDot } from "@/components/role-dot";
+import { TargetPickerDialog, type PickGroup } from "@/components/target-picker-dialog";
 import { cn } from "@/lib/utils";
 import {
-  Clock, RotateCw, Radio, Trash2, Plus, CalendarClock, Terminal, Archive, MoonStar,
-  Boxes, CornerDownRight, Server, Crosshair, ChevronDown,
+  Clock, RotateCw, Radio, Trash2, Plus, CalendarClock, Terminal, Archive, MoonStar, Crosshair, ChevronDown,
 } from "lucide-react";
 
 type ScheduleTarget =
@@ -24,11 +21,7 @@ type Schedule = {
   at: string; command?: string; warnMins: number[]; onlyWhenEmpty?: boolean; backupStorage?: string;
   enabled: boolean; lastRun?: string;
 };
-type Instance = { vmid: number; name: string; status: string };
-type Subgroup = { id: string; name: string; parentId?: string };
-type Task = { id: string; name: string; role: string; subgroupId?: string; instances: Instance[] };
-type Group = { id: string; name: string; subgroups?: Subgroup[]; tasks: Task[] };
-type State = { groups: Group[] };
+type State = { groups: PickGroup[] };
 type BackupStorage = { storage: string; type: string };
 
 const ACTION_ICON = { restart: RotateCw, command: Terminal, broadcast: Radio, backup: Archive } as const;
@@ -160,7 +153,25 @@ export default function SchedulesPage() {
               </button>
             </div>
             <label className="text-[11px] text-muted-foreground">Action
-              <select value={action} onChange={(e) => setAction(e.target.value as Schedule["action"])} className="mt-1 w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-sm outline-none">
+              <select
+                value={action}
+                onChange={(e) => {
+                  const a = e.target.value as Schedule["action"];
+                  setAction(a);
+                  // backups can't touch dynamic services — drop any already-picked ones
+                  if (a === "backup") {
+                    const dynTasks = new Set(groups.flatMap((g) => g.tasks.filter((t) => t.mode === "dynamic").map((t) => t.id)));
+                    const dynVmids = new Set(groups.flatMap((g) => g.tasks.filter((t) => t.mode === "dynamic").flatMap((t) => t.instances.map((i) => i.vmid))));
+                    setPicked((prev) => {
+                      const next = new Map(prev);
+                      for (const [k, t] of prev) {
+                        if ((t.type === "task" && dynTasks.has(t.id)) || (t.type === "instance" && dynVmids.has(t.vmid))) next.delete(k);
+                      }
+                      return next.size === prev.size ? prev : next;
+                    });
+                  }
+                }}
+                className="mt-1 w-full rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-sm outline-none">
                 <option value="restart">Restart</option>
                 <option value="command">Command</option>
                 <option value="backup">Backup</option>
@@ -258,90 +269,12 @@ export default function SchedulesPage() {
           picked={picked}
           onClose={() => setPickerOpen(false)}
           onSave={(next) => { setPicked(next); setPickerOpen(false); }}
+          // Backups only make sense for STATIC services — dynamic ones are recreated on every
+          // scale cycle, so their disks are throwaway.
+          taskFilter={action === "backup" ? (t) => t.mode !== "dynamic" : undefined}
+          filterNote={action === "backup" ? "Dynamic services are hidden — they're recreated on every scale cycle, only static ones can be backed up." : undefined}
         />
       )}
     </>
-  );
-}
-
-/* ---- target picker: checkbox tree, MoveDialog-style rows -------------------- */
-function TargetPickerDialog({ groups, picked, onClose, onSave }: {
-  groups: Group[];
-  picked: Map<string, ScheduleTarget>;
-  onClose: () => void;
-  onSave: (picked: Map<string, ScheduleTarget>) => void;
-}) {
-  const [sel, setSel] = useState<Map<string, ScheduleTarget>>(new Map(picked));
-
-  const flip = (t: ScheduleTarget) => setSel((prev) => {
-    const next = new Map(prev);
-    const k = keyOf(t);
-    if (next.has(k)) next.delete(k); else next.set(k, t);
-    return next;
-  });
-
-  const Row = ({ t, depth, icon, label, sub }: { t: ScheduleTarget; depth: number; icon: React.ReactNode; label: React.ReactNode; sub?: string }) => {
-    const k = keyOf(t);
-    const on = sel.has(k);
-    return (
-      <button
-        onClick={() => flip(t)}
-        className={cn(
-          "flex w-full items-center gap-2.5 rounded-md border px-3 py-2 text-left text-[13px] transition-colors",
-          on ? "border-brand/40 bg-brand/10" : "border-hairline hover:bg-accent/50",
-        )}
-        style={{ marginLeft: depth * 16, width: `calc(100% - ${depth * 16}px)` }}
-      >
-        <input type="checkbox" readOnly checked={on} className="pointer-events-none h-3.5 w-3.5 accent-[var(--brand,#7c83ff)]" />
-        {icon}
-        <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
-        {sub && <span className="shrink-0 text-[11px] text-muted-foreground/60">{sub}</span>}
-      </button>
-    );
-  };
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Crosshair className="h-4 w-4 text-brand" /> Choose targets</DialogTitle>
-          <DialogDescription>Any mix of groups, subgroups, services and single instances — overlaps are deduped.</DialogDescription>
-        </DialogHeader>
-        <div className="max-h-[55vh] space-y-1 overflow-y-auto pr-1">
-          {groups.map((g) => (
-            <div key={g.id} className="space-y-1">
-              <Row t={{ type: "group", id: g.id }} depth={0}
-                icon={<Boxes className="h-3.5 w-3.5 text-muted-foreground" />}
-                label={g.name} sub={`${g.tasks.length} service(s)`} />
-              {(g.subgroups ?? []).map((sg) => (
-                <Row key={sg.id} t={{ type: "subgroup", groupId: g.id, id: sg.id }} depth={1}
-                  icon={<CornerDownRight className="h-3.5 w-3.5 text-muted-foreground" />}
-                  label={sg.name} sub="subgroup" />
-              ))}
-              {g.tasks.map((t) => (
-                <div key={t.id} className="space-y-1">
-                  <Row t={{ type: "task", id: t.id }} depth={1}
-                    icon={<RoleDot role={t.role} />}
-                    label={t.name} sub={`${t.instances.length} instance(s)`} />
-                  {t.instances.length > 1 && t.instances.map((i) => (
-                    <Row key={i.vmid} t={{ type: "instance", vmid: i.vmid }} depth={2}
-                      icon={<Server className="h-3.5 w-3.5 text-muted-foreground" />}
-                      label={i.name} sub={`#${i.vmid}`} />
-                  ))}
-                </div>
-              ))}
-            </div>
-          ))}
-          {groups.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">No servers yet.</p>}
-        </div>
-        <DialogFooter className="flex items-center justify-between sm:justify-between">
-          <span className="text-[12px] text-muted-foreground">{sel.size} selected</span>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
-            <Button onClick={() => onSave(sel)}>Use targets</Button>
-          </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

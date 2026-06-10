@@ -11,6 +11,11 @@ export async function GET() {
       api.storage().catch(() => []),
     ]);
 
+    // Stable ordering — PVE returns both lists in arbitrary order, which made the
+    // storage cards and image rows swap positions between polls.
+    templates.sort((a, b) => a.volid.localeCompare(b.volid));
+    storage.sort((a, b) => a.storage.localeCompare(b.storage));
+
     return NextResponse.json({
       templates: templates.map((t) => {
         // local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst
