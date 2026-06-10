@@ -5,7 +5,7 @@
  * Reads/writes the shared Postgres directly; every mutation triggers `lp networksync` on a live
  * server so the whole network picks the change up instantly via Redis messaging.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
@@ -16,9 +16,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { McText } from "@/components/mc-text";
 import {
   KeyRound, Search, Plus, Trash2, X, ChevronDown, Loader2,
-  Milestone, Shield, User as UserIcon, ArrowRight, Scale, Tag,
+  Milestone, Shield, ArrowRight, Scale, Tag,
 } from "lucide-react";
 
 /* ---- types (mirror /api/luckperms/*) -------------------------------------- */
@@ -106,7 +107,14 @@ export default function PermissionsPage() {
   }, []);
 
   function select(t: Target) { setTarget(t); loadNodes(t); }
-  useEffect(() => { if (!target && groups.length) select({ type: "group", id: groups[0].name }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [groups.length]);
+  // default selection once the first group list arrives
+  useEffect(() => {
+    if (target || groups.length === 0) return;
+    const t: Target = { type: "group", id: groups[0].name };
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot default selection
+    setTarget(t);
+    loadNodes(t);
+  }, [groups, target, loadNodes]);
 
   const endpoint = (t: Target) =>
     t.type === "group" ? `/api/luckperms/groups/${encodeURIComponent(t.id)}` : `/api/luckperms/users/${encodeURIComponent(t.id)}`;
@@ -131,6 +139,31 @@ export default function PermissionsPage() {
   const addNode = (n: Partial<LpNode> & { permission: string }) => mutate("POST", n, n.permission);
   const removeNode = (n: LpNode) => mutate("DELETE", { permission: n.permission, server: n.server, world: n.world }, `removed ${n.permission}`);
   const toggleValue = (n: LpNode) => mutate("POST", { ...n, value: !n.value }, `${n.permission} → ${!n.value}`);
+
+  /** Inline edit: replace a node (delete the old identity, insert the new) in one go. */
+  async function editNode(prev: LpNode, next: LpNode) {
+    if (!target) return;
+    setBusy(true);
+    try {
+      const del = await fetch(endpoint(target), {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ permission: prev.permission, server: prev.server, world: prev.world }),
+      }).then((x) => x.json());
+      if (del.error) throw new Error(del.error);
+      const add = await fetch(endpoint(target), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      }).then((x) => x.json());
+      if (add.error) throw new Error(add.error);
+      toast.success(`${next.permission} updated · network synced`);
+      await loadNodes(target);
+      refreshGroups();
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function createGroup() {
     const name = prompt("New group name (lowercase):");
@@ -203,7 +236,7 @@ export default function PermissionsPage() {
               {groups.map((g) => {
                 const active = target?.type === "group" && target.id === g.name;
                 return (
-                  <div key={g.name} className="group/row relative">
+                  <div key={g.name} className="group/row">
                     <button
                       onClick={() => select({ type: "group", id: g.name })}
                       className={cn(
@@ -213,18 +246,28 @@ export default function PermissionsPage() {
                     >
                       <Shield className="h-3 w-3 shrink-0" style={{ color: KIND.inheritance.color }} />
                       <span className="flex-1 truncate">{g.name}</span>
-                      {g.prefix && <span className="truncate font-mono text-[10px] text-muted-foreground/60">{g.prefix}</span>}
-                      <span className="tabular-nums text-[11px] text-muted-foreground/60">{g.weight ?? "—"}</span>
+                      {g.prefix && (
+                        <span className="max-w-20 truncate rounded bg-black/30 px-1 text-[10px]">
+                          <McText text={g.prefix} className="text-[10px]" />
+                        </span>
+                      )}
+                      {/* fixed-width slot: weight normally, trash on hover — same footprint, no overlap */}
+                      <span className="flex w-6 shrink-0 items-center justify-end">
+                        <span className={cn("tabular-nums text-[11px] text-muted-foreground/60", g.name !== "default" && "group-hover/row:hidden")}>
+                          {g.weight ?? "—"}
+                        </span>
+                        {g.name !== "default" && (
+                          <span
+                            role="button"
+                            onClick={(e) => { e.stopPropagation(); deleteGroup(g.name); }}
+                            className="hidden rounded p-0.5 text-destructive/60 hover:bg-destructive/10 hover:text-destructive group-hover/row:block"
+                            title="Delete group"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </span>
+                        )}
+                      </span>
                     </button>
-                    {g.name !== "default" && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); deleteGroup(g.name); }}
-                        className="absolute right-1 top-1/2 hidden -translate-y-1/2 rounded p-1 text-destructive/60 hover:bg-destructive/10 hover:text-destructive group-hover/row:block"
-                        title="Delete group"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    )}
                   </div>
                 );
               })}
@@ -329,41 +372,16 @@ export default function PermissionsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {nodes.map((n, i) => {
-                          const k = kindOf(n.permission);
-                          const c = KIND[k];
-                          return (
-                            <tr key={`${n.permission}|${n.server}|${n.world}|${i}`} className="group border-b border-hairline last:border-0 hover:bg-accent/40">
-                              <td className="px-4 py-2">
-                                <span className="flex items-center gap-2">
-                                  <span className="w-14 shrink-0 rounded px-1.5 py-0.5 text-center text-[9px] font-semibold uppercase tracking-wide" style={{ background: `color-mix(in oklch, ${c.color} 14%, transparent)`, color: c.color }}>
-                                    {c.label}
-                                  </span>
-                                  <span className="break-all font-mono text-xs">{k === "permission" ? n.permission : nodeBody(n.permission)}</span>
-                                </span>
-                              </td>
-                              <td className="px-3 py-2">
-                                <button
-                                  onClick={() => toggleValue(n)}
-                                  disabled={busy}
-                                  className={cn("rounded px-2 py-0.5 font-mono text-[11px] font-semibold transition-colors", n.value ? "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25" : "bg-red-500/15 text-red-400 hover:bg-red-500/25")}
-                                  title="Toggle value"
-                                >
-                                  {String(n.value)}
-                                </button>
-                              </td>
-                              <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">
-                                {n.server === "global" && n.world === "global" ? <span className="text-muted-foreground/40">global</span> : `${n.server}${n.world !== "global" ? ` · ${n.world}` : ""}`}
-                              </td>
-                              <td className="px-3 py-2 text-[11px] text-muted-foreground">{fmtExpiry(n.expiry)}</td>
-                              <td className="px-3 py-2 text-right">
-                                <button onClick={() => removeNode(n)} disabled={busy} className="hidden rounded p-1 text-destructive/60 hover:bg-destructive/10 hover:text-destructive group-hover:inline-block" title="Remove node">
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
+                        {nodes.map((n, i) => (
+                          <NodeRow
+                            key={`${n.permission}|${n.server}|${n.world}|${i}`}
+                            node={n}
+                            busy={busy}
+                            onToggle={() => toggleValue(n)}
+                            onRemove={() => removeNode(n)}
+                            onEdit={(next) => editNode(n, next)}
+                          />
+                        ))}
                       </tbody>
                     </table>
                   )}
@@ -385,6 +403,170 @@ export default function PermissionsPage() {
         />
       )}
     </>
+  );
+}
+
+/* ---- node row: dblclick → inline edit (Esc cancels, click-out saves) -------
+ * The delete button keeps its footprint (opacity swap) so hovering never shifts
+ * the layout. Prefix/suffix bodies render as a chat-accurate MC preview chip. */
+function NodeRow({ node, busy, onToggle, onRemove, onEdit }: {
+  node: LpNode;
+  busy: boolean;
+  onToggle: () => void;
+  onRemove: () => void;
+  onEdit: (next: LpNode) => void;
+}) {
+  const k = kindOf(node.permission);
+  const c = KIND[k];
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<LpNode>(node);
+  const rowRef = useRef<HTMLTableRowElement>(null);
+  const cancelled = useRef(false);
+
+  function begin() {
+    setDraft(node);
+    cancelled.current = false;
+    setEditing(true);
+  }
+
+  const commit = useCallback(() => {
+    setEditing(false);
+    if (cancelled.current) return;
+    const changed =
+      draft.permission !== node.permission || draft.value !== node.value ||
+      draft.server !== node.server || draft.world !== node.world || draft.expiry !== node.expiry;
+    if (changed && draft.permission.trim()) onEdit({ ...draft, permission: draft.permission.trim() });
+  }, [draft, node, onEdit]);
+
+  // click-out saves (LP web-editor behaviour); Esc cancels
+  useEffect(() => {
+    if (!editing) return;
+    const onDown = (e: MouseEvent) => {
+      if (rowRef.current && !rowRef.current.contains(e.target as Node)) commit();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { cancelled.current = true; setEditing(false); }
+      if (e.key === "Enter" && (e.target as HTMLElement)?.tagName === "INPUT") commit();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [editing, commit]);
+
+  const inputCls = "h-7 rounded border border-brand/40 bg-transparent px-1.5 font-mono text-xs outline-none focus:border-brand";
+
+  if (editing) {
+    const isStyled = k === "prefix" || k === "suffix";
+    return (
+      <tr ref={rowRef} className="border-b border-hairline bg-brand/[0.04] last:border-0">
+        <td className="px-4 py-1.5">
+          <span className="flex items-center gap-2">
+            <span className="w-14 shrink-0 rounded px-1.5 py-0.5 text-center text-[9px] font-semibold uppercase tracking-wide" style={{ background: `color-mix(in oklch, ${c.color} 14%, transparent)`, color: c.color }}>
+              {c.label}
+            </span>
+            <input
+              autoFocus
+              value={draft.permission}
+              onChange={(e) => setDraft({ ...draft, permission: e.target.value })}
+              className={cn(inputCls, "min-w-48 flex-1")}
+            />
+            {isStyled && (
+              <span className="shrink-0 rounded bg-black/40 px-1.5 py-0.5 text-xs">
+                <McText text={draft.permission.split(".").slice(2).join(".")} />
+              </span>
+            )}
+          </span>
+        </td>
+        <td className="px-3 py-1.5">
+          <button
+            onClick={() => setDraft({ ...draft, value: !draft.value })}
+            className={cn("rounded px-2 py-0.5 font-mono text-[11px] font-semibold", draft.value ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400")}
+          >
+            {String(draft.value)}
+          </button>
+        </td>
+        <td className="px-3 py-1.5">
+          <span className="flex items-center gap-1">
+            <input
+              value={draft.server === "global" ? "" : draft.server}
+              onChange={(e) => setDraft({ ...draft, server: e.target.value.trim() || "global" })}
+              placeholder="server"
+              className={cn(inputCls, "w-24 placeholder:text-muted-foreground/40")}
+            />
+            <input
+              value={draft.world === "global" ? "" : draft.world}
+              onChange={(e) => setDraft({ ...draft, world: e.target.value.trim() || "global" })}
+              placeholder="world"
+              className={cn(inputCls, "w-20 placeholder:text-muted-foreground/40")}
+            />
+          </span>
+        </td>
+        <td className="px-3 py-1.5">
+          <input
+            type="datetime-local"
+            value={draft.expiry > 0 ? new Date(draft.expiry * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ""}
+            onChange={(e) => setDraft({ ...draft, expiry: e.target.value ? Math.floor(new Date(e.target.value).getTime() / 1000) : 0 })}
+            className={cn(inputCls, "text-muted-foreground")}
+          />
+        </td>
+        <td className="px-3 py-1.5 text-right">
+          <span className="text-[10px] text-muted-foreground/60">⏎ save · esc cancel</span>
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <tr
+      className="group border-b border-hairline last:border-0 hover:bg-accent/40"
+      onDoubleClick={begin}
+      title="Double-click to edit"
+    >
+      <td className="px-4 py-2">
+        <span className="flex items-center gap-2">
+          <span className="w-14 shrink-0 rounded px-1.5 py-0.5 text-center text-[9px] font-semibold uppercase tracking-wide" style={{ background: `color-mix(in oklch, ${c.color} 14%, transparent)`, color: c.color }}>
+            {c.label}
+          </span>
+          {k === "prefix" || k === "suffix" ? (
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="shrink-0 rounded bg-black/40 px-1.5 py-0.5 text-xs">
+                <McText text={nodeBody(node.permission)} />
+              </span>
+              <span className="shrink-0 text-[10px] text-muted-foreground/50">prio {node.permission.split(".")[1] ?? "?"}</span>
+              <span className="truncate font-mono text-[10px] text-muted-foreground/40">{node.permission}</span>
+            </span>
+          ) : (
+            <span className="break-all font-mono text-xs">{k === "permission" ? node.permission : nodeBody(node.permission)}</span>
+          )}
+        </span>
+      </td>
+      <td className="px-3 py-2">
+        <button
+          onClick={onToggle}
+          disabled={busy}
+          className={cn("rounded px-2 py-0.5 font-mono text-[11px] font-semibold transition-colors", node.value ? "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25" : "bg-red-500/15 text-red-400 hover:bg-red-500/25")}
+          title="Toggle value"
+        >
+          {String(node.value)}
+        </button>
+      </td>
+      <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        {node.server === "global" && node.world === "global" ? <span className="text-muted-foreground/40">global</span> : `${node.server}${node.world !== "global" ? ` · ${node.world}` : ""}`}
+      </td>
+      <td className="px-3 py-2 text-[11px] text-muted-foreground">{fmtExpiry(node.expiry)}</td>
+      <td className="w-12 px-3 py-2 text-right">
+        {/* opacity swap (not display) so the cell never resizes on hover */}
+        <button
+          onClick={onRemove}
+          disabled={busy}
+          className="rounded p-1 text-destructive/60 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+          title="Remove node"
+          tabIndex={-1}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </td>
+    </tr>
   );
 }
 
@@ -440,6 +622,32 @@ function AddNodeBar({ busy, groups, onAdd }: { busy: boolean; groups: string[]; 
   const [expiry, setExpiry] = useState("");
   const [metaKey, setMetaKey] = useState("");
   const [pWeight, setPWeight] = useState("100");
+
+  // ---- tab-completion over known permissions (stored + catalog + per-task bypass) ----
+  const [known, setKnown] = useState<string[]>([]);
+  const [sugOpen, setSugOpen] = useState(false);
+  const [sugIdx, setSugIdx] = useState(0);
+  const boxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    fetch("/api/luckperms/permissions").then((r) => r.json()).then((j) => setKnown(j.permissions ?? [])).catch(() => {});
+  }, []);
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => { if (boxRef.current && !boxRef.current.contains(e.target as Node)) setSugOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+  // complete the LAST token so paste-many input still works
+  const lastTok = perm.split(/[\s,]+/).pop() ?? "";
+  const suggestions = useMemo(() => {
+    if (kind !== "permission" || lastTok.length < 1) return [];
+    const q = lastTok.toLowerCase();
+    return known.filter((p) => p.toLowerCase().includes(q) && p !== lastTok).slice(0, 12);
+  }, [known, lastTok, kind]);
+  function accept(s: string) {
+    const idx = perm.lastIndexOf(lastTok);
+    setPerm(idx >= 0 ? perm.slice(0, idx) + s : s);
+    setSugOpen(false);
+  }
 
   function submit() {
     const ctx = { server: server.trim() || undefined, expiry: expiry ? Math.floor(new Date(expiry).getTime() / 1000) : undefined };
@@ -500,17 +708,60 @@ function AddNodeBar({ busy, groups, onAdd }: { busy: boolean; groups: string[]; 
             {(kind === "prefix" || kind === "suffix") && (
               <input value={pWeight} onChange={(e) => setPWeight(e.target.value.replace(/\D/g, ""))} placeholder="priority" className="h-8 w-20 rounded-md border border-hairline bg-transparent px-2 font-mono text-xs outline-none placeholder:text-muted-foreground/50" title="Priority (higher wins)" />
             )}
-            <input
-              value={perm}
-              onChange={(e) => setPerm(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-              placeholder={
-                kind === "permission" ? "enter permissions — or paste many" :
-                kind === "weight" ? "weight number (higher wins)" :
-                kind === "meta" ? "value" : `${kind} text (& colors ok)`
-              }
-              className="h-8 min-w-44 flex-1 rounded-md border border-hairline bg-transparent px-2 font-mono text-xs outline-none placeholder:text-muted-foreground/50"
-            />
+            <div ref={boxRef} className="relative min-w-44 flex-1">
+              <input
+                value={perm}
+                onChange={(e) => { setPerm(e.target.value); setSugOpen(true); setSugIdx(0); }}
+                onKeyDown={(e) => {
+                  if (sugOpen && suggestions.length > 0) {
+                    if (e.key === "ArrowDown") { e.preventDefault(); setSugIdx((i) => (i + 1) % suggestions.length); return; }
+                    if (e.key === "ArrowUp") { e.preventDefault(); setSugIdx((i) => (i - 1 + suggestions.length) % suggestions.length); return; }
+                    if (e.key === "Tab") { e.preventDefault(); accept(suggestions[sugIdx]); return; }
+                    if (e.key === "Escape") { setSugOpen(false); return; }
+                    if (e.key === "Enter") { e.preventDefault(); accept(suggestions[sugIdx]); return; }
+                  }
+                  if (e.key === "Enter") submit();
+                }}
+                onFocus={() => setSugOpen(true)}
+                placeholder={
+                  kind === "permission" ? "enter permissions — tab completes, paste many ok" :
+                  kind === "weight" ? "weight number (higher wins)" :
+                  kind === "meta" ? "value" : `${kind} text (& colors ok)`
+                }
+                className="h-8 w-full rounded-md border border-hairline bg-transparent px-2 font-mono text-xs outline-none placeholder:text-muted-foreground/50"
+              />
+              {/* completion dropdown — opens upward (the bar sits at the panel bottom) */}
+              {sugOpen && suggestions.length > 0 && (
+                <div className="absolute bottom-full left-0 z-30 mb-1 max-h-56 w-full overflow-y-auto rounded-md border border-hairline bg-panel py-1 shadow-xl">
+                  {suggestions.map((s, i) => (
+                    <button
+                      key={s}
+                      onMouseDown={(e) => { e.preventDefault(); accept(s); }}
+                      onMouseEnter={() => setSugIdx(i)}
+                      className={cn(
+                        "block w-full px-2.5 py-1 text-left font-mono text-[11px]",
+                        i === sugIdx ? "bg-accent text-foreground" : "text-muted-foreground",
+                      )}
+                    >
+                      {/* highlight the matched fragment */}
+                      {(() => {
+                        const at = s.toLowerCase().indexOf(lastTok.toLowerCase());
+                        if (at < 0) return s;
+                        return <>{s.slice(0, at)}<span className="text-brand">{s.slice(at, at + lastTok.length)}</span>{s.slice(at + lastTok.length)}</>;
+                      })()}
+                    </button>
+                  ))}
+                  <div className="border-t border-hairline px-2.5 py-1 text-[10px] text-muted-foreground/50">↑↓ navigate · tab/enter complete · esc close</div>
+                </div>
+              )}
+            </div>
+            {/* live chat preview while composing a prefix/suffix */}
+            {(kind === "prefix" || kind === "suffix") && perm && (
+              <span className="flex h-8 items-center rounded-md bg-black/40 px-2 text-xs" title="Chat preview">
+                <McText text={perm} />
+                <span className="ml-1 text-[#AAAAAA]" style={{ fontFamily: "Menlo, monospace" }}>Player</span>
+              </span>
+            )}
           </>
         )}
         {kind === "permission" && (

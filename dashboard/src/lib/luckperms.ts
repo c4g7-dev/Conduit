@@ -287,6 +287,61 @@ export async function lpDeleteGroup(name: string): Promise<void> {
   }
 }
 
+/* ---- known permissions (editor autocomplete) ----
+ * LuckPerms' editor offers completion from the permissions it has seen. We combine:
+ * every distinct permission already stored (groups + users), a curated catalog of
+ * common proxy/server/LP/Conduit nodes, and conduit.maintenance.bypass.<task> for
+ * each live task — so the bypass nodes for YOUR network complete out of the box. */
+
+const PERM_CATALOG = [
+  // Conduit
+  "conduit.admin", "conduit.maintenance.bypass", "conduit.queue.priority",
+  // LuckPerms
+  "luckperms.*", "luckperms.user.info", "luckperms.user.perm.set", "luckperms.user.perm.unset",
+  "luckperms.user.parent.add", "luckperms.user.parent.remove", "luckperms.user.promote", "luckperms.user.demote",
+  "luckperms.group.info", "luckperms.group.perm.set", "luckperms.group.perm.unset",
+  "luckperms.creategroup", "luckperms.deletegroup", "luckperms.listgroups", "luckperms.editor", "luckperms.sync",
+  // Velocity (proxy)
+  "velocity.command.server", "velocity.command.glist", "velocity.command.send",
+  "velocity.command.shutdown", "velocity.command.velocity", "velocity.command.plugins",
+  // Minecraft / Bukkit commands
+  "minecraft.command.gamemode", "minecraft.command.teleport", "minecraft.command.tp", "minecraft.command.give",
+  "minecraft.command.kick", "minecraft.command.ban", "minecraft.command.pardon", "minecraft.command.op",
+  "minecraft.command.whitelist", "minecraft.command.time", "minecraft.command.weather", "minecraft.command.difficulty",
+  "minecraft.command.say", "minecraft.command.stop", "minecraft.command.kill", "minecraft.command.effect",
+  "minecraft.command.enchant", "minecraft.command.xp", "minecraft.command.summon", "minecraft.command.clear",
+  "minecraft.command.fill", "minecraft.command.setblock", "minecraft.command.setworldspawn", "minecraft.command.spawnpoint",
+  "bukkit.command.version", "bukkit.command.plugins", "bukkit.command.reload", "bukkit.command.restart",
+  "bukkit.command.timings", "bukkit.command.help",
+];
+
+/** Distinct known permissions for autocomplete: stored nodes + catalog + per-task bypass nodes. */
+export async function lpKnownPermissions(): Promise<string[]> {
+  const out = new Set<string>(PERM_CATALOG);
+  try {
+    const { getDB } = await import("./store");
+    const db = await getDB();
+    for (const t of db.tasks) out.add(`conduit.maintenance.bypass.${t.name}`);
+  } catch { /* store unreachable — catalog only */ }
+  const client = await lpClient().catch(() => null);
+  if (client) {
+    try {
+      const [g, u] = await Promise.all([
+        client.query(`SELECT DISTINCT permission FROM luckperms_group_permissions`),
+        client.query(`SELECT DISTINCT permission FROM luckperms_user_permissions`),
+      ]);
+      for (const r of [...g.rows, ...u.rows]) {
+        const p = r.permission as string;
+        // structured nodes (group./prefix./weight.) aren't useful as raw permission completions
+        if (!/^(group|prefix|suffix|weight|displayname)\./.test(p)) out.add(p);
+      }
+    } catch { /* schema not initialized yet */ } finally {
+      await client.end().catch(() => {});
+    }
+  }
+  return [...out].sort();
+}
+
 /* ---- tracks (promotion ladders) ---- */
 
 export type LpTrack = { name: string; groups: string[] };
