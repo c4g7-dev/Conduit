@@ -90,6 +90,441 @@ export async function lpDownloadUrls(): Promise<{ bukkit: string; velocity: stri
   return { bukkit, velocity };
 }
 
+/* ───────────────────────── editor data layer ─────────────────────────
+ * The built-in permissions editor reads/writes the LuckPerms tables directly
+ * (same scheme the LP web editor applies via the plugin):
+ *   luckperms_groups(name) · luckperms_players(uuid, username, primary_group)
+ *   luckperms_{group,user}_permissions(name|uuid, permission, value, server, world, expiry, contexts)
+ * Parents are `group.<name>` nodes; weight is `weight.<n>`; prefix/suffix are
+ * `prefix.<weight>.<text>`. After any write, lpNetworkSync() runs `lp networksync`
+ * on one live LP server — Redis messaging then refreshes every other instance.
+ */
+
+export type LpNode = {
+  permission: string;
+  value: boolean;
+  server: string;   // 'global' = everywhere
+  world: string;
+  expiry: number;   // 0 = permanent (epoch seconds otherwise)
+  contexts: string; // raw JSON
+};
+
+export type LpGroupSummary = {
+  name: string;
+  weight: number | null;
+  prefix: string | null;
+  parents: string[];
+  nodeCount: number;
+};
+
+export type LpUserRow = { uuid: string; username: string | null; primaryGroup: string };
+
+function parseNodes(rows: { permission: string; value: boolean; server: string; world: string; expiry: string | number; contexts: string }[]): LpNode[] {
+  return rows.map((r) => ({
+    permission: r.permission,
+    value: r.value,
+    server: r.server,
+    world: r.world,
+    expiry: Number(r.expiry) || 0,
+    contexts: r.contexts ?? "{}",
+  }));
+}
+
+const weightOf = (nodes: LpNode[]) => {
+  const w = nodes.find((n) => n.permission.startsWith("weight.") && n.value);
+  return w ? Number(w.permission.slice(7)) || null : null;
+};
+const prefixOf = (nodes: LpNode[]) => {
+  const p = nodes.find((n) => n.permission.startsWith("prefix.") && n.value);
+  return p ? p.permission.split(".").slice(2).join(".") : null;
+};
+const parentsOf = (nodes: LpNode[]) =>
+  nodes.filter((n) => n.permission.startsWith("group.") && n.value).map((n) => n.permission.slice(6));
+
+/** All groups with weight/prefix/parents summaries. */
+export async function lpListGroups(): Promise<LpGroupSummary[]> {
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    const groups = await client.query(`SELECT name FROM luckperms_groups ORDER BY name`);
+    const perms = await client.query(`SELECT name, permission, value, server, world, expiry, contexts FROM luckperms_group_permissions`);
+    const byGroup = new Map<string, LpNode[]>();
+    for (const r of perms.rows) {
+      const list = byGroup.get(r.name) ?? [];
+      list.push(...parseNodes([r]));
+      byGroup.set(r.name, list);
+    }
+    return groups.rows.map((g: { name: string }) => {
+      const nodes = byGroup.get(g.name) ?? [];
+      return { name: g.name, weight: weightOf(nodes), prefix: prefixOf(nodes), parents: parentsOf(nodes), nodeCount: nodes.length };
+    });
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/** A group's full node list. */
+export async function lpGroupNodes(name: string): Promise<LpNode[]> {
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    const r = await client.query(
+      `SELECT permission, value, server, world, expiry, contexts FROM luckperms_group_permissions WHERE name = $1 ORDER BY permission`,
+      [name],
+    );
+    return parseNodes(r.rows);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/** Known players (joined at least once), filtered by name SUBSTRING — searches everyone. */
+export async function lpListUsers(q = "", limit = 50): Promise<LpUserRow[]> {
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    const r = await client.query(
+      `SELECT uuid, username, primary_group FROM luckperms_players
+       WHERE username ILIKE $1 ORDER BY username LIMIT $2`,
+      [`%${q}%`, limit],
+    );
+    return r.rows.map((u: { uuid: string; username: string | null; primary_group: string }) => ({
+      uuid: u.uuid, username: u.username, primaryGroup: u.primary_group,
+    }));
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/**
+ * Cheap change signature over ALL LuckPerms data (groups/users/tracks/nodes) — md5 aggregates,
+ * tables are small. The SSE stream diffs this so the editor live-updates on any change made
+ * anywhere (panel, in-game /lp, another server). Cached ~3s; null when storage is down.
+ */
+declare global {
+  // eslint-disable-next-line no-var
+  var __lpSig: { sig: string | null; at: number; busy: boolean } | undefined;
+}
+export async function lpSignature(): Promise<string | null> {
+  const c = (global.__lpSig ??= { sig: null, at: 0, busy: false });
+  if (Date.now() - c.at < 3000 || c.busy) return c.sig;
+  c.busy = true;
+  try {
+    const client = await lpClient().catch(() => null);
+    if (!client) { c.sig = null; return null; }
+    try {
+      const r = await client.query(`SELECT
+        md5(coalesce((SELECT string_agg(name||permission||value::text||server||world||expiry::text, ',' ORDER BY name, permission, server, world) FROM luckperms_group_permissions), '')) ||
+        md5(coalesce((SELECT string_agg(uuid||permission||value::text||server||world||expiry::text, ',' ORDER BY uuid, permission, server, world) FROM luckperms_user_permissions), '')) ||
+        md5(coalesce((SELECT string_agg(uuid||coalesce(username,'')||primary_group, ',' ORDER BY uuid) FROM luckperms_players), '')) ||
+        md5(coalesce((SELECT string_agg(name||groups, ',' ORDER BY name) FROM luckperms_tracks), '')) ||
+        md5(coalesce((SELECT string_agg(name, ',' ORDER BY name) FROM luckperms_groups), '')) AS sig`);
+      c.sig = r.rows[0]?.sig ?? null;
+      return c.sig;
+    } finally {
+      await client.end().catch(() => {});
+    }
+  } catch {
+    return c.sig;
+  } finally {
+    c.at = Date.now();
+    c.busy = false;
+  }
+}
+
+/** A user's node list + identity. */
+export async function lpUserNodes(uuid: string): Promise<{ user: LpUserRow | null; nodes: LpNode[] }> {
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    const u = await client.query(`SELECT uuid, username, primary_group FROM luckperms_players WHERE uuid = $1`, [uuid]);
+    const r = await client.query(
+      `SELECT permission, value, server, world, expiry, contexts FROM luckperms_user_permissions WHERE uuid = $1 ORDER BY permission`,
+      [uuid],
+    );
+    const row = u.rows[0];
+    return {
+      user: row ? { uuid: row.uuid, username: row.username, primaryGroup: row.primary_group } : null,
+      nodes: parseNodes(r.rows),
+    };
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+export type LpTarget = { type: "group"; id: string } | { type: "user"; id: string };
+
+const targetTable = (t: LpTarget) =>
+  t.type === "group"
+    ? { table: "luckperms_group_permissions", key: "name" }
+    : { table: "luckperms_user_permissions", key: "uuid" };
+
+/** Add (or upsert) a node on a group/user. */
+export async function lpAddNode(t: LpTarget, node: Partial<LpNode> & { permission: string }): Promise<void> {
+  const { table, key } = targetTable(t);
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    // LP has no unique constraint — delete an identical node first so we never duplicate.
+    await client.query(
+      `DELETE FROM ${table} WHERE ${key} = $1 AND permission = $2 AND server = $3 AND world = $4`,
+      [t.id, node.permission, node.server ?? "global", node.world ?? "global"],
+    );
+    await client.query(
+      `INSERT INTO ${table} (${key}, permission, value, server, world, expiry, contexts)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [t.id, node.permission, node.value ?? true, node.server ?? "global", node.world ?? "global", node.expiry ?? 0, node.contexts ?? "{}"],
+    );
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/** Remove a node from a group/user (exact permission + context match). */
+export async function lpRemoveNode(t: LpTarget, node: Partial<LpNode> & { permission: string }): Promise<void> {
+  const { table, key } = targetTable(t);
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    await client.query(
+      `DELETE FROM ${table} WHERE ${key} = $1 AND permission = $2 AND server = $3 AND world = $4`,
+      [t.id, node.permission, node.server ?? "global", node.world ?? "global"],
+    );
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/** Create a group (no-op if it exists). */
+export async function lpCreateGroup(name: string): Promise<void> {
+  const n = name.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  if (!n) throw new Error("invalid group name");
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    await client.query(`INSERT INTO luckperms_groups (name) VALUES ($1) ON CONFLICT DO NOTHING`, [n]);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/** Delete a group + its nodes + any group.<name> parent references. */
+export async function lpDeleteGroup(name: string): Promise<void> {
+  if (name === "default") throw new Error("the default group cannot be deleted");
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    await client.query(`DELETE FROM luckperms_group_permissions WHERE name = $1`, [name]);
+    await client.query(`DELETE FROM luckperms_groups WHERE name = $1`, [name]);
+    await client.query(`DELETE FROM luckperms_group_permissions WHERE permission = $1`, [`group.${name}`]);
+    await client.query(`DELETE FROM luckperms_user_permissions WHERE permission = $1`, [`group.${name}`]);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/* ---- known permissions (editor autocomplete) ----
+ * LuckPerms' editor offers completion from the permissions it has seen. We combine:
+ * every distinct permission already stored (groups + users), a curated catalog of
+ * common proxy/server/LP/Conduit nodes, and conduit.maintenance.bypass.<task> for
+ * each live task — so the bypass nodes for YOUR network complete out of the box. */
+
+const PERM_CATALOG = [
+  // Conduit
+  "conduit.admin", "conduit.maintenance.bypass", "conduit.queue.priority",
+  // LuckPerms
+  "luckperms.*", "luckperms.user.info", "luckperms.user.perm.set", "luckperms.user.perm.unset",
+  "luckperms.user.parent.add", "luckperms.user.parent.remove", "luckperms.user.promote", "luckperms.user.demote",
+  "luckperms.group.info", "luckperms.group.perm.set", "luckperms.group.perm.unset",
+  "luckperms.creategroup", "luckperms.deletegroup", "luckperms.listgroups", "luckperms.editor", "luckperms.sync",
+  // Velocity (proxy)
+  "velocity.command.server", "velocity.command.glist", "velocity.command.send",
+  "velocity.command.shutdown", "velocity.command.velocity", "velocity.command.plugins",
+  // Minecraft / Bukkit commands
+  "minecraft.command.gamemode", "minecraft.command.teleport", "minecraft.command.tp", "minecraft.command.give",
+  "minecraft.command.kick", "minecraft.command.ban", "minecraft.command.pardon", "minecraft.command.op",
+  "minecraft.command.whitelist", "minecraft.command.time", "minecraft.command.weather", "minecraft.command.difficulty",
+  "minecraft.command.say", "minecraft.command.stop", "minecraft.command.kill", "minecraft.command.effect",
+  "minecraft.command.enchant", "minecraft.command.xp", "minecraft.command.summon", "minecraft.command.clear",
+  "minecraft.command.fill", "minecraft.command.setblock", "minecraft.command.setworldspawn", "minecraft.command.spawnpoint",
+  "bukkit.command.version", "bukkit.command.plugins", "bukkit.command.reload", "bukkit.command.restart",
+  "bukkit.command.timings", "bukkit.command.help",
+];
+
+/** Distinct known permissions for autocomplete: stored nodes + catalog + per-task bypass nodes. */
+export async function lpKnownPermissions(): Promise<string[]> {
+  const out = new Set<string>(PERM_CATALOG);
+  try {
+    const { getDB } = await import("./store");
+    const db = await getDB();
+    for (const t of db.tasks) out.add(`conduit.maintenance.bypass.${t.name}`);
+  } catch { /* store unreachable — catalog only */ }
+  const client = await lpClient().catch(() => null);
+  if (client) {
+    try {
+      const [g, u] = await Promise.all([
+        client.query(`SELECT DISTINCT permission FROM luckperms_group_permissions`),
+        client.query(`SELECT DISTINCT permission FROM luckperms_user_permissions`),
+      ]);
+      for (const r of [...g.rows, ...u.rows]) {
+        const p = r.permission as string;
+        // structured nodes (group./prefix./weight.) aren't useful as raw permission completions
+        if (!/^(group|prefix|suffix|weight|displayname)\./.test(p)) out.add(p);
+      }
+    } catch { /* schema not initialized yet */ } finally {
+      await client.end().catch(() => {});
+    }
+  }
+  return [...out].sort();
+}
+
+/**
+ * Usernames that hold `perm` — resolved from the LP tables including group inheritance:
+ * a group has the perm if itself or any ancestor (via group.<parent> nodes) holds it; a user
+ * has it via a direct node, their primary group, or any group.<g> membership. Wildcards
+ * (`*`, `conduit.*`) are honored. Used to ship proxy-side bypass lists (PreLogin denies
+ * happen BEFORE auth, where permissions can't be checked).
+ */
+export async function lpUsersWithPermission(perm: string): Promise<string[]> {
+  const client = await lpClient().catch(() => null);
+  if (!client) return [];
+  try {
+    const wild = ["*", perm];
+    for (let i = perm.indexOf("."); i > 0; i = perm.indexOf(".", i + 1)) wild.push(perm.slice(0, i) + ".*");
+    const gp = await client.query(
+      `SELECT name, permission FROM luckperms_group_permissions WHERE value = true AND (permission = ANY($1) OR permission LIKE 'group.%')`,
+      [wild],
+    );
+    const direct = new Set<string>();
+    const parents = new Map<string, string[]>(); // child group -> parent groups
+    for (const r of gp.rows) {
+      if (r.permission.startsWith("group.")) {
+        const arr = parents.get(r.name) ?? [];
+        arr.push(r.permission.slice(6));
+        parents.set(r.name, arr);
+      } else direct.add(r.name);
+    }
+    const holds = (g: string, seen: Set<string>): boolean => {
+      if (direct.has(g)) return true;
+      if (seen.has(g)) return false;
+      seen.add(g);
+      return (parents.get(g) ?? []).some((p) => holds(p, seen));
+    };
+    const effective = new Set([...new Set([...direct, ...parents.keys()])].filter((g) => holds(g, new Set())));
+
+    const up = await client.query(
+      `SELECT uuid, permission FROM luckperms_user_permissions WHERE value = true AND (permission = ANY($1) OR permission LIKE 'group.%')`,
+      [wild],
+    );
+    const userDirect = new Set<string>();
+    const memberships = new Map<string, string[]>();
+    for (const r of up.rows) {
+      if (r.permission.startsWith("group.")) {
+        const arr = memberships.get(r.uuid) ?? [];
+        arr.push(r.permission.slice(6));
+        memberships.set(r.uuid, arr);
+      } else userDirect.add(r.uuid);
+    }
+    const players = await client.query(`SELECT uuid, username, primary_group FROM luckperms_players`);
+    const names: string[] = [];
+    for (const p of players.rows) {
+      if (!p.username) continue;
+      if (userDirect.has(p.uuid) || effective.has(p.primary_group)
+          || (memberships.get(p.uuid) ?? []).some((g) => effective.has(g))) {
+        names.push(p.username);
+      }
+    }
+    return names;
+  } catch {
+    return [];
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/* ---- tracks (promotion ladders) ---- */
+
+export type LpTrack = { name: string; groups: string[] };
+
+export async function lpListTracks(): Promise<LpTrack[]> {
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    const r = await client.query(`SELECT name, groups FROM luckperms_tracks ORDER BY name`);
+    return r.rows.map((t: { name: string; groups: string }) => {
+      let groups: string[] = [];
+      try { groups = JSON.parse(t.groups); } catch { /* empty */ }
+      return { name: t.name, groups };
+    });
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/** Create a track or replace its group ladder (ordered low → high). */
+export async function lpSaveTrack(name: string, groups: string[]): Promise<void> {
+  const n = name.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  if (!n) throw new Error("invalid track name");
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    // manual upsert — LP's tracks table has no unique constraint on some schema versions
+    const upd = await client.query(`UPDATE luckperms_tracks SET groups = $2 WHERE name = $1`, [n, JSON.stringify(groups)]);
+    if (upd.rowCount === 0) {
+      await client.query(`INSERT INTO luckperms_tracks (name, groups) VALUES ($1, $2)`, [n, JSON.stringify(groups)]);
+    }
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+export async function lpDeleteTrack(name: string): Promise<void> {
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    await client.query(`DELETE FROM luckperms_tracks WHERE name = $1`, [name]);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/** Set a user's primary group (lp user <x> parent switchprimarygroup equivalent). */
+export async function lpSetPrimaryGroup(uuid: string, group: string): Promise<void> {
+  const client = await lpClient();
+  if (!client) throw new Error("postgres unreachable");
+  try {
+    await client.query(`UPDATE luckperms_players SET primary_group = $2 WHERE uuid = $1`, [uuid, group]);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/**
+ * Push panel edits to the live network: run `lp networksync` on one running LP server —
+ * it re-syncs from the DB and broadcasts an update over Redis messaging, refreshing every
+ * other instance. Fire-and-forget from mutation routes.
+ */
+export async function lpNetworkSync(): Promise<boolean> {
+  const { getDB } = await import("./store");
+  const { blueprint, loadBlueprints } = await import("./blueprints");
+  const { discoverInstances, instancesOf } = await import("./engine");
+  const { sendKeys } = await import("./ops");
+  await loadBlueprints();
+  const db = await getDB();
+  const all = await discoverInstances();
+  for (const t of db.tasks) {
+    if (blueprint(t.blueprintId)?.software.kind !== "paper") continue;
+    for (const inst of instancesOf(all, t.id)) {
+      if (inst.status !== "running" || !inst.ready) continue;
+      try {
+        await sendKeys(inst.vmid, "lp networksync");
+        return true;
+      } catch { /* try the next instance */ }
+    }
+  }
+  return false;
+}
+
 /**
  * Install LuckPerms onto every running Paper/Velocity instance, wired to the shared
  * Postgres (storage) + Redis (messaging), then restart each so the plugin loads.

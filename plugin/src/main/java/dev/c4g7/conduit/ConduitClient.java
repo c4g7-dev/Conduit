@@ -36,6 +36,8 @@ public final class ConduitClient {
     private volatile long hbLastLog = 0;
     /** Latest proxy config pushed by the panel via the heartbeat response (routing/MOTD/tablist). */
     public volatile JsonObject config = null;
+    /** Optional per-heartbeat extra: the proxy's live queue snapshot (panel queue UI). */
+    public volatile JsonArray queues = null;
     // Lightweight name snapshot from the heartbeat response — for tab-completion without HTTP.
     private volatile java.util.List<String> cachedServers = java.util.List.of();
     private volatile java.util.List<String> cachedPlayers = java.util.List.of();
@@ -97,6 +99,7 @@ public final class ConduitClient {
                 arr.add(pj);
             }
             o.add("players", arr);
+            if (queues != null) o.add("queues", queues);
             HttpResponse<String> resp = post("/api/connector/heartbeat", o);
             if (resp.statusCode() == 200) {
                 if (!hbOk) { System.out.println("[Conduit] heartbeat recovered after " + hbFails + " missed beat(s)"); hbOk = true; hbFails = 0; hbLastLog = 0; }

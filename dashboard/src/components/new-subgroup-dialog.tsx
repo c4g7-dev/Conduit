@@ -14,10 +14,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-/** Create a subgroup (Untergruppe) inside a group — controlled (opened from a context menu). */
-export function NewSubgroupDialog({ groupId, groupName, open, onOpenChange, onCreated }: {
+/** Create a subgroup (Untergruppe) inside a group — or nested inside another subgroup
+ *  when parentId is given. Controlled (opened from a context menu). */
+export function NewSubgroupDialog({ groupId, groupName, parentId, parentName, open, onOpenChange, onCreated }: {
   groupId: string;
   groupName: string;
+  parentId?: string;
+  parentName?: string;
   open: boolean;
   onOpenChange: (o: boolean) => void;
   onCreated: () => void;
@@ -31,7 +34,7 @@ export function NewSubgroupDialog({ groupId, groupName, open, onOpenChange, onCr
       const res = await fetch(`/api/groups/${groupId}/subgroups`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, parentId }),
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error);
@@ -50,11 +53,11 @@ export function NewSubgroupDialog({ groupId, groupName, open, onOpenChange, onCr
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New subgroup in {groupName}</DialogTitle>
+          <DialogTitle>New subgroup in {parentName ?? groupName}</DialogTitle>
           <DialogDescription>
-            A subgroup separates servers inside a group into an addressable unit — toggle
-            maintenance or run ops on just this slice (e.g. <code>timesmp</code>) without
-            touching the rest of the group.
+            A subgroup separates servers into an addressable unit — toggle maintenance, set a
+            player cap, or run ops on just this slice without touching the rest.
+            {parentName && <> Nested under <code>{parentName}</code> — its maintenance and caps cascade down.</>}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2 py-2">

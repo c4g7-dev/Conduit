@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Pencil } from "lucide-react";
+import { McText } from "@/components/mc-text";
 
 export function EditGroupDialog({
   group,
@@ -23,7 +24,7 @@ export function EditGroupDialog({
   onOpenChange: controlledOnOpenChange,
   showTrigger = true,
 }: {
-  group: { id: string; name: string; slotLimit: number; maintenance?: boolean };
+  group: { id: string; name: string; slotLimit: number; maintenance?: boolean; fullMessage?: string };
   onSaved: () => void;
   open?: boolean;
   onOpenChange?: (o: boolean) => void;
@@ -35,7 +36,7 @@ export function EditGroupDialog({
   const setOpen = (o: boolean) => (controlled ? controlledOnOpenChange?.(o) : setInternalOpen(o));
   const [name, setName] = useState(group.name);
   const [slotLimit, setSlotLimit] = useState(group.slotLimit);
-  const [maintenance, setMaintenance] = useState(!!group.maintenance);
+  const [fullMessage, setFullMessage] = useState(group.fullMessage ?? "");
   const [busy, setBusy] = useState(false);
 
   // reset fields to the latest group values whenever the dialog opens
@@ -43,7 +44,7 @@ export function EditGroupDialog({
     if (o) {
       setName(group.name);
       setSlotLimit(group.slotLimit);
-      setMaintenance(!!group.maintenance);
+      setFullMessage(group.fullMessage ?? "");
     }
     setOpen(o);
   }
@@ -54,7 +55,7 @@ export function EditGroupDialog({
       const res = await fetch("/api/groups/" + group.id, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, slotLimit, maintenance }),
+        body: JSON.stringify({ name, slotLimit, fullMessage: fullMessage.trim() ? fullMessage : null }),
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error);
@@ -83,7 +84,8 @@ export function EditGroupDialog({
         <DialogHeader>
           <DialogTitle>Group settings · {group.name}</DialogTitle>
           <DialogDescription>
-            Display name, the network slot limit, and maintenance mode. The pool id stays the same.
+            Display name, the network player cap and its kick message. Maintenance is toggled from
+            the group&apos;s right-click menu. The pool id stays the same.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
@@ -107,16 +109,22 @@ export function EditGroupDialog({
               onChange={(e) => setSlotLimit(Number(e.target.value))}
             />
             <p className="text-xs text-muted-foreground">
-              The network player cap shown on the proxy (its <code className="rounded bg-muted px-1">max players</code>).
+              ENFORCED at the proxy: logins are denied (pre-auth, near-zero cost) once this many
+              players are online. Bypass: <code className="rounded bg-muted px-1">conduit.full.bypass</code>.
             </p>
           </div>
-          <label className="flex items-center gap-2.5 rounded-md border border-hairline px-3 py-2.5 text-sm">
-            <input type="checkbox" checked={maintenance} onChange={(e) => setMaintenance(e.target.checked)} className="h-4 w-4 accent-[var(--brand,#7c83ff)]" />
-            <span>
-              <span className="block">Maintenance mode</span>
-              <span className="block text-xs text-muted-foreground">Blocks non-admin players from joining the proxy (needs <code className="rounded bg-muted px-1">conduit.maintenance.bypass</code>).</span>
-            </span>
-          </label>
+          <div className="space-y-2">
+            <Label htmlFor="eg-full">Full message</Label>
+            <Input
+              id="eg-full"
+              placeholder="&8[&bConduit&8] &cThe network is full."
+              value={fullMessage}
+              onChange={(e) => setFullMessage(e.target.value)}
+            />
+            <div className="rounded-md bg-black/40 px-2 py-1.5 text-xs">
+              <McText text={fullMessage || "&8[&bConduit&8] &cThe network is full."} />
+            </div>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>

@@ -1,6 +1,7 @@
 /**
  * Subgroups (Untergruppen) of a group — named, addressable buckets of tasks so ops like
  * maintenance can target e.g. just `timesmp` without touching the rest of the network.
+ * Subgroups nest: pass parentId to create a subgroup inside another subgroup.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { mutate, slug } from "@/lib/store";
@@ -15,6 +16,7 @@ export async function POST(
   const { id } = await ctx.params;
   const body = await req.json().catch(() => ({}));
   const name = typeof body.name === "string" ? body.name.trim() : "";
+  const parentId = typeof body.parentId === "string" && body.parentId.trim() ? body.parentId.trim() : undefined;
   if (!name) return NextResponse.json({ error: "name required" }, { status: 400 });
 
   const created = await mutate((db) => {
@@ -24,7 +26,15 @@ export async function POST(
     const sgId = slug(name);
     if (!sgId) throw new Error("invalid name");
     if (g.subgroups.some((s) => s.id === sgId)) throw new Error(`subgroup "${sgId}" already exists`);
-    const sg = { id: sgId, name, maintenance: false, createdAt: Date.now() };
+    if (parentId && !g.subgroups.some((s) => s.id === parentId)) throw new Error(`parent subgroup "${parentId}" not found`);
+    const sg = {
+      id: sgId,
+      name,
+      parentId,
+      maintenance: false,
+      slotLimit: typeof body.slotLimit === "number" && body.slotLimit > 0 ? Math.round(body.slotLimit) : undefined,
+      createdAt: Date.now(),
+    };
     g.subgroups.push(sg);
     return sg;
   }).catch((e) => ({ error: String(e) }));

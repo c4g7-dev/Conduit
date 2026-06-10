@@ -20,6 +20,8 @@ export type ConnServer = {
   max: number;
   tps?: number;
   players: ConnPlayer[];
+  /** proxy only: live subgroup join queues (limit id → waiting players, admit order) */
+  queues?: { id: string; players: { uuid: string; name: string; priority?: boolean }[] }[];
   lastSeen: number;
 };
 // `serverId` + `env` scope an action to the player's CURRENT server so the right executor runs
@@ -30,7 +32,8 @@ export type ConnAction =
   | { id: number; kind: "move"; player: string; target: string; serverId?: string; env?: string }
   | { id: number; kind: "message"; player: string; text: string; serverId?: string; env?: string }
   | { id: number; kind: "broadcast"; group?: string; text: string }
-  | { id: number; kind: "kick"; player: string; reason?: string; serverId?: string; env?: string };
+  | { id: number; kind: "kick"; player: string; reason?: string; serverId?: string; env?: string }
+  | { id: number; kind: "unqueue"; player: string; serverId?: string; env?: string };
 
 type Registry = {
   servers: Map<string, ConnServer>;

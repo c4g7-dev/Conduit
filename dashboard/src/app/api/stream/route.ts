@@ -9,23 +9,26 @@
  */
 import { NextRequest } from "next/server";
 import { liveServers, allPlayers, connectorActive } from "@/lib/connector";
+import { lpSignature } from "@/lib/luckperms";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function snapshot() {
+function snapshot(lpSig: string | null) {
   const servers = liveServers().map((s) => ({
     id: s.id, task: s.task, group: s.group, env: s.env,
     online: s.online, max: s.max, tps: s.tps,
     players: s.players, lastSeen: s.lastSeen,
   }));
-  return { active: connectorActive(), servers, players: allPlayers() };
+  return { active: connectorActive(), servers, players: allPlayers(), lpSig };
 }
 
-/** Compact change signature — ids, counts, and the flattened player set. */
+/** Compact change signature — ids, counts, the flattened player set, and the LuckPerms data
+ *  hash (so the permissions editor live-updates on any permission change network-wide). */
 function sig(snap: ReturnType<typeof snapshot>): string {
   return snap.servers.map((s) => `${s.id}:${s.online}/${s.max}`).sort().join(",")
-    + "|" + snap.players.map((p) => `${p.name}@${p.server}`).sort().join(",");
+    + "|" + snap.players.map((p) => `${p.name}@${p.server}`).sort().join(",")
+    + "|" + (snap.lpSig ?? "");
 }
 
 export async function GET(req: NextRequest) {
@@ -36,9 +39,12 @@ export async function GET(req: NextRequest) {
     start(controller) {
       const send = (obj: unknown) => controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
       let last = "";
+      let lpSig: string | null = null;
       const tick = () => {
         try {
-          const snap = snapshot();
+          // lpSignature() self-caches ~3s and refreshes async — never blocks the 500ms loop.
+          lpSignature().then((s) => { lpSig = s; }).catch(() => {});
+          const snap = snapshot(lpSig);
           const s = sig(snap);
           if (s !== last) { last = s; send(snap); }
           else controller.enqueue(enc.encode(": keep-alive\n\n"));

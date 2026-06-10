@@ -31,6 +31,7 @@ export async function POST(req: NextRequest) {
       id,
       name,
       groupId,
+      subgroupId: typeof body.subgroupId === "string" && body.subgroupId.trim() ? body.subgroupId.trim() : undefined,
       blueprintId: bp.id,
       mode,
       desired: Math.max(min, initialDesired),

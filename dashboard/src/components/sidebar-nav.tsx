@@ -20,6 +20,7 @@ import {
   Activity,
   CalendarClock,
   FolderTree,
+  KeyRound,
   Menu,
 } from "lucide-react";
 
@@ -34,6 +35,7 @@ const sections: NavSection[] = [
       { href: "/", label: "Overview", icon: LayoutDashboard },
       { href: "/groups", label: "Servers", icon: ServerCog },
       { href: "/players", label: "Players", icon: Users },
+      { href: "/permissions", label: "Permissions", icon: KeyRound },
       { href: "/activity", label: "Activity", icon: Activity },
       { href: "/schedules", label: "Schedules", icon: CalendarClock },
     ],

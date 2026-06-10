@@ -10,6 +10,7 @@ import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.LoginEvent;
+import com.velocitypowered.api.event.connection.PreLoginEvent;
 import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
@@ -123,8 +124,39 @@ public class ConduitVelocityPlugin {
             players.add(m);
         }
         int max = maxPlayers();
+        client.queues = queueSnapshot();
         for (ConduitClient.Action a : client.heartbeat(players.size(), max, null, players)) execute(a);
         updateTablist();
+        processQueues();
+    }
+
+    /** Queue state for the panel: [{id, players: [{uuid,name,priority}]}] in admit order. */
+    private com.google.gson.JsonArray queueSnapshot() {
+        com.google.gson.JsonArray out = new com.google.gson.JsonArray();
+        for (var entry : queues.entrySet()) {
+            var q = entry.getValue();
+            synchronized (q) {
+                if (q.isEmpty()) continue;
+                java.util.List<java.util.UUID> order = new java.util.ArrayList<>(q.keySet());
+                order.sort((a, b) -> Boolean.compare(!hasQueuePriority(a), !hasQueuePriority(b)));
+                com.google.gson.JsonArray ps = new com.google.gson.JsonArray();
+                for (java.util.UUID id : order) {
+                    Player p = proxy.getPlayer(id).orElse(null);
+                    if (p == null) continue;
+                    JsonObject pj = new JsonObject();
+                    pj.addProperty("uuid", id.toString());
+                    pj.addProperty("name", p.getUsername());
+                    if (hasQueuePriority(id)) pj.addProperty("priority", true);
+                    ps.add(pj);
+                }
+                if (ps.size() == 0) continue;
+                JsonObject qj = new JsonObject();
+                qj.addProperty("id", entry.getKey());
+                qj.add("players", ps);
+                out.add(qj);
+            }
+        }
+        return out;
     }
 
     /* ---- config helpers (panel-driven) ---- */
@@ -157,6 +189,97 @@ public class ConduitVelocityPlugin {
         if (!maintenanceTasks().contains(task)) return false;
         return !p.hasPermission("conduit.maintenance.bypass")
                 && !p.hasPermission("conduit.maintenance.bypass." + task);
+    }
+
+    /* ---- player caps (panel-enforced: network slotLimit + per-subgroup limits) ---- */
+
+    /** The panel limit entry covering `serverName`'s task, or null. */
+    private JsonObject limitFor(String serverName) {
+        JsonObject c = cfg();
+        if (c == null || !c.has("limits") || !c.get("limits").isJsonArray()) return null;
+        String task = taskOf(serverName);
+        for (var el : c.getAsJsonArray("limits")) {
+            JsonObject lim = el.getAsJsonObject();
+            for (var t : lim.getAsJsonArray("tasks")) {
+                if (t.getAsString().equalsIgnoreCase(task)) return lim;
+            }
+        }
+        return null;
+    }
+
+    /** Players currently online across a limit's member tasks. */
+    private int limitOnline(JsonObject lim) {
+        int online = 0;
+        for (RegisteredServer s : proxy.getAllServers()) {
+            String st = taskOf(s.getServerInfo().getName());
+            for (var t : lim.getAsJsonArray("tasks")) {
+                if (t.getAsString().equalsIgnoreCase(st)) { online += s.getPlayersConnected().size(); break; }
+            }
+        }
+        return online;
+    }
+
+    /** Panel-resolved conduit.full.bypass holders (incl. LuckPerms group inheritance) —
+     *  usable at PreLogin where permissions don't exist yet. */
+    private boolean isBypassName(String username) {
+        JsonObject c = cfg();
+        if (c == null || !c.has("bypassNames") || !c.get("bypassNames").isJsonArray()) return false;
+        for (var el : c.getAsJsonArray("bypassNames")) {
+            if (el.getAsString().equalsIgnoreCase(username)) return true;
+        }
+        return false;
+    }
+
+    /* ---- subgroup queue: denied connects wait FIFO (VIP priority) for a free slot ---- */
+    private final Map<String, java.util.LinkedHashMap<java.util.UUID, String>> queues = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private void enqueue(Player p, JsonObject lim, String targetServer) {
+        var q = queues.computeIfAbsent(lim.get("id").getAsString(), k -> new java.util.LinkedHashMap<>());
+        synchronized (q) {
+            boolean fresh = q.putIfAbsent(p.getUniqueId(), targetServer) == null;
+            int pos = 1;
+            for (var u : q.keySet()) { if (u.equals(p.getUniqueId())) break; pos++; }
+            p.sendMessage(LEGACY.deserialize(lim.get("message").getAsString()
+                    + (fresh ? " &7Queued — position &f" + pos + "&7." : " &7Still queued — position &f" + pos + "&7.")));
+        }
+    }
+
+    /** Each tick: admit queued players into limits with free capacity — VIP
+     *  (conduit.queue.priority) first, then FIFO (stable sort keeps arrival order). */
+    private void processQueues() {
+        JsonObject c = cfg();
+        if (c == null || !c.has("limits") || !c.get("limits").isJsonArray()) return;
+        for (var el : c.getAsJsonArray("limits")) {
+            JsonObject lim = el.getAsJsonObject();
+            var q = queues.get(lim.get("id").getAsString());
+            if (q == null || q.isEmpty()) continue;
+            int free = lim.get("limit").getAsInt() - limitOnline(lim);
+            if (free <= 0) continue;
+            synchronized (q) {
+                java.util.List<java.util.UUID> order = new java.util.ArrayList<>(q.keySet());
+                order.sort((a, b) -> Boolean.compare(!hasQueuePriority(a), !hasQueuePriority(b)));
+                for (java.util.UUID id : order) {
+                    if (free <= 0) break;
+                    Player p = proxy.getPlayer(id).orElse(null);
+                    if (p == null) { q.remove(id); continue; }
+                    String target = q.remove(id);
+                    RegisteredServer rs = bestByPrefix(taskOf(target));
+                    if (rs != null) {
+                        p.sendMessage(LEGACY.deserialize("&8[&bConduit&8] &aA slot opened — connecting…"));
+                        p.createConnectionRequest(rs).fireAndForget();
+                        free--;
+                    }
+                }
+            }
+        }
+    }
+
+    private boolean hasQueuePriority(java.util.UUID id) {
+        return proxy.getPlayer(id).map(p -> p.hasPermission("conduit.queue.priority")).orElse(false);
+    }
+
+    private void dropFromQueues(java.util.UUID id) {
+        for (var q : queues.values()) { synchronized (q) { q.remove(id); } }
     }
     private int maxPlayers() { JsonObject c = cfg(); return (c != null && c.has("maxPlayers")) ? c.get("maxPlayers").getAsInt() : proxy.getConfiguration().getShowMaxPlayers(); }
 
@@ -226,6 +349,16 @@ public class ConduitVelocityPlugin {
             e.setResult(ServerPreConnectEvent.ServerResult.denied());
             e.getPlayer().sendMessage(LEGACY.deserialize(
                     "&8[&bConduit&8] &7" + taskOf(name) + " &cis in maintenance."));
+            return;
+        }
+        // Per-subgroup player cap (panel subgroup.slotLimit): a full slice doesn't hard-reject —
+        // the player is QUEUED (FIFO, conduit.queue.priority skips ahead) and auto-connected
+        // when a slot frees. Already-queued players get their position re-announced.
+        JsonObject lim = limitFor(name);
+        if (lim != null && !e.getPlayer().hasPermission("conduit.full.bypass")
+                && limitOnline(lim) >= lim.get("limit").getAsInt()) {
+            e.setResult(ServerPreConnectEvent.ServerResult.denied());
+            enqueue(e.getPlayer(), lim, name);
         }
     }
 
@@ -244,11 +377,31 @@ public class ConduitVelocityPlugin {
         e.setPing(b.build());
     }
 
+    /** Network-full deny at PreLogin — BEFORE Mojang session auth and encryption, so a join
+     *  storm against a full network costs essentially nothing (no auth round-trip, no crypto,
+     *  no LuckPerms load). Bypass holders are matched by name from the panel-resolved list. */
+    @Subscribe
+    public void onPreLogin(PreLoginEvent e) {
+        int max = maxPlayers();
+        if (max <= 0 || proxy.getPlayerCount() < max) return;
+        if (isBypassName(e.getUsername())) return;
+        e.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                LEGACY.deserialize(cfgStr("fullMessage", "&cThe network is full."))));
+    }
+
     @Subscribe
     public void onLogin(LoginEvent e) {
         if (maintenance() && !e.getPlayer().hasPermission("conduit.maintenance.bypass")) {
             e.setResult(com.velocitypowered.api.event.ResultedEvent.ComponentResult
                     .denied(Component.text("Network is in maintenance.", NamedTextColor.RED)));
+            return;
+        }
+        // Permission-accurate backstop for the PreLogin deny (covers a bypass granted seconds
+        // ago that the ~30s panel name-list hasn't picked up, or stale list edge cases).
+        int max = maxPlayers();
+        if (max > 0 && proxy.getPlayerCount() >= max && !e.getPlayer().hasPermission("conduit.full.bypass")) {
+            e.setResult(com.velocitypowered.api.event.ResultedEvent.ComponentResult
+                    .denied(LEGACY.deserialize(cfgStr("fullMessage", "&cThe network is full."))));
         }
     }
 
@@ -287,18 +440,25 @@ public class ConduitVelocityPlugin {
             case "broadcast" -> proxy.getAllPlayers().forEach(p -> p.sendMessage(LEGACY.deserialize(a.text())));
             case "kick" -> proxy.getPlayer(a.player()).ifPresent(p ->
                     p.disconnect(LEGACY.deserialize(a.reason() == null ? "Kicked" : a.reason())));
+            case "unqueue" -> proxy.getPlayer(a.player()).ifPresent(p -> {
+                dropFromQueues(p.getUniqueId());
+                p.sendMessage(LEGACY.deserialize("&8[&bConduit&8] &7You were removed from the queue."));
+            });
             default -> {}
         }
     }
 
     @Subscribe
     public void onConnected(ServerConnectedEvent e) {
+        // A successful connect anywhere abandons any pending queue spots (the player moved on).
+        dropFromQueues(e.getPlayer().getUniqueId());
         client.event(e.getPreviousServer().isPresent() ? "switch" : "join",
                 e.getPlayer().getUsername(), e.getServer().getServerInfo().getName());
     }
 
     @Subscribe
     public void onQuit(DisconnectEvent e) {
+        dropFromQueues(e.getPlayer().getUniqueId());
         client.event("quit", e.getPlayer().getUsername(), null);
     }
 }
