@@ -13,6 +13,7 @@ import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
+import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyPingEvent;
 import com.velocitypowered.api.plugin.Plugin;
@@ -133,6 +134,30 @@ public class ConduitVelocityPlugin {
         return (c != null && c.has(k) && !c.get(k).isJsonNull()) ? c.get(k).getAsString() : def;
     }
     private boolean maintenance() { JsonObject c = cfg(); return c != null && c.has("maintenance") && c.get("maintenance").getAsBoolean(); }
+
+    /* ---- per-task maintenance (task or its subgroup flagged in the panel) ---- */
+
+    /** Lower-cased task names currently under maintenance, from the panel config. */
+    private java.util.Set<String> maintenanceTasks() {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        JsonObject c = cfg();
+        if (c != null && c.has("maintenanceTasks") && c.get("maintenanceTasks").isJsonArray()) {
+            for (var el : c.getAsJsonArray("maintenanceTasks")) out.add(el.getAsString().toLowerCase());
+        }
+        return out;
+    }
+
+    /** The task a registered server belongs to (server names are `<task>` or `<task>-N`). */
+    private static String taskOf(String serverName) { return serverName.replaceAll("-\\d+$", "").toLowerCase(); }
+
+    /** True when `serverName`'s task is in maintenance and this player has no bypass.
+     *  Bypass: conduit.maintenance.bypass (everything) or conduit.maintenance.bypass.<task>. */
+    private boolean closedFor(Player p, String serverName) {
+        String task = taskOf(serverName);
+        if (!maintenanceTasks().contains(task)) return false;
+        return !p.hasPermission("conduit.maintenance.bypass")
+                && !p.hasPermission("conduit.maintenance.bypass." + task);
+    }
     private int maxPlayers() { JsonObject c = cfg(); return (c != null && c.has("maxPlayers")) ? c.get("maxPlayers").getAsInt() : proxy.getConfiguration().getShowMaxPlayers(); }
 
     /** Ordered fallback task-name prefixes from config (default first). */
@@ -145,14 +170,19 @@ public class ConduitVelocityPlugin {
         return out;
     }
 
-    /** Pick the least-loaded registered server whose name matches a fallback task (in priority order). */
-    private Optional<RegisteredServer> pickFallback() {
+    /** Pick the least-loaded registered server whose name matches a fallback task (in priority
+     *  order), skipping tasks closed for this player by maintenance. `p` may be null (no player
+     *  context → maintenance not filtered). */
+    private Optional<RegisteredServer> pickFallback(Player p) {
         for (String task : fallbackTasks()) {
+            if (p != null && closedFor(p, task)) continue;
             RegisteredServer best = bestByPrefix(task);
             if (best != null) return Optional.of(best);
         }
-        // last resort: any server
-        return proxy.getAllServers().stream().findFirst();
+        // last resort: any server the player may enter
+        return proxy.getAllServers().stream()
+                .filter(s -> p == null || !closedFor(p, s.getServerInfo().getName()))
+                .findFirst();
     }
 
     private RegisteredServer bestByPrefix(String prefix) {
@@ -167,20 +197,35 @@ public class ConduitVelocityPlugin {
     }
 
     private void sendToFallback(Player p, RegisteredServer avoid) {
-        pickFallback().filter(rs -> !rs.equals(avoid)).ifPresent(rs -> p.createConnectionRequest(rs).fireAndForget());
+        pickFallback(p).filter(rs -> !rs.equals(avoid)).ifPresent(rs -> p.createConnectionRequest(rs).fireAndForget());
     }
 
     /* ---- routing events ---- */
     @Subscribe
     public void onChooseInitial(PlayerChooseInitialServerEvent e) {
-        pickFallback().ifPresent(e::setInitialServer);
+        pickFallback(e.getPlayer()).ifPresent(e::setInitialServer);
     }
 
     @Subscribe
     public void onKicked(KickedFromServerEvent e) {
-        Optional<RegisteredServer> fb = pickFallback();
+        Optional<RegisteredServer> fb = pickFallback(e.getPlayer());
         if (fb.isPresent() && (e.getServer() == null || !fb.get().equals(e.getServer()))) {
             e.setResult(KickedFromServerEvent.RedirectPlayer.create(fb.get()));
+        }
+    }
+
+    /** Per-task maintenance gate: deny connecting to a closed task's servers (panel toggle on the
+     *  task or its subgroup), with a styled notice. Fallback picking already avoids closed tasks,
+     *  so this catches explicit connects (/server, signs, plugins, panel moves). */
+    @Subscribe
+    public void onServerPreConnect(ServerPreConnectEvent e) {
+        RegisteredServer target = e.getResult().getServer().orElse(null);
+        if (target == null) return;
+        String name = target.getServerInfo().getName();
+        if (closedFor(e.getPlayer(), name)) {
+            e.setResult(ServerPreConnectEvent.ServerResult.denied());
+            e.getPlayer().sendMessage(LEGACY.deserialize(
+                    "&8[&bConduit&8] &7" + taskOf(name) + " &cis in maintenance."));
         }
     }
 

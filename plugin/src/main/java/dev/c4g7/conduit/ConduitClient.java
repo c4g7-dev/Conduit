@@ -164,6 +164,20 @@ public final class ConduitClient {
         } catch (Exception e) { return false; }
     }
 
+    /** Toggle maintenance for a group/subgroup/server by name — `/conduit maintenance <t> <on|off>`.
+     *  Returns the panel's resolution (e.g. "subgroup Time SMP"), or null on failure. */
+    public String setMaintenance(String target, boolean on) {
+        try {
+            JsonObject o = new JsonObject();
+            o.addProperty("target", target);
+            o.addProperty("on", on);
+            HttpResponse<String> r = post("/api/connector/maintenance", o);
+            if (r.statusCode() != 200) return null;
+            JsonObject d = GSON.fromJson(r.body(), JsonObject.class);
+            return str(d, "kind") + " &f" + str(d, "name");
+        } catch (Exception e) { return null; }
+    }
+
     /** Report a sharding boundary cross: stage the player's coords for `targetServerId` and
      *  ask the panel to move them to `target` (velocity server name). */
     public boolean transfer(String player, String target, String targetServerId, String loc) {

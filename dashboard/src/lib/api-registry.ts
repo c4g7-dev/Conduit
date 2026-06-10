@@ -41,8 +41,11 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
   { method: "POST", path: "/api/groups", group: "Servers", desc: "Create a group.", sampleBody: { name: "Demo Group" } },
   { method: "PATCH", path: "/api/groups/:id", group: "Servers", desc: "Update a group (maintenance, slot limit, name).", params: [{ name: "id", example: "time-smp" }], sampleBody: { maintenance: false } },
   { method: "DELETE", path: "/api/groups/:id", group: "Servers", destructive: true, desc: "Delete a group and all its servers + instances.", params: [{ name: "id", example: "time-smp" }] },
+  { method: "POST", path: "/api/groups/:id/subgroups", group: "Servers", desc: "Create a subgroup (Untergruppe) — an addressable bucket of servers inside the group for targeted maintenance/ops.", params: [{ name: "id", example: "network" }], sampleBody: { name: "Time SMP" } },
+  { method: "PATCH", path: "/api/groups/:id/subgroups/:sgId", group: "Servers", desc: "Update a subgroup (maintenance, rename). Maintenance cascades to its servers — the proxy denies connects unless conduit.maintenance.bypass[.<task>].", params: [{ name: "id", example: "network" }, { name: "sgId", example: "time-smp" }], sampleBody: { maintenance: true } },
+  { method: "DELETE", path: "/api/groups/:id/subgroups/:sgId", group: "Servers", desc: "Delete a subgroup. Its servers stay and rejoin the group directly (no instances touched).", params: [{ name: "id", example: "network" }, { name: "sgId", example: "time-smp" }] },
   { method: "POST", path: "/api/tasks", group: "Servers", desc: "Create a server (task) from a blueprint.", sampleBody: { name: "demo", groupId: "time-smp", blueprintId: "paper-smp", mode: "static", min: 1, max: 1 } },
-  { method: "PATCH", path: "/api/tasks/:id", group: "Servers", desc: "Update a server: scale (delta/desired), resources, fronts, seed, software.", params: [{ name: "id", example: "time-smp-smp" }], sampleBody: { delta: 0 } },
+  { method: "PATCH", path: "/api/tasks/:id", group: "Servers", desc: "Update a server: scale (delta/desired), resources, fronts, seed, software, subgroupId, maintenance.", params: [{ name: "id", example: "time-smp-smp" }], sampleBody: { delta: 0 } },
   { method: "DELETE", path: "/api/tasks/:id", group: "Servers", destructive: true, desc: "Delete a server and destroy its instances.", params: [{ name: "id", example: "time-smp-smp" }] },
   { method: "POST", path: "/api/tasks/:id/motd", group: "Servers", desc: "Set the MOTD (live velocity reload for proxies).", params: [{ name: "id", example: "time-smp-proxy" }], sampleBody: { motd: "Conduit &bnetwork" } },
   { method: "GET", path: "/api/tasks/:id/sharding", group: "Servers", safe: true, desc: "Live world-sharding config + computed strip grid (regions, X-ranges, per-region online).", params: [{ name: "id", example: "network-world" }] },
@@ -59,6 +62,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
   { method: "POST", path: "/api/connector/event", group: "Players & Connector", desc: "(plugin) join/quit/switch event → Activity feed. Token-auth.", sampleBody: { type: "join", player: "Notch", server: "lobby" } },
   { method: "POST", path: "/api/connector/transfer", group: "Players & Connector", desc: "(plugin, sharding) Report a strip-boundary cross: stash coords + queue a proxy move to the owning region. Token-auth.", sampleBody: { player: "Notch", target: "world-204", targetServerId: "network-world-204", loc: "24955;74;121;world;0;0" } },
   { method: "GET", path: "/api/connector/pending", group: "Players & Connector", desc: "(plugin, sharding) Pending coord-restores for a destination instance; ?ack=names clears them. Token-auth.", query: "id=network-world-204" },
+  { method: "POST", path: "/api/connector/maintenance", group: "Players & Connector", desc: "(plugin) /conduit maintenance <target> <on|off> — resolves a group, subgroup or server by name and toggles its maintenance. Token-auth.", sampleBody: { target: "timesmp", on: true } },
 
   // ── Automation ───────────────────────────────────────────────────────
   { method: "GET", path: "/api/activity", group: "Automation", safe: true, desc: "Engine event feed + derived health alerts." },

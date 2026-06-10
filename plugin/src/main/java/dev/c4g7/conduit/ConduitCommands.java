@@ -19,7 +19,7 @@ public final class ConduitCommands {
     private static final String BAR = "&8&m                                            ";
     private static final String TAG = "&b&lConduit";
     private static final List<String> SUBS = Arrays.asList(
-            "list", "players", "send", "msg", "broadcast", "kick", "info", "help");
+            "list", "players", "send", "msg", "broadcast", "kick", "maintenance", "info", "help");
 
     private ConduitCommands() {}
 
@@ -77,6 +77,18 @@ public final class ConduitCommands {
                 ok(reply, client.queueAction("kick", args[1], null, null, reason),
                         "Kicked &f" + args[1], "kick failed");
             }
+            case "maintenance", "maint" -> {
+                // SUSI-style: /conduit maintenance TIMESMP on|off — group, subgroup or server name.
+                if (args.length < 3 || !(args[2].equalsIgnoreCase("on") || args[2].equalsIgnoreCase("off")
+                        || args[2].equalsIgnoreCase("true") || args[2].equalsIgnoreCase("false"))) {
+                    usage(reply, "maintenance <group|subgroup|server> <on|off>"); return;
+                }
+                boolean on = args[2].equalsIgnoreCase("on") || args[2].equalsIgnoreCase("true");
+                String res = client.setMaintenance(args[1], on);
+                ok(reply, res != null,
+                        "Maintenance " + (on ? "&cON" : "&aoff") + " &7for " + res,
+                        "no group/subgroup/server named \"" + args[1] + "\"");
+            }
             case "info", "status" -> {
                 JsonObject d = client.apiGet("/api/connector/servers");
                 if (d == null) { err(reply, "panel unreachable"); return; }
@@ -93,6 +105,7 @@ public final class ConduitCommands {
                 cmd(reply, "msg <player> <text>", "private message");
                 cmd(reply, "broadcast <text>", "message everyone");
                 cmd(reply, "kick <player> [reason]", "kick from the network");
+                cmd(reply, "maintenance <target> <on|off>", "group/subgroup/server maintenance");
                 cmd(reply, "info", "network summary");
                 footer(reply);
             }
@@ -111,6 +124,8 @@ public final class ConduitCommands {
             case "send", "move" -> args.length == 2 ? filter(players, cur)
                     : args.length == 3 ? filter(servers, cur) : List.of();
             case "msg", "message", "tell", "kick" -> args.length == 2 ? filter(players, cur) : List.of();
+            case "maintenance", "maint" -> args.length == 2 ? filter(servers, cur)
+                    : args.length == 3 ? filter(List.of("on", "off"), cur) : List.of();
             default -> List.of();
         };
     }

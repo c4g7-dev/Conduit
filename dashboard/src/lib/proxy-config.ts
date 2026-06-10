@@ -17,6 +17,9 @@ export type ProxyConfig = {
   motdLine1: string;
   motdLine2: string;
   maintenance: boolean;
+  /** task names currently under maintenance (own flag or their subgroup's) — the proxy denies
+   *  connects to matching servers unless conduit.maintenance.bypass[.<task>] */
+  maintenanceTasks: string[];
   maxPlayers: number;
   tablistHeader: string;
   tablistFooter: string;
@@ -46,6 +49,18 @@ export async function buildProxyConfig(taskName: string, groupId: string): Promi
     }
   }
 
+  // Per-task maintenance: a task is closed when its own flag OR its subgroup's flag is set
+  // (group maintenance stays the network-wide login deny above). Names, because the proxy
+  // matches registered servers by task-name prefix.
+  const maintenanceTasks: string[] = [];
+  for (const t of db.tasks) {
+    if (proxy && t.groupId !== proxy.groupId) continue;
+    const sg = t.subgroupId
+      ? db.groups.find((g) => g.id === t.groupId)?.subgroups?.find((s) => s.id === t.subgroupId)
+      : undefined;
+    if (t.maintenance || sg?.maintenance) maintenanceTasks.push(t.name);
+  }
+
   const motd = (proxy?.motd ?? "").split("\n");
   return {
     fallbacks,
@@ -53,6 +68,7 @@ export async function buildProxyConfig(taskName: string, groupId: string): Promi
     motdLine1: motd[0] ?? "",
     motdLine2: motd[1] ?? "",
     maintenance: group?.maintenance ?? false,
+    maintenanceTasks,
     maxPlayers: group?.slotLimit ?? 1000,
     tablistHeader: "&b%proxy%\n&7on &f%server%",
     tablistFooter: "&7%online%&8/&7%max% online &8• &7%ping%ms",

@@ -23,6 +23,16 @@ export async function PATCH(
 
       if (typeof body.min === "number") t.min = body.min;
       if (typeof body.max === "number") t.max = body.max;
+
+      // subgroup membership (null/"" clears) + per-task maintenance
+      if (body.subgroupId !== undefined) {
+        const sgId = typeof body.subgroupId === "string" && body.subgroupId.trim() ? body.subgroupId.trim() : undefined;
+        if (sgId && !db.groups.find((g) => g.id === t.groupId)?.subgroups?.some((s) => s.id === sgId)) {
+          throw new Error(`subgroup "${sgId}" not found in group`);
+        }
+        t.subgroupId = sgId;
+      }
+      if (typeof body.maintenance === "boolean") t.maintenance = body.maintenance;
       if (Array.isArray(body.fronts)) t.fronts = body.fronts;
       if (typeof body.autoscale === "boolean") t.autoscale = body.autoscale;
       if (typeof body.playersPerInstance === "number") t.playersPerInstance = body.playersPerInstance;

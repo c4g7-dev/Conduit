@@ -20,6 +20,20 @@ export type Group = {
   name: string;
   slotLimit: number;
   maintenance: boolean;
+  /** named sub-buckets of tasks (Untergruppen) — addressable for maintenance/ops */
+  subgroups?: Subgroup[];
+  createdAt: number;
+};
+
+/**
+ * A subgroup (Untergruppe) separates a group's tasks into addressable units, so ops like
+ * maintenance can target e.g. just `timesmp` inside the main network group. Tasks opt in
+ * via Task.subgroupId; tasks without one belong to the group directly (back-compat).
+ */
+export type Subgroup = {
+  id: string; // kebab, unique within the group
+  name: string;
+  maintenance: boolean;
   createdAt: number;
 };
 
@@ -27,6 +41,11 @@ export type Task = {
   id: string; // kebab, unique
   name: string;
   groupId: string;
+  /** optional subgroup (Untergruppe) within the group this task belongs to */
+  subgroupId?: string;
+  /** per-task maintenance: the proxy denies connecting to this task's servers
+   *  (bypass via conduit.maintenance.bypass[.<task>]); subgroup maintenance cascades here */
+  maintenance?: boolean;
   blueprintId: string;
   mode: "dynamic" | "static";
   /** desired live instance count; controller drives reality to this (manual mode) */

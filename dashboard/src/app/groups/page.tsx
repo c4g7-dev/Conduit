@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
 import { NewGroupDialog } from "@/components/new-group-dialog";
+import { NewSubgroupDialog } from "@/components/new-subgroup-dialog";
 import { NewTaskDialog } from "@/components/new-task-dialog";
 import { EditGroupDialog } from "@/components/edit-group-dialog";
 import { EditTaskDialog } from "@/components/edit-task-dialog";
@@ -46,6 +47,9 @@ import {
   ServerCog,
   Network,
   ArrowRight,
+  CornerDownRight,
+  CornerUpLeft,
+  FolderPlus,
 } from "lucide-react";
 
 /* ---- types (mirror /api/conduit/state) ----------------------------------- */
@@ -56,9 +60,11 @@ type Task = {
   mode: "dynamic" | "static"; desired: number; min: number; max: number;
   autoscale: boolean; playersPerInstance: number; cores: number; memory: number;
   disk: number; persistent: boolean; port: number; fronts: string[];
+  subgroupId?: string; maintenance?: boolean;
   instances: Instance[]; live: number; running: number;
 };
-type Group = { id: string; name: string; slotLimit: number; maintenance: boolean; tasks: Task[] };
+type Subgroup = { id: string; name: string; maintenance: boolean };
+type Group = { id: string; name: string; slotLimit: number; maintenance: boolean; subgroups?: Subgroup[]; tasks: Task[] };
 type Backend = { taskId: string; taskName: string; role: string; vmid: number; name: string; ip: string | null; port: number; status: string };
 type Routing = { proxy: { id: string; name: string }; proxyInstances: { vmid: number; ip: string | null; status: string }[]; backends: Backend[] };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -86,6 +92,7 @@ export default function ServersPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editGroup, setEditGroup] = useState<Group | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
+  const [sgFor, setSgFor] = useState<Group | null>(null);
   const { data: nodesData } = usePoll<{ nodes: { node: string; status: string }[] }>("/api/nodes", 15000);
   const nodeNames = (nodesData?.nodes ?? []).filter((n) => n.status === "online").map((n) => n.node);
   const [tab, setTab] = useState<Tab>("overview");
@@ -153,6 +160,45 @@ export default function ServersPage() {
       body: JSON.stringify({ maintenance: on }),
     });
     toast.message(`${group.name}: maintenance ${on ? "ON" : "off"}`);
+    refresh();
+  }
+
+  async function toggleSgMaintenance(group: Group, sg: Subgroup, on: boolean) {
+    await fetch(`/api/groups/${group.id}/subgroups/${sg.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ maintenance: on }),
+    });
+    toast.message(`${sg.name}: maintenance ${on ? "ON" : "off"}`);
+    refresh();
+  }
+
+  async function delSubgroup(group: Group, sg: Subgroup) {
+    if (!confirm(`Delete subgroup "${sg.name}"? Its servers stay and rejoin ${group.name} directly.`)) return;
+    await fetch(`/api/groups/${group.id}/subgroups/${sg.id}`, { method: "DELETE" });
+    toast.success(`Subgroup "${sg.name}" removed`);
+    refresh();
+  }
+
+  async function toggleTaskMaintenance(task: Task, on: boolean) {
+    await fetch(`/api/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ maintenance: on }),
+    });
+    toast.message(`${task.name}: maintenance ${on ? "ON" : "off"}`);
+    refresh();
+  }
+
+  async function setTaskSubgroup(task: Task, sgId: string | null) {
+    const res = await fetch(`/api/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subgroupId: sgId }),
+    });
+    const json = await res.json();
+    if (json.error) return toast.error(json.error);
+    toast.success(sgId ? `${task.name} → subgroup ${sgId}` : `${task.name} removed from subgroup`);
     refresh();
   }
 
@@ -276,6 +322,82 @@ export default function ServersPage() {
                   (t) => !q || t.name.toLowerCase().includes(q) || t.role.includes(q),
                 );
                 if (q && servers.length === 0) return null;
+                const sgs = group.subgroups ?? [];
+                const loose = servers.filter((t) => !t.subgroupId || !sgs.some((s) => s.id === t.subgroupId));
+
+                // Shared row renderer so loose + subgrouped tasks stay identical.
+                const taskRow = (task: Task, sgMaint: boolean) => {
+                  const active = task.id === selectedId;
+                  const healthy = task.running > 0 && task.running >= task.desired;
+                  const inMaint = !!task.maintenance || sgMaint || group.maintenance;
+                  return (
+                    <ContextMenu key={task.id}>
+                      <ContextMenuTrigger
+                        render={
+                          <button
+                            onClick={() => setSelectedId(task.id)}
+                            className={cn(
+                              "group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors",
+                              active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                            )}
+                          />
+                        }
+                      >
+                        <RoleDot role={task.role} />
+                        <span className="flex-1 truncate">{task.name}</span>
+                        {inMaint && <Wrench className="h-3 w-3 shrink-0 text-amber-400" />}
+                        {!task.persistent && (
+                          <span title="Ephemeral — instances are created from the template and discarded on scale-down (no persistent data)."
+                            className="flex items-center gap-0.5 rounded bg-brand/10 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-brand/80">
+                            <Layers className="h-2.5 w-2.5" /> temp
+                          </span>
+                        )}
+                        <span
+                          className={cn(
+                            "tabular-nums text-[11px]",
+                            healthy ? "text-emerald-400/80" : task.running > 0 ? "text-amber-400/80" : "text-muted-foreground/50",
+                          )}
+                        >
+                          {task.running}/{task.desired}
+                        </span>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuLabel>{task.name}</ContextMenuLabel>
+                        <ContextMenuItem onClick={() => setEditTask(task)}>
+                          <Settings2 /> Settings
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => { setSelectedId(task.id); setTab("instances"); }}>
+                          <ServerCog /> View instances
+                        </ContextMenuItem>
+                        {!task.autoscale && (
+                          <>
+                            <ContextMenuItem onClick={() => scale(task, +1)}><Plus /> Scale up</ContextMenuItem>
+                            <ContextMenuItem disabled={task.desired <= task.min} onClick={() => scale(task, -1)}><Minus /> Scale down</ContextMenuItem>
+                          </>
+                        )}
+                        <ContextMenuItem onClick={() => toggleTaskMaintenance(task, !task.maintenance)}>
+                          <Wrench /> {task.maintenance ? "Disable maintenance" : "Enable maintenance"}
+                        </ContextMenuItem>
+                        {(sgs.length > 0 || task.subgroupId) && <ContextMenuSeparator />}
+                        {sgs.filter((s) => s.id !== task.subgroupId).map((s) => (
+                          <ContextMenuItem key={s.id} onClick={() => setTaskSubgroup(task, s.id)}>
+                            <CornerDownRight /> Move to {s.name}
+                          </ContextMenuItem>
+                        ))}
+                        {task.subgroupId && (
+                          <ContextMenuItem onClick={() => setTaskSubgroup(task, null)}>
+                            <CornerUpLeft /> Remove from subgroup
+                          </ContextMenuItem>
+                        )}
+                        <ContextMenuSeparator />
+                        <ContextMenuItem variant="destructive" onClick={() => delTask(task)}>
+                          <Trash2 /> Delete server
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
+                  );
+                };
+
                 return (
                   <div key={group.id} className="mb-1">
                     <ContextMenu>
@@ -302,6 +424,9 @@ export default function ServersPage() {
                         <ContextMenuItem onClick={() => toggleMaintenance(group, !group.maintenance)}>
                           <Wrench /> {group.maintenance ? "Disable maintenance" : "Enable maintenance"}
                         </ContextMenuItem>
+                        <ContextMenuItem onClick={() => setSgFor(group)}>
+                          <FolderPlus /> New subgroup…
+                        </ContextMenuItem>
                         <ContextMenuSeparator />
                         <ContextMenuItem variant="destructive" onClick={() => delGroup(group)}>
                           <Trash2 /> Delete group
@@ -311,59 +436,47 @@ export default function ServersPage() {
 
                     {!isCol && (
                       <div className="mt-0.5 space-y-px">
-                        {servers.map((task) => {
-                          const active = task.id === selectedId;
-                          const healthy = task.running > 0 && task.running >= task.desired;
+                        {loose.map((task) => taskRow(task, false))}
+                        {sgs.map((sg) => {
+                          const sgTasks = servers.filter((t) => t.subgroupId === sg.id);
+                          if (q && sgTasks.length === 0) return null;
+                          const online = sgTasks.reduce((n, t) => n + t.instances.reduce((m, i) => m + (mByVmid.get(i.vmid)?.online ?? 0), 0), 0);
+                          const running = sgTasks.reduce((n, t) => n + t.running, 0);
                           return (
-                            <ContextMenu key={task.id}>
-                              <ContextMenuTrigger
-                                render={
-                                  <button
-                                    onClick={() => setSelectedId(task.id)}
-                                    className={cn(
-                                      "group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors",
-                                      active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                                    )}
-                                  />
-                                }
-                              >
-                                <RoleDot role={task.role} />
-                                <span className="flex-1 truncate">{task.name}</span>
-                                {!task.persistent && (
-                                  <span title="Ephemeral — instances are created from the template and discarded on scale-down (no persistent data)."
-                                    className="flex items-center gap-0.5 rounded bg-brand/10 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-brand/80">
-                                    <Layers className="h-2.5 w-2.5" /> temp
-                                  </span>
-                                )}
-                                <span
-                                  className={cn(
-                                    "tabular-nums text-[11px]",
-                                    healthy ? "text-emerald-400/80" : task.running > 0 ? "text-amber-400/80" : "text-muted-foreground/50",
-                                  )}
+                            <div key={sg.id} className="pt-0.5">
+                              <ContextMenu>
+                                <ContextMenuTrigger
+                                  render={<div className="flex cursor-default items-center gap-1.5 rounded px-2 py-1 hover:bg-accent/40" />}
                                 >
-                                  {task.running}/{task.desired}
-                                </span>
-                              </ContextMenuTrigger>
-                              <ContextMenuContent>
-                                <ContextMenuLabel>{task.name}</ContextMenuLabel>
-                                <ContextMenuItem onClick={() => setEditTask(task)}>
-                                  <Settings2 /> Settings
-                                </ContextMenuItem>
-                                <ContextMenuItem onClick={() => { setSelectedId(task.id); setTab("instances"); }}>
-                                  <ServerCog /> View instances
-                                </ContextMenuItem>
-                                {!task.autoscale && (
-                                  <>
-                                    <ContextMenuItem onClick={() => scale(task, +1)}><Plus /> Scale up</ContextMenuItem>
-                                    <ContextMenuItem disabled={task.desired <= task.min} onClick={() => scale(task, -1)}><Minus /> Scale down</ContextMenuItem>
-                                  </>
-                                )}
-                                <ContextMenuSeparator />
-                                <ContextMenuItem variant="destructive" onClick={() => delTask(task)}>
-                                  <Trash2 /> Delete server
-                                </ContextMenuItem>
-                              </ContextMenuContent>
-                            </ContextMenu>
+                                  <CornerDownRight className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+                                  <span className={cn(
+                                    "flex-1 truncate text-[10px] font-semibold uppercase tracking-wider",
+                                    sg.maintenance ? "text-amber-400/90" : "text-muted-foreground/80",
+                                  )}>
+                                    {sg.name}
+                                  </span>
+                                  {sg.maintenance && <Wrench className="h-3 w-3 text-amber-400" />}
+                                  <span className="tabular-nums text-[10px] text-muted-foreground/60" title={`${online} players · ${running} server(s)`}>
+                                    {online}P · {running}S
+                                  </span>
+                                </ContextMenuTrigger>
+                                <ContextMenuContent>
+                                  <ContextMenuLabel>{group.name} / {sg.name}</ContextMenuLabel>
+                                  <ContextMenuItem onClick={() => toggleSgMaintenance(group, sg, !sg.maintenance)}>
+                                    <Wrench /> {sg.maintenance ? "Disable maintenance" : "Enable maintenance"}
+                                  </ContextMenuItem>
+                                  <ContextMenuSeparator />
+                                  <ContextMenuItem variant="destructive" onClick={() => delSubgroup(group, sg)}>
+                                    <Trash2 /> Delete subgroup
+                                  </ContextMenuItem>
+                                </ContextMenuContent>
+                              </ContextMenu>
+                              <div className="ml-3 space-y-px border-l border-hairline pl-1.5">
+                                {sgTasks.length === 0
+                                  ? <div className="px-2 py-1 text-[11px] text-muted-foreground/50">empty — right-click a server to move it here</div>
+                                  : sgTasks.map((task) => taskRow(task, sg.maintenance))}
+                              </div>
+                            </div>
                           );
                         })}
                         <div className="px-1 pt-0.5">
@@ -452,6 +565,15 @@ export default function ServersPage() {
           onSaved={() => { setEditGroup(null); refresh(); }}
         />
       )}
+      {sgFor && (
+        <NewSubgroupDialog
+          groupId={sgFor.id}
+          groupName={sgFor.name}
+          open={!!sgFor}
+          onOpenChange={(o) => { if (!o) setSgFor(null); }}
+          onCreated={refresh}
+        />
+      )}
       {editTask && (
         <EditTaskDialog
           task={editTask}
@@ -490,6 +612,11 @@ function DetailHeader({ task, group, metrics }: { task: Task; group: Group | nul
         </div>
       </div>
       <div className="flex items-center gap-4 text-right">
+        {(task.maintenance || group?.maintenance || group?.subgroups?.some((s) => s.id === task.subgroupId && s.maintenance)) && (
+          <span className="flex items-center gap-1 rounded bg-amber-500/15 px-2 py-1 text-[11px] font-medium text-amber-400">
+            <Wrench className="h-3 w-3" /> maintenance
+          </span>
+        )}
         <div>
           <div className="eyebrow">Players</div>
           <div className="text-sm font-semibold tabular-nums">{up ? online : "—"}</div>
