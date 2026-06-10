@@ -22,6 +22,7 @@ export type TaskVersionStatus = {
   latestVersion?: string;   // newest full version upstream
   updateAvailable: boolean; // latestVersion !== version
   autoUpdate: boolean;
+  pinned: boolean;          // deliberately locked → mutes upgrade nudges
   static?: boolean;         // no upstream feed (hytale/generic) — version display only
 };
 
@@ -95,12 +96,13 @@ export async function versionStatuses(): Promise<TaskVersionStatus[]> {
         latestVersion: latestVer,
         updateAvailable: !!(latestVer && latestVer !== version),
         autoUpdate: !!t.autoUpdate,
+        pinned: !!t.pinned,
       });
     } else if (kind === "hytale") {
       out.push({
         taskId: t.id, name: t.name, kind, version,
         hotfixAvailable: false, updateAvailable: false,
-        autoUpdate: false, static: true,
+        autoUpdate: false, pinned: !!t.pinned, static: true,
       });
     }
   }

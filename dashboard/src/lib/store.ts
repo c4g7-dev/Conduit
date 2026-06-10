@@ -79,9 +79,15 @@ export type Task = {
   software?: Software;
   /** auto-apply hotfixes (new BUILDS of the pinned version line) — never a new full version */
   autoUpdate?: boolean;
+  /** version PIN: deliberately locked to its current version — the panel stops nudging about
+   *  newer full versions (mutes the upgrade banner/badge); upgrading still works explicitly */
+  pinned?: boolean;
   /** rewrite-on-change: when the overlay chain (global/egg/task files) changes, re-apply it to
-   *  running instances and restart them — keeps static services in sync with their template */
+   *  running instances — keeps static services in sync with their template */
   templateSync?: boolean;
+  /** whether auto file-sync also RESTARTS the instance on change (default off: files re-applied,
+   *  picked up on the next natural restart so players aren't kicked) */
+  templateSyncRestart?: boolean;
   /** newest upstream build installed across this task's instances (hotfix tracking) */
   installedBuild?: number;
   /** server list MOTD (supports & colour codes); applied to this task's instances */
@@ -155,6 +161,19 @@ export type Schedule = {
   lastRun?: string; // "YYYY-MM-DD HH:MM" of the last action run (dedup)
 };
 
+/**
+ * A named, generic file template shared across explicitly-chosen services (ideas.md §2). Unlike
+ * the per-egg overlay or the kind-wide _global/<kind> layer, membership is hand-picked: pick any
+ * tasks and they all receive this template's files. Files live at overlays/_tpl/<id>/ on the
+ * shared store (file-manager / SFTP editable).
+ */
+export type GlobalTemplate = {
+  id: string;       // kebab, unique
+  name: string;
+  taskIds: string[]; // member services
+  createdAt: number;
+};
+
 export type DB = {
   groups: Group[];
   tasks: Task[];
@@ -165,6 +184,8 @@ export type DB = {
   schedules?: Schedule[];
   /** golden-image build status per egg (for fast clone-based autoscaling) */
   images?: ImageStatus[];
+  /** named generic file templates applied to hand-picked services */
+  globalTemplates?: GlobalTemplate[];
 };
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -185,6 +206,7 @@ function normalize(db: Partial<DB> | null | undefined): DB {
     blueprints: db?.blueprints,
     schedules: db?.schedules,
     images: db?.images,
+    globalTemplates: db?.globalTemplates,
   };
 }
 

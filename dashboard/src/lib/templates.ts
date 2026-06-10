@@ -17,12 +17,40 @@ import { nodeExec } from "./provision";
 export const CONDUIT_ROOT = "/var/lib/conduit";
 export const OVERLAYS_DIR = `${CONDUIT_ROOT}/overlays`;
 export const TASKS_DIR = `${CONDUIT_ROOT}/tasks`;
+/** named generic templates (overlays/_tpl/<id>/), applied to hand-picked services */
+export const TPL_DIR = `${OVERLAYS_DIR}/_tpl`;
 
 /** The in-container working dir a service's files live in, by software kind. */
 export function serviceDir(kind: string): string {
   if (kind === "hytale") return "/opt/hytale";
   if (kind === "nginx") return "/opt/www";
   return "/opt/mc";
+}
+
+/**
+ * Ordered overlay source dirs for a task, lowest priority first (later layers overwrite):
+ *   egg overlay → kind-wide _global → named global templates → per-task overrides.
+ * `tplIds` are the named templates that list this task (resolved by the caller from the store).
+ */
+export function overlayDirs(eggId: string, taskId: string, kind: string, tplIds: string[] = []): string[] {
+  return [
+    `${OVERLAYS_DIR}/${eggId}`,
+    `${OVERLAYS_DIR}/_global/${kind}`,
+    ...tplIds.map((id) => `${TPL_DIR}/${id}`),
+    `${TASKS_DIR}/${taskId}`,
+  ];
+}
+
+/** Create the dir for a named global template on the shared store (file-manager editable). */
+export async function ensureGlobalTemplateDir(id: string, host?: string): Promise<void> {
+  await nodeExec(`mkdir -p '${TPL_DIR}/${id}'`, 20_000, host);
+}
+
+/** Remove a named global template's files (called when the template is deleted). */
+export async function removeGlobalTemplateDir(id: string, host?: string): Promise<void> {
+  // guard against an empty id wiping the parent
+  if (!/^[a-z0-9-]+$/.test(id)) return;
+  await nodeExec(`rm -rf '${TPL_DIR}/${id}'`, 20_000, host);
 }
 
 /** Ensure an egg's template dir exists (optionally seeding default files on first create). */
@@ -39,15 +67,12 @@ export async function ensureTemplate(eggId: string, seed?: Record<string, string
 }
 
 /**
- * Copy the overlay chain into <destDir> inside the container, lowest priority first so later
- * layers overwrite earlier ones (ideas.md §2 prioritization):
- *   overlays/_global/<kind>/  → every service of that software kind (e.g. all paper servers)
- *   overlays/<eggId>/         → the egg's base tree
- *   tasks/<taskId>/           → per-task overrides
+ * Copy the overlay chain (see {@link overlayDirs}) into <destDir> inside the container, lowest
+ * priority first so later layers overwrite earlier ones (ideas.md §2 prioritization).
  * No-op for empty/missing layers. Runs entirely on the host (tar + pct push + extract).
  */
 export async function applyTemplate(
-  vmid: number, eggId: string, taskId: string, destDir: string, host?: string, kind?: string,
+  vmid: number, eggId: string, taskId: string, destDir: string, host?: string, kind = "", tplIds: string[] = [],
 ): Promise<void> {
   const one = async (srcDir: string) => {
     const tgz = `/tmp/ct-tmpl-${vmid}.tgz`;
@@ -62,19 +87,17 @@ export async function applyTemplate(
       120_000, host,
     );
   };
-  if (kind) await one(`${OVERLAYS_DIR}/_global/${kind}`);
-  await one(`${OVERLAYS_DIR}/${eggId}`);
-  await one(`${TASKS_DIR}/${taskId}`);
+  for (const dir of overlayDirs(eggId, taskId, kind, tplIds)) await one(dir);
 }
 
 /**
  * Change signature of a task's full overlay chain (file paths + sizes + mtimes). The reconcile
  * loop diffs this for templateSync tasks: when an overlay edit lands (file manager / SFTP),
- * affected services get the files re-applied + a restart automatically — ideas.md §2
- * "rewrite on restart" for static services, without manual re-seeding.
+ * affected services get the files re-applied (and optionally restarted) automatically —
+ * ideas.md §2 "rewrite on change" for static services, without manual re-seeding.
  */
-export async function overlaySignature(eggId: string, taskId: string, kind: string, host?: string): Promise<string> {
-  const dirs = [`${OVERLAYS_DIR}/_global/${kind}`, `${OVERLAYS_DIR}/${eggId}`, `${TASKS_DIR}/${taskId}`];
+export async function overlaySignature(eggId: string, taskId: string, kind: string, host?: string, tplIds: string[] = []): Promise<string> {
+  const dirs = overlayDirs(eggId, taskId, kind, tplIds);
   const out = await nodeExec(
     dirs.map((d) => `([ -d '${d}' ] && find '${d}' -type f -printf '%P %s %T@\\n' | sort) || true`).join("; "),
     30_000, host,

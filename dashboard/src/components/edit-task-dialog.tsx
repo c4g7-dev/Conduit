@@ -10,6 +10,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Pencil, Cpu, Users, Globe, Plug, Plus, X, Infinity as InfinityIcon, Pin, Package } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { HelpButton } from "@/components/help-center";
 import { cn } from "@/lib/utils";
 
@@ -205,15 +206,8 @@ export function EditTaskDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {showTrigger && (
-        <DialogTrigger
-          render={
-            <button
-              className="flex items-center gap-1.5 rounded-md border border-brand/40 bg-brand/10 px-2.5 py-1.5 text-[13px] font-medium text-brand transition-colors hover:bg-brand/20"
-              title="Edit server"
-            />
-          }
-        >
-          <Pencil className="h-3.5 w-3.5" /> Edit
+        <DialogTrigger render={<Button size="sm" variant="outline" title="Edit server" />}>
+          <Pencil className="h-4 w-4" /> Edit
         </DialogTrigger>
       )}
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">

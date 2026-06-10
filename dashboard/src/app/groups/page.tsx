@@ -69,7 +69,7 @@ type Task = {
   mode: "dynamic" | "static"; desired: number; min: number; max: number;
   autoscale: boolean; playersPerInstance: number; cores: number; memory: number;
   disk: number; persistent: boolean; port: number; fronts: string[];
-  subgroupId?: string; maintenance?: boolean; templateSync?: boolean;
+  subgroupId?: string; maintenance?: boolean; templateSync?: boolean; templateSyncRestart?: boolean;
   instances: Instance[]; live: number; running: number;
 };
 type Subgroup = { id: string; name: string; maintenance: boolean; parentId?: string; slotLimit?: number; fullMessage?: string };
@@ -258,17 +258,23 @@ export default function ServersPage() {
     }
   }
 
-  async function toggleTemplateSync(task: Task) {
+  async function patchTask(task: Task, body: Record<string, unknown>, msg: string) {
     const res = await fetch(`/api/tasks/${task.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ templateSync: !task.templateSync }),
+      body: JSON.stringify(body),
     });
     const json = await res.json();
     if (json.error) return toast.error(json.error);
-    toast.success(`${task.name}: auto file-sync ${!task.templateSync ? "ON — overlay edits re-apply + restart automatically" : "off"}`);
+    toast.success(msg);
     refresh();
   }
+  const toggleTemplateSync = (task: Task) =>
+    patchTask(task, { templateSync: !task.templateSync },
+      `${task.name}: auto file-sync ${!task.templateSync ? "ON — overlay edits re-apply automatically" : "off"}`);
+  const toggleTemplateSyncRestart = (task: Task) =>
+    patchTask(task, { templateSyncRestart: !task.templateSyncRestart },
+      `${task.name}: auto-sync restart ${!task.templateSyncRestart ? "ON — instances restart on change" : "off — changes load on next restart"}`);
 
   /** Drag & drop: move a task into a group (loose) or a subgroup — cross-group moves
    *  re-home the task; the destination's settings (maintenance, caps, routing scope)
@@ -463,12 +469,15 @@ export default function ServersPage() {
                         {(() => {
                           const v = verByTask.get(task.id);
                           if (!v || (!v.hotfixAvailable && !v.updateAvailable)) return null;
-                          // hotfix (same line, actionable) = amber; a newer FULL version while the
-                          // pinned one runs fine = muted grey — informational, not an alert.
+                          // hotfix (same line) = amber; a new full version = yellow nudge, unless
+                          // the version is pinned → muted grey (deliberately locked, not an alert).
                           return (
                             <ArrowUpCircle
-                              className={cn("h-3 w-3 shrink-0", v.hotfixAvailable ? "text-amber-500" : "text-muted-foreground/50")}
-                              aria-label={v.hotfixAvailable ? `hotfix available: build ${v.latestBuild}` : `newer version exists: ${v.latestVersion}`}
+                              className={cn(
+                                "h-3 w-3 shrink-0",
+                                v.hotfixAvailable ? "text-amber-500" : v.pinned ? "text-muted-foreground/50" : "text-yellow-400",
+                              )}
+                              aria-label={v.hotfixAvailable ? `hotfix available: build ${v.latestBuild}` : `newer version available: ${v.latestVersion}`}
                             />
                           );
                         })()}
@@ -511,6 +520,11 @@ export default function ServersPage() {
                         <ContextMenuItem onClick={() => toggleTemplateSync(task)}>
                           <FolderSync /> {task.templateSync ? "Disable auto file-sync" : "Enable auto file-sync"}
                         </ContextMenuItem>
+                        {task.templateSync && (
+                          <ContextMenuItem onClick={() => toggleTemplateSyncRestart(task)}>
+                            <RotateCw /> {task.templateSyncRestart ? "Auto-sync: stop restarting" : "Auto-sync: restart on change"}
+                          </ContextMenuItem>
+                        )}
                         {(sgs.length > 0 || task.subgroupId) && <ContextMenuSeparator />}
                         {sgs.filter((s) => s.id !== task.subgroupId).map((s) => (
                           <ContextMenuItem key={s.id} onClick={() => setTaskSubgroup(task, s.id)}>

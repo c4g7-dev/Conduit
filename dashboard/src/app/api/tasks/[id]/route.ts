@@ -43,6 +43,8 @@ export async function PATCH(
       }
       if (typeof body.maintenance === "boolean") t.maintenance = body.maintenance;
       if (typeof body.templateSync === "boolean") t.templateSync = body.templateSync;
+      if (typeof body.templateSyncRestart === "boolean") t.templateSyncRestart = body.templateSyncRestart;
+      if (typeof body.pinned === "boolean") t.pinned = body.pinned;
       if (Array.isArray(body.fronts)) t.fronts = body.fronts;
       if (typeof body.autoscale === "boolean") t.autoscale = body.autoscale;
       if (typeof body.playersPerInstance === "number") t.playersPerInstance = body.playersPerInstance;

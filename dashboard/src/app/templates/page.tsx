@@ -10,6 +10,7 @@ import { NewTemplateDialog } from "@/components/new-template-dialog";
 import { DeployEggDialog } from "@/components/deploy-egg-dialog";
 import { EggDetailDialog } from "@/components/egg-detail-dialog";
 import { AssetsSection } from "@/components/assets-section";
+import { GlobalTemplatesSection } from "@/components/global-templates-section";
 import { RoleDot, roleColor } from "@/components/role-dot";
 import { bytes, pct } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -169,6 +170,9 @@ export default function TemplatesPage() {
         })}
         {!bps && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-52 rounded-lg" />)}
       </div>
+
+      {/* ── Global templates ──────────────────────────────────────────── */}
+      <GlobalTemplatesSection />
 
       {/* ── Assets ────────────────────────────────────────────────────── */}
       <SectionLabel>Assets · Worlds &amp; Plugins</SectionLabel>
