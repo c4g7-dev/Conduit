@@ -19,13 +19,23 @@ import { Pencil } from "lucide-react";
 export function EditGroupDialog({
   group,
   onSaved,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+  showTrigger = true,
 }: {
-  group: { id: string; name: string; slotLimit: number };
+  group: { id: string; name: string; slotLimit: number; maintenance?: boolean };
   onSaved: () => void;
+  open?: boolean;
+  onOpenChange?: (o: boolean) => void;
+  showTrigger?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const controlled = controlledOpen !== undefined;
+  const open = controlled ? controlledOpen : internalOpen;
+  const setOpen = (o: boolean) => (controlled ? controlledOnOpenChange?.(o) : setInternalOpen(o));
   const [name, setName] = useState(group.name);
   const [slotLimit, setSlotLimit] = useState(group.slotLimit);
+  const [maintenance, setMaintenance] = useState(!!group.maintenance);
   const [busy, setBusy] = useState(false);
 
   // reset fields to the latest group values whenever the dialog opens
@@ -33,6 +43,7 @@ export function EditGroupDialog({
     if (o) {
       setName(group.name);
       setSlotLimit(group.slotLimit);
+      setMaintenance(!!group.maintenance);
     }
     setOpen(o);
   }
@@ -43,7 +54,7 @@ export function EditGroupDialog({
       const res = await fetch("/api/groups/" + group.id, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, slotLimit }),
+        body: JSON.stringify({ name, slotLimit, maintenance }),
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error);
@@ -59,18 +70,20 @@ export function EditGroupDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogTrigger
-        render={
-          <Button size="icon" variant="ghost" className="h-8 w-8" title="Edit group" />
-        }
-      >
-        <Pencil className="h-4 w-4" />
-      </DialogTrigger>
+      {showTrigger && (
+        <DialogTrigger
+          render={
+            <Button size="icon" variant="ghost" className="h-8 w-8" title="Edit group" />
+          }
+        >
+          <Pencil className="h-4 w-4" />
+        </DialogTrigger>
+      )}
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Edit group</DialogTitle>
+          <DialogTitle>Group settings · {group.name}</DialogTitle>
           <DialogDescription>
-            Change the display name and shared slot limit. The pool id stays the same.
+            Display name, the network slot limit, and maintenance mode. The pool id stays the same.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
@@ -93,7 +106,17 @@ export function EditGroupDialog({
               value={slotLimit}
               onChange={(e) => setSlotLimit(Number(e.target.value))}
             />
+            <p className="text-xs text-muted-foreground">
+              The network player cap shown on the proxy (its <code className="rounded bg-muted px-1">max players</code>).
+            </p>
           </div>
+          <label className="flex items-center gap-2.5 rounded-md border border-hairline px-3 py-2.5 text-sm">
+            <input type="checkbox" checked={maintenance} onChange={(e) => setMaintenance(e.target.checked)} className="h-4 w-4 accent-[var(--brand,#7c83ff)]" />
+            <span>
+              <span className="block">Maintenance mode</span>
+              <span className="block text-xs text-muted-foreground">Blocks non-admin players from joining the proxy (needs <code className="rounded bg-muted px-1">conduit.maintenance.bypass</code>).</span>
+            </span>
+          </label>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>

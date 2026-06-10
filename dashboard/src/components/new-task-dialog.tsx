@@ -5,24 +5,24 @@ import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Plus, Cpu, MemoryStick, HardDrive } from "lucide-react";
+  Plus,
+  Cpu,
+  MemoryStick,
+  HardDrive,
+  Infinity as InfinityIcon,
+  Pin,
+  Cable,
+  Gamepad2,
+  Server,
+  Database,
+  Box,
+  ChevronDown,
+} from "lucide-react";
 
 type Blueprint = {
   id: string;
@@ -39,6 +39,30 @@ type Blueprint = {
 };
 
 type FrontCandidate = { id: string; name: string; role: string };
+
+const ROLE_COLOR: Record<string, string> = {
+  proxy: "#f97316",
+  lobby: "#34d399",
+  smp: "#38bdf8",
+  db: "#a78bfa",
+  generic: "#94a3b8",
+};
+
+const ROLE_ICON: Record<string, React.ElementType> = {
+  proxy: Cable,
+  lobby: Gamepad2,
+  smp: Server,
+  db: Database,
+  generic: Box,
+};
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-white/35">
+      {children}
+    </div>
+  );
+}
 
 export function NewTaskDialog({
   groupId,
@@ -66,7 +90,10 @@ export function NewTaskDialog({
   const [assets, setAssets] = useState<{ kind: string; name: string; ref: string }[]>([]);
 
   useEffect(() => {
-    fetch("/api/assets").then((r) => r.json()).then((j) => setAssets(j.assets ?? [])).catch(() => {});
+    fetch("/api/assets")
+      .then((r) => r.json())
+      .then((j) => setAssets(j.assets ?? []))
+      .catch(() => {});
   }, []);
 
   const bp = useMemo(() => blueprints.find((b) => b.id === bpId), [blueprints, bpId]);
@@ -75,12 +102,10 @@ export function NewTaskDialog({
   const kind = bp?.software?.kind;
   const versioned = kind === "paper" || kind === "velocity";
 
-  // a single blueprint → pre-select it (dropdown then non-interactive)
   useEffect(() => {
     if (blueprints.length === 1 && !bpId) setBpId(blueprints[0].id);
   }, [blueprints, bpId]);
 
-  // when the blueprint changes, default the version and fetch selectable ones
   useEffect(() => {
     if (!bp) return;
     setVersion(bp.software.version);
@@ -93,24 +118,30 @@ export function NewTaskDialog({
     }
   }, [bp]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (bp && !name) setName(bp.name);
+  }, [bp]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function buildSeed() {
-    const plugins = pluginsText.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+    const plugins = pluginsText
+      .split(/\n+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     const properties: Record<string, string> = {};
     for (const line of propsText.split(/\n+/)) {
       const i = line.indexOf("=");
       if (i > 0) properties[line.slice(0, i).trim()] = line.slice(i + 1).trim();
     }
-    const seed: { worldUrl?: string; plugins?: string[]; properties?: Record<string, string> } = {};
+    const seed: {
+      worldUrl?: string;
+      plugins?: string[];
+      properties?: Record<string, string>;
+    } = {};
     if (worldUrl.trim()) seed.worldUrl = worldUrl.trim();
     if (plugins.length) seed.plugins = plugins;
     if (Object.keys(properties).length) seed.properties = properties;
     return Object.keys(seed).length ? seed : undefined;
   }
-
-  useEffect(() => {
-    if (bp && !name) setName(bp.name);
-    if (bp) setDesired(bp.mode === "dynamic" ? 1 : 1);
-  }, [bp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function submit() {
     if (!bp) return;
@@ -154,188 +185,283 @@ export function NewTaskDialog({
     setFronts((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
   }
 
+  const selectedColor = bp ? (ROLE_COLOR[bp.role] ?? ROLE_COLOR.generic) : "#60a5fa";
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button size="sm" variant="outline" />}>
-        <Plus className="h-4 w-4" /> Add Task
+      <DialogTrigger
+        render={
+          <button className="flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-white/60 transition-colors hover:bg-white/[0.08] hover:text-white" />
+        }
+      >
+        <Plus className="h-3.5 w-3.5" /> Add Task
       </DialogTrigger>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New task</DialogTitle>
-          <DialogDescription>
-            A task provisions LXC instances from a blueprint and keeps the desired
-            count alive. The controller does the rest.
-          </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          <div className="space-y-2">
-            <Label>Blueprint</Label>
-            <Select value={bpId} onValueChange={(v) => setBpId(v ?? "")} disabled={blueprints.length <= 1}>
-              <SelectTrigger>
-                <SelectValue placeholder="Choose a premade blueprint…" />
-              </SelectTrigger>
-              <SelectContent>
-                {blueprints.map((b) => (
-                  <SelectItem key={b.id} value={b.id}>
-                    {b.name} · {b.role}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {bp && (
-              <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">
-                <p>{bp.description}</p>
-                <div className="mt-2 flex items-center gap-3">
-                  <Badge
-                    variant="outline"
-                    className={
-                      bp.mode === "dynamic"
-                        ? "border-orange-500/30 bg-orange-500/10 text-orange-400"
-                        : "border-sky-500/30 bg-sky-500/10 text-sky-400"
-                    }
-                  >
-                    {bp.mode}
-                  </Badge>
-                  <span className="flex items-center gap-1"><Cpu className="h-3 w-3" />{bp.cores}c</span>
-                  <span className="flex items-center gap-1"><MemoryStick className="h-3 w-3" />{bp.memory}MB</span>
-                  <span className="flex items-center gap-1"><HardDrive className="h-3 w-3" />{bp.disk}GB</span>
-                </div>
+        <div className="space-y-4 py-1">
+          {/* Blueprint selection */}
+          <div>
+            <FieldLabel>Blueprint</FieldLabel>
+            {blueprints.length <= 6 ? (
+              <div className="grid grid-cols-2 gap-2">
+                {blueprints.map((b) => {
+                  const Icon = ROLE_ICON[b.role] ?? Box;
+                  const color = ROLE_COLOR[b.role] ?? ROLE_COLOR.generic;
+                  const selected = bpId === b.id;
+                  return (
+                    <button
+                      key={b.id}
+                      type="button"
+                      onClick={() => setBpId(b.id)}
+                      className="relative flex items-center gap-2.5 overflow-hidden rounded-lg border p-3 text-left transition-all"
+                      style={{
+                        borderColor: selected
+                          ? `color-mix(in oklch, ${color} 50%, transparent)`
+                          : "rgba(255,255,255,0.07)",
+                        background: selected
+                          ? `color-mix(in oklch, ${color} 10%, oklch(0.155 0.006 265))`
+                          : "oklch(0.155 0.006 265)",
+                      }}
+                    >
+                      <div
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+                        style={{
+                          background: `color-mix(in oklch, ${color} 15%, transparent)`,
+                        }}
+                      >
+                        <Icon className="h-3.5 w-3.5" style={{ color }} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-white/80">
+                          {b.name}
+                        </div>
+                        <div className="text-[10px] text-white/30">
+                          {b.software.kind} · {b.role}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
+            ) : (
+              <select
+                value={bpId}
+                onChange={(e) => setBpId(e.target.value)}
+                className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm text-white/80 outline-none focus:border-white/[0.15]"
+              >
+                <option value="">Choose a blueprint…</option>
+                {blueprints.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name} · {b.role}
+                  </option>
+                ))}
+              </select>
             )}
           </div>
 
+          {/* Blueprint detail + version */}
           {bp && (
-            <div className="space-y-2">
-              <Label>{kind === "velocity" ? "Velocity version" : kind === "paper" ? "Minecraft version" : "Version"}</Label>
-              {versioned ? (
-                <Select value={version} onValueChange={(v) => setVersion(v ?? "")} disabled={versions.length <= 1}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Loading versions…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(versions.length ? versions : [bp.software.version]).map((v) => (
-                      <SelectItem key={v} value={v}>
-                        {v}
-                        {v === bp.software.version ? " · default" : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  {bp.software.kind} · {bp.software.version}
-                </p>
-              )}
+            <div
+              className="rounded-lg border p-3 text-xs"
+              style={{
+                borderColor: `color-mix(in oklch, ${selectedColor} 20%, transparent)`,
+                background: `color-mix(in oklch, ${selectedColor} 5%, oklch(0.12 0.005 265))`,
+              }}
+            >
+              <p className="text-white/40">{bp.description}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span
+                  className="flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                  style={{
+                    background: `color-mix(in oklch, ${selectedColor} 15%, transparent)`,
+                    color: selectedColor,
+                  }}
+                >
+                  {bp.mode === "dynamic" ? (
+                    <InfinityIcon className="h-2.5 w-2.5" />
+                  ) : (
+                    <Pin className="h-2.5 w-2.5" />
+                  )}
+                  {bp.mode}
+                </span>
+                <span className="flex items-center gap-2 font-mono text-[10px] text-white/25">
+                  <span className="flex items-center gap-0.5">
+                    <Cpu className="h-3 w-3" />
+                    {bp.cores}c
+                  </span>
+                  <span className="flex items-center gap-0.5">
+                    <MemoryStick className="h-3 w-3" />
+                    {bp.memory}MB
+                  </span>
+                  <span className="flex items-center gap-0.5">
+                    <HardDrive className="h-3 w-3" />
+                    {bp.disk}GB
+                  </span>
+                </span>
+              </div>
               {versioned && (
-                <p className="text-[11px] text-muted-foreground">
-                  The required Java is installed automatically per version (from the PaperMC API).
-                </p>
+                <div className="mt-2.5">
+                  <FieldLabel>
+                    {kind === "velocity" ? "Velocity version" : "Minecraft version"}
+                  </FieldLabel>
+                  {versions.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {versions.slice(0, 10).map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setVersion(v)}
+                          className={`rounded px-2 py-0.5 text-[11px] transition-colors ${
+                            version === v
+                              ? "bg-white/[0.12] text-white/80"
+                              : "text-white/30 hover:bg-white/[0.06] hover:text-white/60"
+                          }`}
+                        >
+                          {v}
+                          {v === bp.software.version ? (
+                            <span className="ml-1 opacity-40">·default</span>
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-[11px] text-white/25">Loading versions…</span>
+                  )}
+                </div>
               )}
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-2">
-              <Label htmlFor="t-name">Name</Label>
-              <Input id="t-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="spawn" />
+          {/* Name + instances */}
+          {bp && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <FieldLabel>Name</FieldLabel>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="spawn"
+                  className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm text-white/80 outline-none placeholder:text-white/20 focus:border-white/[0.15]"
+                />
+              </div>
+              <div>
+                <FieldLabel>Initial instances</FieldLabel>
+                <input
+                  type="number"
+                  min={0}
+                  value={desired}
+                  onChange={(e) => setDesired(Number(e.target.value))}
+                  className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm font-medium text-white/80 tabular-nums outline-none focus:border-white/[0.15]"
+                />
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="t-desired">Initial instances</Label>
-              <Input
-                id="t-desired"
-                type="number"
-                min={0}
-                value={desired}
-                onChange={(e) => setDesired(Number(e.target.value))}
-              />
-            </div>
-          </div>
+          )}
 
+          {/* Fronts */}
           {isProxy && frontCandidates.length > 0 && (
-            <div className="space-y-2">
-              <Label>Fronts (backends this proxy routes to)</Label>
-              <div className="flex flex-wrap gap-2">
+            <div>
+              <FieldLabel>Routed backends</FieldLabel>
+              <div className="flex flex-wrap gap-1.5">
                 {frontCandidates.map((c) => (
                   <button
                     key={c.id}
                     type="button"
                     onClick={() => toggleFront(c.id)}
-                    className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
+                    className={`rounded-lg border px-2.5 py-1 text-xs transition-colors ${
                       fronts.includes(c.id)
-                        ? "border-orange-500/50 bg-orange-500/15 text-orange-300"
-                        : "border-border text-muted-foreground hover:bg-accent"
+                        ? "border-orange-500/40 bg-orange-500/10 text-orange-300"
+                        : "border-white/[0.08] text-white/30 hover:border-white/[0.15] hover:text-white/60"
                     }`}
                   >
-                    {c.name} · {c.role}
+                    {c.name} <span className="opacity-50">· {c.role}</span>
                   </button>
                 ))}
               </div>
             </div>
           )}
 
+          {/* Seed */}
           {isPaper && (
-            <div className="space-y-2">
+            <div>
               <button
                 type="button"
                 onClick={() => setShowSeed((s) => !s)}
-                className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                className="flex items-center gap-1.5 text-[11px] font-medium text-white/30 transition-colors hover:text-white/60"
               >
-                {showSeed ? "▾" : "▸"} Seed (world / plugins / config){" "}
-                <span className="text-muted-foreground/70">— overrides the blueprint default</span>
+                <ChevronDown
+                  className={`h-3.5 w-3.5 transition-transform ${showSeed ? "" : "-rotate-90"}`}
+                />
+                Seed — world, plugins &amp; config overrides
               </button>
               {showSeed && (
-                <div className="space-y-3 rounded-md border border-border/60 p-3">
+                <div className="mt-2 space-y-3 rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
                   {assets.some((a) => a.kind === "worlds" || a.kind === "plugins") && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Use an uploaded asset</Label>
+                    <div>
+                      <FieldLabel>Uploaded assets</FieldLabel>
                       <div className="flex flex-wrap gap-1.5">
-                        {assets.filter((a) => a.kind === "worlds").map((a) => (
-                          <button key={a.ref} type="button" onClick={() => setWorldUrl(a.ref)}
-                            className={`rounded border px-2 py-0.5 text-[11px] ${worldUrl === a.ref ? "border-orange-500/50 bg-orange-500/15 text-orange-300" : "border-border text-muted-foreground hover:bg-accent"}`}>
-                            🌍 {a.name}
-                          </button>
-                        ))}
-                        {assets.filter((a) => a.kind === "plugins").map((a) => (
-                          <button key={a.ref} type="button"
-                            onClick={() => setPluginsText((t) => (t ? t + "\n" : "") + a.ref)}
-                            className="rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent">
-                            🔌 {a.name}
-                          </button>
-                        ))}
+                        {assets
+                          .filter((a) => a.kind === "worlds")
+                          .map((a) => (
+                            <button
+                              key={a.ref}
+                              type="button"
+                              onClick={() => setWorldUrl(a.ref)}
+                              className={`rounded border px-2 py-0.5 text-[11px] ${
+                                worldUrl === a.ref
+                                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                                  : "border-white/[0.08] text-white/30 hover:bg-white/[0.06]"
+                              }`}
+                            >
+                              🌍 {a.name}
+                            </button>
+                          ))}
+                        {assets
+                          .filter((a) => a.kind === "plugins")
+                          .map((a) => (
+                            <button
+                              key={a.ref}
+                              type="button"
+                              onClick={() =>
+                                setPluginsText((t) => (t ? t + "\n" : "") + a.ref)
+                              }
+                              className="rounded border border-white/[0.08] px-2 py-0.5 text-[11px] text-white/30 hover:bg-white/[0.06]"
+                            >
+                              🔌 {a.name}
+                            </button>
+                          ))}
                       </div>
-                      <p className="text-[10px] text-muted-foreground">Uploaded under Templates → Assets. Pushed into the server at deploy.</p>
                     </div>
                   )}
-                  <div className="space-y-1.5">
-                    <Label htmlFor="seed-world" className="text-xs">World (URL or uploaded asset)</Label>
-                    <Input
-                      id="seed-world"
+                  <div>
+                    <FieldLabel>World URL</FieldLabel>
+                    <input
                       value={worldUrl}
                       onChange={(e) => setWorldUrl(e.target.value)}
-                      placeholder="https://…/world.tar.gz (extracts to world/)"
+                      placeholder="https://…/world.tar.gz"
+                      className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-xs text-white/70 outline-none placeholder:text-white/20 focus:border-white/[0.15]"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="seed-plugins" className="text-xs">Plugin jar URLs (one per line)</Label>
+                  <div>
+                    <FieldLabel>Plugin JARs — one per line</FieldLabel>
                     <textarea
-                      id="seed-plugins"
                       value={pluginsText}
                       onChange={(e) => setPluginsText(e.target.value)}
                       rows={2}
                       placeholder="https://…/SomePlugin.jar"
-                      className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="w-full resize-none rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-xs text-white/70 outline-none placeholder:text-white/20 focus:border-white/[0.15]"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="seed-props" className="text-xs">server.properties overrides (key=value per line)</Label>
+                  <div>
+                    <FieldLabel>server.properties — key=value per line</FieldLabel>
                     <textarea
-                      id="seed-props"
                       value={propsText}
                       onChange={(e) => setPropsText(e.target.value)}
                       rows={2}
                       placeholder={"difficulty=hard\npvp=true"}
-                      className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="w-full resize-none rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 font-mono text-xs text-white/70 outline-none placeholder:text-white/20 focus:border-white/[0.15]"
                     />
                   </div>
                 </div>
@@ -344,12 +470,27 @@ export function NewTaskDialog({
           )}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={!bp || !name.trim() || busy}>
+        {/* Footer */}
+        <div className="flex justify-end gap-2 border-t border-white/[0.06] pt-4">
+          <button
+            onClick={() => setOpen(false)}
+            className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-sm text-white/40 transition-colors hover:bg-white/[0.04] hover:text-white/60"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!bp || !name.trim() || busy}
+            className="rounded-lg px-4 py-1.5 text-sm font-medium transition-colors disabled:opacity-40"
+            style={{
+              background: `color-mix(in oklch, ${selectedColor} 25%, transparent)`,
+              border: `1px solid color-mix(in oklch, ${selectedColor} 30%, transparent)`,
+              color: `color-mix(in oklch, ${selectedColor} 80%, white)`,
+            }}
+          >
             {busy ? "Creating…" : "Create & deploy"}
-          </Button>
-        </DialogFooter>
+          </button>
+        </div>
       </DialogContent>
     </Dialog>
   );

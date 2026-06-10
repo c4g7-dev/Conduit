@@ -1,0 +1,15 @@
+name: ConduitConnector
+version: "1.0"
+main: dev.c4g7.conduit.paper.ConduitPaperPlugin
+api-version: "1.20"
+author: c4g7
+description: Conduit network connector (backend reporter).
+commands:
+  conduit:
+    description: Conduit network control
+    aliases: [ct, cloud]
+    usage: /conduit help
+permissions:
+  conduit.admin:
+    description: Use /ct network control commands
+    default: op

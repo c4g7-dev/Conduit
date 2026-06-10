@@ -1,0 +1,9 @@
+{
+  "Group": "dev.c4g7",
+  "Name": "conduit-connector",
+  "Version": "1.0.0",
+  "Description": "Conduit network connector - reports players to the Conduit panel.",
+  "Authors": [{ "Name": "c4g7" }],
+  "Main": "dev.c4g7.conduit.hytale.ConduitHytalePlugin",
+  "ServerVersion": "*"
+}

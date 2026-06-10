@@ -43,6 +43,14 @@ export async function POST(req: NextRequest) {
       disk: Number(body.disk ?? bp.disk),
       persistent: body.persistent ?? bp.persistent,
       fronts: Array.isArray(body.fronts) ? body.fronts : [],
+      // CloudNet Smart-style autoscaling knobs (optional)
+      preparedPool: body.preparedPool != null ? Number(body.preparedPool) : undefined,
+      scaleUpPercent: body.scaleUpPercent != null ? Number(body.scaleUpPercent) : undefined,
+      scaleDownAfterSec: body.scaleDownAfterSec != null ? Number(body.scaleDownAfterSec) : undefined,
+      spawnCooldownSec: body.spawnCooldownSec != null ? Number(body.spawnCooldownSec) : undefined,
+      maxServices: body.maxServices != null ? Number(body.maxServices) : undefined,
+      splitOverNodes: body.splitOverNodes != null ? Boolean(body.splitOverNodes) : undefined,
+      node: typeof body.node === "string" && body.node.trim() ? body.node.trim() : undefined,
       seed: body.seed && typeof body.seed === "object" ? body.seed : undefined,
       software:
         body.software && body.software.version
@@ -55,6 +63,18 @@ export async function POST(req: NextRequest) {
       if (!db.groups.some((g) => g.id === groupId)) throw new Error("group not found");
       if (db.tasks.some((t) => t.id === id)) throw new Error("task exists");
       db.tasks.push(task);
+
+      // Auto-register this backend with every proxy in the same group so new backends
+      // are immediately routable without a manual edit of each proxy task.
+      // Only applies to non-proxy roles (proxy tasks route backends, not other proxies).
+      if (bp.role !== "proxy") {
+        for (const t of db.tasks) {
+          if (t.groupId === groupId && blueprint(t.blueprintId)?.role === "proxy") {
+            if (!t.fronts.includes(id)) t.fronts = [...t.fronts, id];
+          }
+        }
+      }
+
       return task;
     });
 

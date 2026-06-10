@@ -165,8 +165,21 @@ export type Template = {
   format?: string;
 };
 
+/** One RRD sample. cpu is a 0..1 fraction; bytes for memory/net. NOTE: node rrddata uses
+ *  memused/memtotal, while guest (lxc/qemu) rrddata uses mem/maxmem — both are included. */
+export type RrdPoint = {
+  time: number; cpu?: number; maxcpu?: number;
+  mem?: number; maxmem?: number; memused?: number; memtotal?: number;
+  netin?: number; netout?: number; diskread?: number; diskwrite?: number;
+};
+
+/** Stable node ordering by name (numeric + case-insensitive): skdCore01 < SkdCore02 < SkdCore03. */
+export const byNodeName = (a: { node: string }, b: { node: string }) =>
+  a.node.localeCompare(b.node, undefined, { numeric: true, sensitivity: "base" });
+
 export const api = {
-  nodes: () => pmx<PveNode[]>("/nodes"),
+  // Sorted so the UI node list never reshuffles between polls (PVE returns arbitrary order).
+  nodes: async () => (await pmx<PveNode[]>("/nodes")).sort(byNodeName),
   clusterResources: () => pmx<ClusterResource[]>("/cluster/resources"),
   clusterStatus: () =>
     pmx<{ type: string; name?: string; ip?: string; online?: number; local?: number }[]>(
@@ -175,6 +188,12 @@ export const api = {
   nodeStatus: (node = NODE) => pmx<Record<string, unknown>>(`/nodes/${node}/status`),
   lxcStatus: (vmid: number, node = NODE) =>
     pmx<Record<string, unknown>>(`/nodes/${node}/lxc/${vmid}/status/current`),
+  // RRD time-series. timeframe ∈ hour|day|week|month|year (Proxmox's fixed resolutions);
+  // each point has { time, cpu (0..1), maxcpu, mem, maxmem, netin, netout, ... }.
+  lxcRrd: (vmid: number, timeframe: string, node = NODE) =>
+    pmx<RrdPoint[]>(`/nodes/${node}/lxc/${vmid}/rrddata?timeframe=${timeframe}&cf=AVERAGE`),
+  nodeRrd: (timeframe: string, node = NODE) =>
+    pmx<RrdPoint[]>(`/nodes/${node}/rrddata?timeframe=${timeframe}&cf=AVERAGE`),
   lxcAction: (vmid: number, action: "start" | "stop" | "shutdown" | "reboot", node = NODE) =>
     pmx<string>(`/nodes/${node}/lxc/${vmid}/status/${action}`, { method: "POST" }),
   lxcInterfaces: (vmid: number, node = NODE) =>
@@ -191,6 +210,19 @@ export const api = {
     pmx<string>(`/nodes/${node}/lxc`, { method: "POST", params }),
   deleteLxc: (vmid: number, node = NODE) =>
     pmx<string>(`/nodes/${node}/lxc/${vmid}?purge=1&force=1`, { method: "DELETE" }),
+  /** Migrate a container to another node. restart=1 does a (brief) restart-migration, which
+   *  works for running CTs on local storage; offline for stopped ones. */
+  migrateLxc: (vmid: number, target: string, node = NODE) =>
+    pmx<string>(`/nodes/${node}/lxc/${vmid}/migrate`, {
+      method: "POST",
+      params: { target, restart: 1 },
+    }),
+  /** Full-clone a (stopped) container to a new vmid on the same node. */
+  cloneLxc: (vmid: number, newid: number, params: Record<string, string | number>, node = NODE) =>
+    pmx<string>(`/nodes/${node}/lxc/${vmid}/clone`, {
+      method: "POST",
+      params: { newid, full: 1, ...params },
+    }),
   /** Restore an LXC from a backup archive (overwrites the target vmid). */
   restoreLxc: (vmid: number, archive: string, storage = "local-lvm", node = NODE) =>
     pmx<string>(`/nodes/${node}/lxc`, {
@@ -274,6 +306,12 @@ export async function vmidHost(vmid: number): Promise<string> {
   const res = await api.clusterResources().catch(() => []);
   const ct = res.find((r) => r.vmid === vmid && r.node);
   return ct?.node ? nodeIp(ct.node) : HOST;
+}
+
+/** Proxmox NODE NAME (e.g. "SkdCore03", not the IP) hosting a given vmid — for API paths. */
+export async function vmidNode(vmid: number): Promise<string | null> {
+  const res = await api.clusterResources().catch(() => []);
+  return res.find((r) => r.vmid === vmid && r.node)?.node ?? null;
 }
 
 /** Wait for a Proxmox task (UPID) to finish; returns exit status. */

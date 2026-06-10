@@ -1,47 +1,74 @@
 "use client";
 
-import { use, useEffect, useMemo, useRef, useState } from "react";
+import React, { use, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { bytes } from "@/lib/format";
 import {
-  ChevronRight,
   Folder,
-  FileText,
-  CornerLeftUp,
   AlertTriangle,
   Terminal,
+  Circle,
+  Loader2,
+  Activity,
 } from "lucide-react";
+import { MetricsPanel as RrdMetricsPanel } from "@/components/metrics-panel";
+import { FilesPanel } from "@/components/files-panel";
+import AnsiToHtml from "ansi-to-html";
+import "@xterm/xterm/css/xterm.css";
 
-type FileEntry = {
-  name: string;
-  type: "dir" | "file" | "link";
-  size: number;
-  mtime: number;
-};
+const ansi = new AnsiToHtml({ escapeXML: true, fg: "#c9d1d9", bg: "transparent", newline: false });
 
-// shape of the slice of /api/conduit/state we care about
+/**
+ * Strip terminal control sequences that aren't colour (SGR) codes — cursor moves,
+ * private modes (`\x1b[?...h/l`), bracketed-paste, keypad, OSC titles, etc. — so the
+ * tmux pane snapshot doesn't render as junk. SGR (`\x1b[...m`) is preserved for colour.
+ */
+function sanitizeAnsi(s: string): string {
+  return s
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // OSC … BEL/ST
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b[=>]/g, "")                            // keypad modes
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;?]*[A-Za-ln-~]/g, "")          // all CSI except 'm' (SGR)
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f]/g, ""); // stray control chars (keep \t,\n,\r,ESC)
+}
+
+function toHtml(text: string): string {
+  if (!text) return "";
+  try { return ansi.toHtml(sanitizeAnsi(text)); } catch { return text; }
+}
+
+
 type StateTask = {
   id: string;
   name: string;
   mode: "dynamic" | "static";
-  instances: { vmid: number; ip: string | null; status: string; name: string }[];
+  softwareKind?: string;
+  instances: { vmid: number; ip: string | null; status: string; name: string; ready: boolean }[];
 };
 type StateGroup = { id: string; name: string; tasks: StateTask[] };
 
-const MC_ROOT = "/opt/mc";
+function filePanelRoots(softwareKind?: string): { label: string; path: string }[] {
+  if (softwareKind === "hytale") {
+    return [
+      { label: "Server data", path: "/opt/hytale/data" },
+      { label: "Launcher", path: "/opt/hytale" },
+    ];
+  }
+  if (softwareKind === "nginx") {
+    return [
+      { label: "Web root", path: "/opt/www" },
+      { label: "Config", path: "/opt/nginx" },
+    ];
+  }
+  return [{ label: "Server", path: "/opt/mc" }];
+}
 
 export default function ServiceDetailPage({
   params,
@@ -51,7 +78,6 @@ export default function ServiceDetailPage({
   const { vmid } = use(params);
   const id = Number(vmid);
 
-  // resolve which task/group this vmid belongs to (for header + dynamic warning)
   const { data: state } = usePoll<{ groups: StateGroup[] }>(
     "/api/conduit/state",
     10_000,
@@ -80,252 +106,317 @@ export default function ServiceDetailPage({
       />
 
       {isDynamic && (
-        <Card className="mb-6 border-amber-400/40 bg-amber-400/5">
-          <CardContent className="flex items-center gap-2 py-1 text-sm text-amber-300">
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span>
-              This is a dynamic service — its files are NOT persistent and will be
-              lost when it scales down.
-            </span>
-          </CardContent>
-        </Card>
+        <div className="mb-6 flex items-center gap-2.5 rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-sm text-amber-300">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            Dynamic service — files are <strong>not persistent</strong> and will be lost when it
+            scales down.
+          </span>
+        </div>
       )}
 
       <Tabs defaultValue="console">
-        <TabsList>
+        <TabsList className="mb-4">
           <TabsTrigger value="console">
             <Terminal className="h-4 w-4" /> Console
+          </TabsTrigger>
+          <TabsTrigger value="metrics">
+            <Activity className="h-4 w-4" /> Metrics
           </TabsTrigger>
           <TabsTrigger value="files">
             <Folder className="h-4 w-4" /> Files
           </TabsTrigger>
         </TabsList>
         <TabsContent value="console">
-          <ConsolePanel vmid={id} />
+          <ConsolePanel vmid={id} owner={owner} />
+        </TabsContent>
+        <TabsContent value="metrics">
+          <MetricsPanel vmid={id} />
         </TabsContent>
         <TabsContent value="files">
-          <FilesPanel vmid={id} />
+          <FilesPanel backend={{ kind: "service", vmid: id }} roots={filePanelRoots(owner?.task.softwareKind)} />
         </TabsContent>
       </Tabs>
     </>
   );
 }
 
-/* ---- Console ------------------------------------------------------------- */
+/* ---- Install log (SSE — during provisioning) ------------------------------ */
 
-function ConsolePanel({ vmid }: { vmid: number }) {
-  const { data } = usePoll<{ lines: string }>(
-    `/api/services/${vmid}/console`,
-    1500,
-  );
-  const [command, setCommand] = useState("");
-  const [sending, setSending] = useState(false);
-  const boxRef = useRef<HTMLPreElement>(null);
+function InstallLogPanel({ vmid }: { vmid: number }) {
+  const [lines, setLines] = useState<string[]>([]);
+  const boxRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
 
-  const lines = data?.lines ?? "";
+  useEffect(() => {
+    const es = new EventSource(`/api/services/${vmid}/install-log`);
+    es.onmessage = (e) => {
+      try {
+        const chunk = atob(e.data);
+        setLines((prev) => [...prev, ...chunk.split("\n").filter(Boolean)]);
+      } catch { /* ignore */ }
+    };
+    return () => es.close();
+  }, [vmid]);
 
-  // keep scrolled to bottom unless the user has scrolled up
   useEffect(() => {
     const el = boxRef.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
   }, [lines]);
 
-  async function send() {
-    const cmd = command.trim();
-    if (!cmd) return;
-    setSending(true);
-    try {
-      const res = await fetch(`/api/services/${vmid}/console`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: cmd }),
-      });
-      const json = await res.json();
-      if (json.error) throw new Error(json.error);
-      setCommand("");
-    } catch (e) {
-      toast.error(`Failed to send: ${String(e)}`);
-    } finally {
-      setSending(false);
-    }
-  }
-
   return (
-    <Card>
-      <CardContent className="space-y-2 p-3">
-        <pre
-          ref={boxRef}
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-          }}
-          className="h-[60vh] overflow-auto rounded-lg bg-black/60 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-emerald-200/90"
-        >
-          {lines || "…"}
-        </pre>
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            send();
-          }}
-        >
-          <Input
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            placeholder="Type a server command (e.g. list) and press Enter"
-            className="font-mono"
-            disabled={sending}
+    <div className="overflow-hidden rounded-xl border border-amber-400/20 bg-[#0d0a05]">
+      {/* Header bar */}
+      <div className="flex items-center justify-between border-b border-amber-400/10 bg-amber-400/5 px-4 py-2.5">
+        <div className="flex items-center gap-2.5">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-400/70" />
+          <span className="font-mono text-xs text-amber-300/70">
+            Installing software — this takes 3–10 min
+          </span>
+        </div>
+        <span className="text-[11px] text-amber-400/40">
+          {lines.length} lines
+        </span>
+      </div>
+
+      {/* Log output */}
+      <div
+        ref={boxRef as React.RefObject<HTMLDivElement>}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
+        }}
+        className="h-[62vh] overflow-auto p-4 font-mono text-[11px] leading-[1.6]"
+        style={{ background: "#080600", color: "#d4b483" }}
+      >
+        {lines.length === 0 ? (
+          <span className="opacity-40">Waiting for install output… (container may still be starting up)</span>
+        ) : (
+          <pre
+            className="whitespace-pre-wrap"
+            dangerouslySetInnerHTML={{ __html: toHtml(lines.join("\n")) }}
           />
-          <Button type="submit" disabled={sending || !command.trim()}>
-            Send
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
-
-/* ---- Files --------------------------------------------------------------- */
-
-function FilesPanel({ vmid }: { vmid: number }) {
-  const [path, setPath] = useState(MC_ROOT);
-  const { data, error, loading } = usePoll<{ path: string; entries: FileEntry[] }>(
-    `/api/services/${vmid}/files?path=${encodeURIComponent(path)}`,
-    8000,
-  );
-  const [viewing, setViewing] = useState<string | null>(null);
-
-  const segments = path.replace(/^\//, "").split("/"); // ["opt","mc",...]
-  const parent =
-    path === MC_ROOT ? null : path.slice(0, path.lastIndexOf("/")) || "/";
-
-  function crumbPath(idx: number): string {
-    return "/" + segments.slice(0, idx + 1).join("/");
-  }
-
-  return (
-    <Card>
-      <CardContent className="space-y-3 p-3">
-        {/* breadcrumb */}
-        <div className="flex flex-wrap items-center gap-1 text-sm">
-          {segments.map((seg, i) => {
-            const p = crumbPath(i);
-            const inRoot = p === MC_ROOT || p.startsWith(`${MC_ROOT}/`);
-            return (
-              <span key={p} className="flex items-center gap-1">
-                {i > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
-                <button
-                  className="rounded px-1 hover:bg-muted disabled:text-muted-foreground disabled:hover:bg-transparent"
-                  disabled={!inRoot || p === path}
-                  onClick={() => setPath(p)}
-                >
-                  {seg}
-                </button>
-              </span>
-            );
-          })}
-        </div>
-
-        {error && (
-          <div className="text-sm text-destructive">Could not list: {error}</div>
         )}
-
-        <div className="overflow-hidden rounded-lg border">
-          {parent && (
-            <button
-              className="flex w-full items-center gap-2 border-b px-3 py-1.5 text-left text-sm hover:bg-muted"
-              onClick={() => setPath(parent)}
-            >
-              <CornerLeftUp className="h-4 w-4 text-muted-foreground" />
-              <span className="text-muted-foreground">..</span>
-            </button>
-          )}
-          {(data?.entries ?? []).map((e) => {
-            const full = `${path === "/" ? "" : path}/${e.name}`;
-            const isDir = e.type === "dir";
-            return (
-              <button
-                key={e.name}
-                className="flex w-full items-center gap-2 border-b px-3 py-1.5 text-left text-sm last:border-b-0 hover:bg-muted"
-                onClick={() => (isDir ? setPath(full) : setViewing(full))}
-              >
-                {isDir ? (
-                  <Folder className="h-4 w-4 text-sky-400" />
-                ) : (
-                  <FileText className="h-4 w-4 text-muted-foreground" />
-                )}
-                <span className="flex-1 truncate font-medium">{e.name}</span>
-                {e.type === "link" && (
-                  <Badge variant="secondary" className="text-[10px]">
-                    link
-                  </Badge>
-                )}
-                {!isDir && (
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {bytes(e.size)}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-          {!loading && (data?.entries?.length ?? 0) === 0 && !parent && (
-            <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-              Empty.
-            </div>
-          )}
-        </div>
-      </CardContent>
-
-      {viewing && (
-        <FileViewer
-          vmid={vmid}
-          path={viewing}
-          onClose={() => setViewing(null)}
-        />
-      )}
-    </Card>
+      </div>
+    </div>
   );
 }
 
-function FileViewer({
+/* ---- Console (xterm.js over WebSocket, SSE fallback) ---------------------- */
+
+function ConsolePanel({
   vmid,
-  path,
-  onClose,
+  owner,
 }: {
   vmid: number;
-  path: string;
-  onClose: () => void;
+  owner: { task: StateTask; inst: { status: string; ready: boolean } } | null;
 }) {
-  const { data, error, loading } = usePoll<{
-    content: string;
-    truncated: boolean;
-    size: number;
-    // huge interval → effectively load-once when the viewer opens
-  }>(`/api/services/${vmid}/files?path=${encodeURIComponent(path)}&file=1`, 600_000);
+  const [connected, setConnected] = useState(false);
+  const [transport, setTransport] = useState<"ws" | "sse" | null>(null);
+
+  const termHostRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const termRef = useRef<any>(null);
+
+  const isReady = owner?.inst.ready !== false;
+  const softwareKind = owner?.task.softwareKind ?? "mc";
+  const status = owner?.inst.status ?? "unknown";
+
+  useEffect(() => {
+    if (!isReady) return;
+    let disposed = false;
+    let es: EventSource | null = null;
+    let resizeObs: ResizeObserver | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let fit: any = null;
+
+    // Local line-editing state (refs so the once-registered onData handler stays current).
+    const line = { buf: "" };
+    const hist: string[] = [];
+    let histIdx = -1;
+    let draft = "";
+
+    (async () => {
+      const { Terminal } = await import("@xterm/xterm");
+      const { FitAddon } = await import("@xterm/addon-fit");
+      if (disposed || !termHostRef.current) return;
+
+      const term = new Terminal({
+        // xterm renders to canvas — use a guaranteed system monospace (next/font's
+        // Geist Mono has a hashed family name that canvas can't resolve).
+        fontFamily: "ui-monospace, 'DejaVu Sans Mono', 'SF Mono', Menlo, Consolas, monospace",
+        fontSize: 12,
+        lineHeight: 1.2,
+        letterSpacing: 0,
+        cursorBlink: true,
+        scrollback: 5000,
+        theme: {
+          background: "#1a1b1e",          // neutral dark grey, matches the page panels
+          foreground: "#d4d4d8",
+          cursor: "#a1a1aa",              // neutral grey caret (no blue/amber tint)
+          cursorAccent: "#1a1b1e",
+          selectionBackground: "#3f3f46", // neutral grey selection
+        },
+      });
+      // tmux/pipe-pane emits bare "\n"; xterm needs "\r\n" or lines staircase to the right.
+      const crlf = (s: string) => s.replace(/\r?\n/g, "\r\n");
+      fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(termHostRef.current);
+      fit.fit();
+      term.focus();
+      termRef.current = term;
+
+      resizeObs = new ResizeObserver(() => { try { fit.fit(); } catch {} });
+      resizeObs.observe(termHostRef.current);
+
+      function sendLine(cmd: string) {
+        const ws = wsRef.current;
+        if (ws && ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ type: "input", data: cmd }));
+        } else {
+          fetch(`/api/services/${vmid}/console`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ command: cmd }),
+          }).catch((e) => toast.error(`Failed to send: ${String(e)}`));
+        }
+      }
+      function eraseLine() {
+        if (line.buf.length) term.write("\b \b".repeat(line.buf.length));
+        line.buf = "";
+      }
+      function replaceLine(s: string) { eraseLine(); term.write(s); line.buf = s; }
+
+      // Direct terminal input — type straight into the console (no separate input box).
+      // We locally echo for instant feedback, then erase on Enter so the server's own
+      // console echo is the single source of truth (no double echo).
+      term.onData((d: string) => {
+        if (d === "[A") { // ↑ history
+          if (!hist.length) return;
+          if (histIdx === -1) draft = line.buf;
+          histIdx = Math.min(histIdx + 1, hist.length - 1);
+          replaceLine(hist[histIdx]);
+        } else if (d === "[B") { // ↓ history
+          if (histIdx <= 0) { histIdx = -1; replaceLine(draft); }
+          else { histIdx -= 1; replaceLine(hist[histIdx]); }
+        } else if (d === "\r") { // Enter
+          const cmd = line.buf;
+          eraseLine();
+          if (cmd.trim()) { hist.unshift(cmd); if (hist.length > 200) hist.pop(); sendLine(cmd); }
+          histIdx = -1; draft = "";
+        } else if (d === "") { // Backspace
+          if (line.buf.length) { line.buf = line.buf.slice(0, -1); term.write("\b \b"); }
+        } else if (d === "") { // Ctrl-C → clear current line
+          eraseLine(); histIdx = -1;
+        } else if (d >= " " || d === "\t") { // printable / paste
+          const clean = d.replace(/[\r\n]+/g, " ");
+          line.buf += clean;
+          term.write(clean);
+        }
+      });
+
+      // --- transport: prefer the WS console proxy, fall back to SSE ---
+      let wsOk = false;
+      try {
+        const r = await fetch(`/api/services/${vmid}/agent`);
+        const { agent, consolePort } = await r.json();
+        if (agent && consolePort) {
+          const proto = location.protocol === "https:" ? "wss" : "ws";
+          const url = `${proto}://${location.hostname}:${consolePort}/console?vmid=${vmid}&agent=${encodeURIComponent(agent)}`;
+          const ws = new WebSocket(url);
+          wsRef.current = ws;
+          ws.onopen = () => { wsOk = true; if (!disposed) { setConnected(true); setTransport("ws"); } };
+          ws.onmessage = (e) => {
+            try {
+              const f = JSON.parse(e.data);
+              if (f.type === "history") { term.clear(); term.write(crlf(String(f.data ?? ""))); }
+              else if (f.type === "output") term.write(crlf(String(f.data ?? "")));
+            } catch { /* ignore */ }
+          };
+          ws.onclose = () => {
+            wsRef.current = null;
+            if (!disposed && !wsOk) startSse();
+            else if (!disposed) setConnected(false);
+          };
+          ws.onerror = () => { try { ws.close(); } catch {} };
+          setTimeout(() => { if (!disposed && !wsOk) { try { ws.close(); } catch {} } }, 2500);
+        } else {
+          startSse();
+        }
+      } catch {
+        startSse();
+      }
+
+      function startSse() {
+        if (disposed || es) return;
+        setTransport("sse");
+        es = new EventSource(`/api/services/${vmid}/console/stream`);
+        let last = "";
+        es.onopen = () => { if (!disposed) setConnected(true); };
+        es.onmessage = (e) => {
+          try {
+            const text = atob(e.data);
+            if (text.startsWith(last)) term.write(crlf(text.slice(last.length)));
+            else { term.clear(); term.write(crlf(text)); }
+            last = text;
+          } catch { /* ignore */ }
+        };
+        es.onerror = () => { if (!disposed) setConnected(false); };
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      try { wsRef.current?.close(); } catch {}
+      try { es?.close(); } catch {}
+      try { resizeObs?.disconnect(); } catch {}
+      try { termRef.current?.dispose(); } catch {}
+      termRef.current = null;
+      wsRef.current = null;
+    };
+  }, [vmid, isReady]);
+
+  if (!isReady) return <InstallLogPanel vmid={vmid} />;
 
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <DialogContent className="sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle className="font-mono text-sm break-all">{path}</DialogTitle>
-        </DialogHeader>
-        {error && <div className="text-sm text-destructive">{error}</div>}
-        <pre className="max-h-[65vh] overflow-auto rounded-lg bg-black/60 p-3 font-mono text-xs whitespace-pre-wrap text-muted-foreground">
-          {loading ? "…" : data?.content || "(empty)"}
-        </pre>
-        {data?.truncated && (
-          <p className="text-xs text-amber-300">
-            Truncated — file is {bytes(data.size)} (showing first 256KB).
-          </p>
-        )}
-      </DialogContent>
-    </Dialog>
+    <div className="overflow-hidden rounded-lg border border-hairline" style={{ background: "#1a1b1e" }}>
+      {/* Terminal title bar */}
+      <div className="flex items-center justify-between border-b border-hairline px-4 py-2">
+        <div className="flex items-center gap-2.5">
+          <div className="flex gap-1.5">
+            <div className="h-2.5 w-2.5 rounded-full bg-red-500/70" />
+            <div className="h-2.5 w-2.5 rounded-full bg-yellow-500/70" />
+            <div className="h-2.5 w-2.5 rounded-full bg-emerald-500/70" />
+          </div>
+          <span className="font-mono text-xs text-muted-foreground">{softwareKind}@{vmid} — tmux</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Circle className={`h-2 w-2 fill-current ${connected ? "text-emerald-400" : "text-muted-foreground/40"}`} />
+          <span className="text-[11px] text-muted-foreground">
+            {connected ? (transport === "ws" ? "live · ws" : "live") : "connecting…"}
+          </span>
+          <Badge variant="outline" className="ml-1 border-hairline text-[10px] text-muted-foreground">{status}</Badge>
+        </div>
+      </div>
+
+      {/* Interactive xterm.js terminal — type directly here (↑↓ history) */}
+      <div
+        ref={termHostRef}
+        onClick={() => termRef.current?.focus()}
+        className="h-[64vh] cursor-text p-2"
+        style={{ background: "#1a1b1e" }}
+      />
+    </div>
   );
 }
+
+/* ---- Metrics (live rolling graphs) --------------------------------------- */
+
+function MetricsPanel({ vmid }: { vmid: number }) {
+  // Unified ranged metrics (Players / CPU / Memory over 5m·1h·24h·30d), same as the dashboard —
+  // Proxmox RRD for cpu/mem, sampled history for this instance's players. Shows immediately.
+  return <RrdMetricsPanel vmid={vmid} />;
+}
+

@@ -1,131 +1,133 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
 import { NewGroupDialog } from "@/components/new-group-dialog";
+import { NewSubgroupDialog } from "@/components/new-subgroup-dialog";
 import { NewTaskDialog } from "@/components/new-task-dialog";
 import { EditGroupDialog } from "@/components/edit-group-dialog";
 import { EditTaskDialog } from "@/components/edit-task-dialog";
 import { MotdDialog } from "@/components/motd-dialog";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/status-badge";
+import { RoleDot, roleColor } from "@/components/role-dot";
+import { FlowGraph } from "@/components/flow-graph";
+import { ShardingPanel } from "@/components/sharding-panel";
+import { ConfirmDeleteDialog } from "@/components/confirm-delete-dialog";
 import {
-  Workflow,
-  Infinity as InfinityIcon,
-  Pin,
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+} from "@/components/ui/context-menu";
+import { cn } from "@/lib/utils";
+import {
+  ChevronDown,
+  Search,
   Plus,
   Minus,
   Trash2,
   Wrench,
-  Network,
-  Cable,
-  Server,
-  Database,
-  Gamepad2,
-  Box,
-  Loader2,
-  CheckCircle2,
+  Settings2,
+  Layers,
+  ArrowRightLeft,
+  Infinity as InfinityIcon,
+  Terminal,
+  FolderOpen,
+  Play,
+  Square,
+  RotateCw,
+  Power,
   Users,
+  CheckCircle2,
+  Loader2,
+  ServerCog,
+  Network,
+  ArrowRight,
+  CornerDownRight,
+  CornerUpLeft,
+  FolderPlus,
 } from "lucide-react";
 
-type Instance = {
-  vmid: number;
-  name: string;
-  node: string;
-  status: string;
-  ip: string | null;
-  ready: boolean;
-};
+/* ---- types (mirror /api/conduit/state) ----------------------------------- */
+type Instance = { vmid: number; name: string; node: string; status: string; ip: string | null; ready: boolean };
 type Task = {
-  id: string;
-  name: string;
-  groupId: string;
-  blueprintId: string;
-  role: string;
-  blueprintName: string;
-  softwareKind: string;
-  version: string;
-  motd: string;
-  mode: "dynamic" | "static";
-  desired: number;
-  min: number;
-  max: number;
-  autoscale: boolean;
-  playersPerInstance: number;
-  cores: number;
-  memory: number;
-  disk: number;
-  persistent: boolean;
-  port: number;
-  fronts: string[];
-  instances: Instance[];
-  live: number;
-  running: number;
+  id: string; name: string; groupId: string; blueprintId: string; role: string;
+  blueprintName: string; softwareKind: string; version: string; motd: string;
+  mode: "dynamic" | "static"; desired: number; min: number; max: number;
+  autoscale: boolean; playersPerInstance: number; cores: number; memory: number;
+  disk: number; persistent: boolean; port: number; fronts: string[];
+  subgroupId?: string; maintenance?: boolean;
+  instances: Instance[]; live: number; running: number;
 };
-type Group = {
-  id: string;
-  name: string;
-  slotLimit: number;
-  maintenance: boolean;
-  tasks: Task[];
-};
-type Backend = {
-  taskId: string;
-  taskName: string;
-  role: string;
-  vmid: number;
-  name: string;
-  ip: string | null;
-  port: number;
-  status: string;
-};
-type Routing = {
-  proxy: { id: string; name: string };
-  proxyInstances: { vmid: number; ip: string | null; status: string }[];
-  backends: Backend[];
-};
+type Subgroup = { id: string; name: string; maintenance: boolean };
+type Group = { id: string; name: string; slotLimit: number; maintenance: boolean; subgroups?: Subgroup[]; tasks: Task[] };
+type Backend = { taskId: string; taskName: string; role: string; vmid: number; name: string; ip: string | null; port: number; status: string };
+type Routing = { proxy: { id: string; name: string }; proxyInstances: { vmid: number; ip: string | null; status: string }[]; backends: Backend[] };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type State = { groups: Group[]; routing: Routing[]; blueprints: any[] };
-type MetricRow = {
-  vmid: number;
-  role: string;
-  reachable: boolean;
-  online: number;
-  max: number;
-  sample: { name: string }[];
-};
+type MetricRow = { vmid: number; role: string; reachable: boolean; online: number; max: number; sample: { name: string }[] };
 type Metrics = { instances: MetricRow[]; totals: { players: number; capacity: number } };
 
-const roleIcon: Record<string, React.ElementType> = {
-  proxy: Cable,
-  lobby: Gamepad2,
-  smp: Server,
-  db: Database,
-  generic: Box,
-};
+type Tab = "overview" | "instances" | "routing" | "world" | "settings";
 
-export default function GroupsPage() {
+export default function ServersPage() {
   const { data, loading, refresh } = usePoll<State>("/api/conduit/state", 4000);
   const { data: metrics } = usePoll<Metrics>("/api/metrics", 5000);
+
+  const groups = useMemo(() => data?.groups ?? [], [data]);
+  const allTasks = useMemo(() => groups.flatMap((g) => g.tasks), [groups]);
+  const mByVmid = useMemo(
+    () => new Map((metrics?.instances ?? []).map((r) => [r.vmid, r])),
+    [metrics],
+  );
+  const taskNameById = useMemo(
+    () => new Map(allTasks.map((t) => [t.id, t.name])),
+    [allTasks],
+  );
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editGroup, setEditGroup] = useState<Group | null>(null);
+  const [editTask, setEditTask] = useState<Task | null>(null);
+  const [sgFor, setSgFor] = useState<Group | null>(null);
+  const { data: nodesData } = usePoll<{ nodes: { node: string; status: string }[] }>("/api/nodes", 15000);
+  const nodeNames = (nodesData?.nodes ?? []).filter((n) => n.status === "online").map((n) => n.node);
+  const [tab, setTab] = useState<Tab>("overview");
+  const [search, setSearch] = useState("");
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [pending, setPending] = useState<Record<string, boolean>>({});
 
-  const mByVmid = new Map((metrics?.instances ?? []).map((r) => [r.vmid, r]));
+  // Default selection → first server once data loads.
+  useEffect(() => {
+    if (!selectedId && allTasks.length) setSelectedId(allTasks[0].id);
+  }, [allTasks, selectedId]);
+
+  const selected = allTasks.find((t) => t.id === selectedId) ?? null;
+  const selectedGroup = groups.find((g) => g.id === selected?.groupId) ?? null;
+  // Routing tab only applies to proxies.
+  useEffect(() => {
+    if (tab === "routing" && selected?.role !== "proxy") setTab("overview");
+    if (tab === "world" && selected?.softwareKind !== "paper") setTab("overview");
+  }, [selected, tab]);
 
   const set = (k: string, v: boolean) => setPending((p) => ({ ...p, [k]: v }));
 
   async function scale(task: Task, delta: number) {
     set(task.id, true);
     try {
+      // Manual scale-up on a static task should raise its cap too, so `desired` isn't
+      // clamped back down by the engine (a static min=1/max=1 task could never grow otherwise).
+      const body: Record<string, number> = { delta };
+      if (!task.autoscale && delta > 0 && task.max > 0 && task.desired + delta > task.max) {
+        body.max = task.desired + delta;
+      }
       const res = await fetch(`/api/tasks/${task.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ delta }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error);
@@ -139,11 +141,12 @@ export default function GroupsPage() {
   }
 
   async function delTask(task: Task) {
-    if (!confirm(`Delete task "${task.name}" and destroy its ${task.live} instance(s)?`)) return;
+    if (!confirm(`Delete server "${task.name}" and destroy its ${task.live} instance(s)?`)) return;
     set(task.id, true);
     try {
       await fetch(`/api/tasks/${task.id}`, { method: "DELETE" });
-      toast.success(`Task "${task.name}" removed`);
+      toast.success(`Server "${task.name}" removed`);
+      if (selectedId === task.id) setSelectedId(null);
       refresh();
     } finally {
       set(task.id, false);
@@ -160,317 +163,758 @@ export default function GroupsPage() {
     refresh();
   }
 
+  async function toggleSgMaintenance(group: Group, sg: Subgroup, on: boolean) {
+    await fetch(`/api/groups/${group.id}/subgroups/${sg.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ maintenance: on }),
+    });
+    toast.message(`${sg.name}: maintenance ${on ? "ON" : "off"}`);
+    refresh();
+  }
+
+  async function delSubgroup(group: Group, sg: Subgroup) {
+    if (!confirm(`Delete subgroup "${sg.name}"? Its servers stay and rejoin ${group.name} directly.`)) return;
+    await fetch(`/api/groups/${group.id}/subgroups/${sg.id}`, { method: "DELETE" });
+    toast.success(`Subgroup "${sg.name}" removed`);
+    refresh();
+  }
+
+  async function toggleTaskMaintenance(task: Task, on: boolean) {
+    await fetch(`/api/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ maintenance: on }),
+    });
+    toast.message(`${task.name}: maintenance ${on ? "ON" : "off"}`);
+    refresh();
+  }
+
+  async function setTaskSubgroup(task: Task, sgId: string | null) {
+    const res = await fetch(`/api/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subgroupId: sgId }),
+    });
+    const json = await res.json();
+    if (json.error) return toast.error(json.error);
+    toast.success(sgId ? `${task.name} → subgroup ${sgId}` : `${task.name} removed from subgroup`);
+    refresh();
+  }
+
   async function delGroup(group: Group) {
-    if (!confirm(`Delete group "${group.name}" and all its tasks + instances?`)) return;
+    if (!confirm(`Delete group "${group.name}" and all its servers + instances?`)) return;
     await fetch(`/api/groups/${group.id}`, { method: "DELETE" });
     toast.success(`Group "${group.name}" removed`);
     refresh();
   }
 
-  const groups = data?.groups ?? [];
-  const allTaskCandidates = groups.flatMap((g) =>
-    g.tasks.filter((t) => t.role !== "proxy").map((t) => ({ id: t.id, name: t.name, role: t.role })),
-  );
+  async function migrate(inst: Instance, target: string) {
+    set(`i${inst.vmid}`, true);
+    try {
+      const res = await fetch(`/api/containers/${inst.vmid}/migrate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target, node: inst.node }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      toast.success(`#${inst.vmid}: migrating → ${target}`);
+      setTimeout(refresh, 2000);
+    } catch (e) { toast.error(String(e)); } finally { set(`i${inst.vmid}`, false); }
+  }
+
+  async function instAction(inst: Instance, action: "start" | "shutdown" | "stop" | "reboot") {
+    set(`i${inst.vmid}`, true);
+    try {
+      const res = await fetch(`/api/containers/${inst.vmid}/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, node: inst.node }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      toast.success(`#${inst.vmid}: ${action}`);
+      setTimeout(refresh, 1200);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      set(`i${inst.vmid}`, false);
+    }
+  }
+
+  async function deleteInstance(inst: Instance) {
+    set(`i${inst.vmid}`, true);
+    try {
+      const res = await fetch(`/api/containers/${inst.vmid}`, { method: "DELETE" });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      toast.success(`#${inst.vmid} deleted`);
+      setTimeout(refresh, 1200);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      set(`i${inst.vmid}`, false);
+    }
+  }
+
+  async function setFronts(proxy: Task, fronts: string[]) {
+    set(proxy.id, true);
+    try {
+      const res = await fetch(`/api/tasks/${proxy.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fronts }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      toast.success("Routing updated — proxy reloaded");
+      refresh();
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      set(proxy.id, false);
+    }
+  }
+
+  const frontCandidates = allTasks
+    .filter((t) => t.role !== "proxy")
+    .map((t) => ({ id: t.id, name: t.name, role: t.role }));
+
+  const q = search.trim().toLowerCase();
 
   return (
     <>
       <PageHeader
-        title="Groups & Tasks"
-        subtitle="Conduit orchestration — create groups, deploy tasks from blueprints, scale live"
+        title="Servers"
+        subtitle="Orchestrate proxies, server fleets and routing across the cluster"
         onRefresh={refresh}
         loading={loading}
       >
         <NewGroupDialog onCreated={refresh} />
       </PageHeader>
 
-      {loading && !data && (
-        <div className="space-y-4">
-          <Skeleton className="h-48 w-full rounded-xl" />
-          <Skeleton className="h-48 w-full rounded-xl" />
+      {data && groups.length === 0 ? (
+        <EmptyState onCreated={refresh} />
+      ) : (
+        <div className="flex flex-col gap-4 md:min-h-[calc(100vh-9rem)] md:flex-row">
+          {/* ---- Left rail: groups → servers tree (full-width + capped height on mobile, fixed column on desktop) ---- */}
+          <div className="flex max-h-[45vh] w-full shrink-0 flex-col overflow-hidden rounded-lg border border-hairline bg-panel md:max-h-none md:w-72">
+            <div className="flex items-center gap-2 border-b border-hairline px-2.5 py-2">
+              <Search className="h-3.5 w-3.5 text-muted-foreground" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search servers…"
+                className="w-full bg-transparent text-[13px] outline-none placeholder:text-muted-foreground/60"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto p-1.5">
+              {(loading && !data) && (
+                <div className="space-y-1 p-1">
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="h-7 animate-pulse rounded bg-accent/50" />
+                  ))}
+                </div>
+              )}
+              {groups.map((group) => {
+                const isCol = collapsed[group.id];
+                const servers = group.tasks.filter(
+                  (t) => !q || t.name.toLowerCase().includes(q) || t.role.includes(q),
+                );
+                if (q && servers.length === 0) return null;
+                const sgs = group.subgroups ?? [];
+                const loose = servers.filter((t) => !t.subgroupId || !sgs.some((s) => s.id === t.subgroupId));
+
+                // Shared row renderer so loose + subgrouped tasks stay identical.
+                const taskRow = (task: Task, sgMaint: boolean) => {
+                  const active = task.id === selectedId;
+                  const healthy = task.running > 0 && task.running >= task.desired;
+                  const inMaint = !!task.maintenance || sgMaint || group.maintenance;
+                  return (
+                    <ContextMenu key={task.id}>
+                      <ContextMenuTrigger
+                        render={
+                          <button
+                            onClick={() => setSelectedId(task.id)}
+                            className={cn(
+                              "group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors",
+                              active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                            )}
+                          />
+                        }
+                      >
+                        <RoleDot role={task.role} />
+                        <span className="flex-1 truncate">{task.name}</span>
+                        {inMaint && <Wrench className="h-3 w-3 shrink-0 text-amber-400" />}
+                        {!task.persistent && (
+                          <span title="Ephemeral — instances are created from the template and discarded on scale-down (no persistent data)."
+                            className="flex items-center gap-0.5 rounded bg-brand/10 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-brand/80">
+                            <Layers className="h-2.5 w-2.5" /> temp
+                          </span>
+                        )}
+                        <span
+                          className={cn(
+                            "tabular-nums text-[11px]",
+                            healthy ? "text-emerald-400/80" : task.running > 0 ? "text-amber-400/80" : "text-muted-foreground/50",
+                          )}
+                        >
+                          {task.running}/{task.desired}
+                        </span>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuLabel>{task.name}</ContextMenuLabel>
+                        <ContextMenuItem onClick={() => setEditTask(task)}>
+                          <Settings2 /> Settings
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => { setSelectedId(task.id); setTab("instances"); }}>
+                          <ServerCog /> View instances
+                        </ContextMenuItem>
+                        {!task.autoscale && (
+                          <>
+                            <ContextMenuItem onClick={() => scale(task, +1)}><Plus /> Scale up</ContextMenuItem>
+                            <ContextMenuItem disabled={task.desired <= task.min} onClick={() => scale(task, -1)}><Minus /> Scale down</ContextMenuItem>
+                          </>
+                        )}
+                        <ContextMenuItem onClick={() => toggleTaskMaintenance(task, !task.maintenance)}>
+                          <Wrench /> {task.maintenance ? "Disable maintenance" : "Enable maintenance"}
+                        </ContextMenuItem>
+                        {(sgs.length > 0 || task.subgroupId) && <ContextMenuSeparator />}
+                        {sgs.filter((s) => s.id !== task.subgroupId).map((s) => (
+                          <ContextMenuItem key={s.id} onClick={() => setTaskSubgroup(task, s.id)}>
+                            <CornerDownRight /> Move to {s.name}
+                          </ContextMenuItem>
+                        ))}
+                        {task.subgroupId && (
+                          <ContextMenuItem onClick={() => setTaskSubgroup(task, null)}>
+                            <CornerUpLeft /> Remove from subgroup
+                          </ContextMenuItem>
+                        )}
+                        <ContextMenuSeparator />
+                        <ContextMenuItem variant="destructive" onClick={() => delTask(task)}>
+                          <Trash2 /> Delete server
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
+                  );
+                };
+
+                return (
+                  <div key={group.id} className="mb-1">
+                    <ContextMenu>
+                      <ContextMenuTrigger
+                        render={
+                          <div
+                            className="group flex cursor-pointer items-center gap-1 rounded px-1.5 py-1.5 hover:bg-accent/50"
+                            onClick={() => setCollapsed((c) => ({ ...c, [group.id]: !c[group.id] }))}
+                          />
+                        }
+                      >
+                        <ChevronDown className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform", isCol && "-rotate-90")} />
+                        <span className="flex-1 truncate text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          {group.name}
+                        </span>
+                        {group.maintenance && <Wrench className="h-3 w-3 text-amber-400" />}
+                        <span className="text-[10px] text-muted-foreground/60">{group.tasks.length}</span>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuLabel>{group.name}</ContextMenuLabel>
+                        <ContextMenuItem onClick={() => setEditGroup(group)}>
+                          <Settings2 /> Settings
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => toggleMaintenance(group, !group.maintenance)}>
+                          <Wrench /> {group.maintenance ? "Disable maintenance" : "Enable maintenance"}
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => setSgFor(group)}>
+                          <FolderPlus /> New subgroup…
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem variant="destructive" onClick={() => delGroup(group)}>
+                          <Trash2 /> Delete group
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
+
+                    {!isCol && (
+                      <div className="mt-0.5 space-y-px">
+                        {loose.map((task) => taskRow(task, false))}
+                        {sgs.map((sg) => {
+                          const sgTasks = servers.filter((t) => t.subgroupId === sg.id);
+                          if (q && sgTasks.length === 0) return null;
+                          const online = sgTasks.reduce((n, t) => n + t.instances.reduce((m, i) => m + (mByVmid.get(i.vmid)?.online ?? 0), 0), 0);
+                          const running = sgTasks.reduce((n, t) => n + t.running, 0);
+                          return (
+                            <div key={sg.id} className="pt-0.5">
+                              <ContextMenu>
+                                <ContextMenuTrigger
+                                  render={<div className="flex cursor-default items-center gap-1.5 rounded px-2 py-1 hover:bg-accent/40" />}
+                                >
+                                  <CornerDownRight className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+                                  <span className={cn(
+                                    "flex-1 truncate text-[10px] font-semibold uppercase tracking-wider",
+                                    sg.maintenance ? "text-amber-400/90" : "text-muted-foreground/80",
+                                  )}>
+                                    {sg.name}
+                                  </span>
+                                  {sg.maintenance && <Wrench className="h-3 w-3 text-amber-400" />}
+                                  <span className="tabular-nums text-[10px] text-muted-foreground/60" title={`${online} players · ${running} server(s)`}>
+                                    {online}P · {running}S
+                                  </span>
+                                </ContextMenuTrigger>
+                                <ContextMenuContent>
+                                  <ContextMenuLabel>{group.name} / {sg.name}</ContextMenuLabel>
+                                  <ContextMenuItem onClick={() => toggleSgMaintenance(group, sg, !sg.maintenance)}>
+                                    <Wrench /> {sg.maintenance ? "Disable maintenance" : "Enable maintenance"}
+                                  </ContextMenuItem>
+                                  <ContextMenuSeparator />
+                                  <ContextMenuItem variant="destructive" onClick={() => delSubgroup(group, sg)}>
+                                    <Trash2 /> Delete subgroup
+                                  </ContextMenuItem>
+                                </ContextMenuContent>
+                              </ContextMenu>
+                              <div className="ml-3 space-y-px border-l border-hairline pl-1.5">
+                                {sgTasks.length === 0
+                                  ? <div className="px-2 py-1 text-[11px] text-muted-foreground/50">empty — right-click a server to move it here</div>
+                                  : sgTasks.map((task) => taskRow(task, sg.maintenance))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <div className="px-1 pt-0.5">
+                          <NewTaskDialog
+                            groupId={group.id}
+                            blueprints={data?.blueprints ?? []}
+                            frontCandidates={frontCandidates}
+                            onCreated={refresh}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ---- Right detail panel ---- */}
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-hairline bg-panel">
+            {!selected ? (
+              <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+                Select a server to manage it
+              </div>
+            ) : (
+              <>
+                <DetailHeader task={selected} group={selectedGroup} metrics={mByVmid} />
+                <div className="flex gap-1 border-b border-hairline px-3">
+                  {(["overview", "instances", ...(selected.role === "proxy" ? ["routing"] : []), ...(selected.softwareKind === "paper" ? ["world"] : []), "settings"] as Tab[]).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setTab(t)}
+                      className={cn(
+                        "relative px-3 py-2.5 text-[13px] capitalize transition-colors",
+                        tab === t ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {t}
+                      {tab === t && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-brand" />}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-5">
+                  {tab === "overview" && (
+                    <OverviewTab task={selected} metrics={mByVmid} busy={!!pending[selected.id]} onScale={scale} />
+                  )}
+                  {tab === "instances" && (
+                    <InstancesTab task={selected} metrics={mByVmid} pending={pending} onAction={instAction} onMigrate={migrate} onDelete={deleteInstance} nodes={nodeNames} />
+                  )}
+                  {tab === "routing" && selected.role === "proxy" && data && (
+                    <RoutingTab
+                      proxy={selected}
+                      candidates={allTasks.filter((t) => t.role !== "proxy")}
+                      busy={!!pending[selected.id]}
+                      onSetFronts={setFronts}
+                      state={data}
+                      metrics={metrics ?? null}
+                    />
+                  )}
+                  {tab === "world" && selected.softwareKind === "paper" && (
+                    <ShardingPanel taskId={selected.id} instanceCount={selected.running} taskMax={selected.max} />
+                  )}
+                  {tab === "settings" && (
+                    <SettingsTab
+                      task={selected}
+                      frontCandidates={frontCandidates.filter((c) => c.id !== selected.id)}
+                      taskNameById={taskNameById}
+                      onSaved={refresh}
+                      onDelete={() => delTask(selected)}
+                    />
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 
-      {data && groups.length === 0 && (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent">
-              <Workflow className="h-6 w-6 text-muted-foreground" />
-            </div>
-            <div>
-              <p className="font-medium">No server groups yet</p>
-              <p className="text-sm text-muted-foreground">
-                Create a group, then add tasks from a blueprint to start orchestrating.
-              </p>
-            </div>
-            <NewGroupDialog onCreated={refresh} />
-          </CardContent>
-        </Card>
+      {editGroup && (
+        <EditGroupDialog
+          group={editGroup}
+          open={!!editGroup}
+          onOpenChange={(o) => { if (!o) setEditGroup(null); }}
+          showTrigger={false}
+          onSaved={() => { setEditGroup(null); refresh(); }}
+        />
       )}
-
-      <div className="space-y-6">
-        {groups.map((group) => (
-          <Card key={group.id}>
-            <CardHeader className="pb-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2 text-lg">
-                    <Workflow className="h-5 w-5 text-orange-400" />
-                    {group.name}
-                  </CardTitle>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    pool <code className="rounded bg-muted px-1 py-0.5 text-xs">{group.id}</code>
-                    {" · "}slot limit {group.slotLimit}
-                    {" · "}{group.tasks.length} task{group.tasks.length === 1 ? "" : "s"}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2 rounded-lg border border-border/60 px-3 py-1.5">
-                    <Wrench className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm">Maintenance</span>
-                    <Switch
-                      checked={group.maintenance}
-                      onCheckedChange={(v) => toggleMaintenance(group, v)}
-                    />
-                  </div>
-                  <NewTaskDialog
-                    groupId={group.id}
-                    blueprints={data?.blueprints ?? []}
-                    frontCandidates={allTaskCandidates}
-                    onCreated={refresh}
-                  />
-                  <EditGroupDialog group={group} onSaved={refresh} />
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-destructive hover:text-destructive"
-                    onClick={() => delGroup(group)}
-                    title="Delete group"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {group.tasks.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">
-                  No tasks yet — add one from a blueprint.
-                </p>
-              ) : (
-                <div className="grid gap-4 lg:grid-cols-2">
-                  {group.tasks.map((task) => {
-                    const Icon = roleIcon[task.role] ?? Box;
-                    const dynamic = task.mode === "dynamic";
-                    const busy = pending[task.id];
-                    return (
-                      <div key={task.id} className="rounded-lg border border-border/60 p-4">
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-center gap-2">
-                            <Icon className="h-4 w-4 text-muted-foreground" />
-                            <span className="font-medium capitalize">{task.name}</span>
-                            <Badge
-                              variant="outline"
-                              className={
-                                dynamic
-                                  ? "border-orange-500/30 bg-orange-500/10 text-orange-400"
-                                  : "border-sky-500/30 bg-sky-500/10 text-sky-400"
-                              }
-                            >
-                              {dynamic ? <InfinityIcon className="mr-1 h-3 w-3" /> : <Pin className="mr-1 h-3 w-3" />}
-                              {task.mode}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            {(task.softwareKind === "paper" || task.softwareKind === "velocity") && (
-                              <MotdDialog
-                                taskId={task.id}
-                                taskName={task.name}
-                                current={task.motd}
-                                players={task.instances.reduce((n, i) => n + (mByVmid.get(i.vmid)?.online ?? 0), 0)}
-                                max={task.playersPerInstance * Math.max(1, task.running)}
-                                onSaved={refresh}
-                              />
-                            )}
-                            <EditTaskDialog task={task} onSaved={refresh} />
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7 text-destructive hover:text-destructive"
-                              onClick={() => delTask(task)}
-                              title="Delete task"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          {task.blueprintName}
-                          {task.version && (
-                            <span className="text-foreground/70"> · {task.softwareKind} {task.version}</span>
-                          )}
-                          {" · "}{task.cores}c / {task.memory}MB / {task.disk}GB
-                          {task.persistent ? " · persistent" : " · stateless"}
-                        </div>
-
-                        {/* scaler */}
-                        <div className="mt-3 flex items-center justify-between rounded-md bg-muted/40 px-3 py-2">
-                          <div className="text-sm">
-                            <span className="font-semibold tabular-nums">{task.running}</span>
-                            <span className="text-muted-foreground"> running · {task.live} live · want {task.desired}</span>
-                          </div>
-                          {task.autoscale ? (
-                            <Badge
-                              variant="outline"
-                              className="border-orange-500/30 bg-orange-500/10 text-orange-400"
-                              title={`auto-scales on players · ~${task.playersPerInstance}/instance · range ${task.min}–${task.max || "∞"}`}
-                            >
-                              <InfinityIcon className="mr-1 h-3 w-3" /> auto {task.min}–{task.max || "∞"}
-                            </Badge>
-                          ) : (
-                            <div className="flex items-center gap-1">
-                              <Button
-                                size="icon"
-                                variant="outline"
-                                className="h-7 w-7"
-                                disabled={busy || task.desired <= task.min}
-                                onClick={() => scale(task, -1)}
-                              >
-                                <Minus className="h-3.5 w-3.5" />
-                              </Button>
-                              <span className="w-6 text-center text-sm font-medium tabular-nums">{task.desired}</span>
-                              <Button
-                                size="icon"
-                                variant="outline"
-                                className="h-7 w-7"
-                                disabled={busy || (task.max > 0 && task.desired >= task.max)}
-                                onClick={() => scale(task, +1)}
-                              >
-                                <Plus className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* instances + IPs */}
-                        {task.instances.length > 0 && (
-                          <div className="mt-3 space-y-1">
-                            {task.instances.map((inst) => (
-                              <div
-                                key={inst.vmid}
-                                className="flex items-center justify-between rounded border border-border/40 px-2.5 py-1.5 text-xs"
-                              >
-                                <span className="flex items-center gap-2">
-                                  <span className="font-mono text-muted-foreground">#{inst.vmid}</span>
-                                  <span>{inst.name}</span>
-                                </span>
-                                <span className="flex items-center gap-2">
-                                  {(() => {
-                                    const mr = mByVmid.get(inst.vmid);
-                                    if (inst.status === "running" && mr?.reachable)
-                                      return (
-                                        <span className="flex items-center gap-1 text-foreground/80">
-                                          <Users className="h-3 w-3" />
-                                          {mr.online}/{mr.max}
-                                        </span>
-                                      );
-                                    return null;
-                                  })()}
-                                  {inst.status === "running" &&
-                                    (inst.ready ? (
-                                      <span className="flex items-center gap-1 text-emerald-400">
-                                        <CheckCircle2 className="h-3 w-3" /> ready
-                                      </span>
-                                    ) : (
-                                      <span className="flex items-center gap-1 text-amber-400">
-                                        <Loader2 className="h-3 w-3 animate-spin" /> installing
-                                      </span>
-                                    ))}
-                                  <span className="font-mono text-muted-foreground">
-                                    {inst.ip ?? "…dhcp"}
-                                  </span>
-                                  <StatusBadge status={inst.status} />
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {task.fronts.length > 0 && (
-                          <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-                            <Network className="h-3.5 w-3.5" /> fronts: {task.fronts.join(", ")}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* routing tables */}
-      {data && data.routing.length > 0 && (
-        <>
-          <h2 className="mb-3 mt-8 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            <Network className="h-4 w-4" /> Proxy routing
-          </h2>
-          <div className="grid gap-4 lg:grid-cols-2">
-            {data.routing.map((r) => (
-              <Card key={r.proxy.id}>
-                <CardHeader className="pb-2">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Cable className="h-4 w-4 text-orange-400" />
-                    {r.proxy.name}
-                  </CardTitle>
-                  <p className="text-xs text-muted-foreground">
-                    {r.proxyInstances.map((p) => p.ip ?? `#${p.vmid}`).join(", ") || "no proxy instance up"}
-                    {" → "}{r.backends.length} backend(s)
-                  </p>
-                  {(() => {
-                    const online = r.proxyInstances.reduce(
-                      (n, p) => n + (mByVmid.get(p.vmid)?.online ?? 0),
-                      0,
-                    );
-                    const cap = r.proxyInstances.reduce(
-                      (n, p) => n + (mByVmid.get(p.vmid)?.max ?? 0),
-                      0,
-                    );
-                    const up = r.proxyInstances.some((p) => mByVmid.get(p.vmid)?.reachable);
-                    if (!up) return null;
-                    return (
-                      <p className="flex items-center gap-1 text-xs text-emerald-400">
-                        <Users className="h-3 w-3" /> {online}/{cap} players online
-                      </p>
-                    );
-                  })()}
-                </CardHeader>
-                <CardContent className="space-y-1">
-                  {r.backends.length === 0 && (
-                    <p className="text-xs text-muted-foreground">No backends fronted yet.</p>
-                  )}
-                  {r.backends.map((b) => (
-                    <div
-                      key={b.vmid}
-                      className="flex items-center justify-between rounded border border-border/40 px-2.5 py-1.5 text-xs"
-                    >
-                      <span className="flex items-center gap-2">
-                        <Badge variant="secondary" className="text-[10px]">{b.role}</Badge>
-                        {b.name}
-                      </span>
-                      <span className="font-mono text-muted-foreground">
-                        {b.ip ? `${b.ip}:${b.port}` : "…dhcp"}
-                      </span>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </>
+      {sgFor && (
+        <NewSubgroupDialog
+          groupId={sgFor.id}
+          groupName={sgFor.name}
+          open={!!sgFor}
+          onOpenChange={(o) => { if (!o) setSgFor(null); }}
+          onCreated={refresh}
+        />
+      )}
+      {editTask && (
+        <EditTaskDialog
+          task={editTask}
+          frontCandidates={frontCandidates.filter((c) => c.id !== editTask.id)}
+          open={!!editTask}
+          onOpenChange={(o) => { if (!o) setEditTask(null); }}
+          showTrigger={false}
+          onSaved={() => { setEditTask(null); refresh(); }}
+        />
       )}
     </>
+  );
+}
+
+/* ---- detail header ------------------------------------------------------- */
+function DetailHeader({ task, group, metrics }: { task: Task; group: Group | null; metrics: Map<number, MetricRow> }) {
+  const online = task.instances.reduce((n, i) => n + (metrics.get(i.vmid)?.online ?? 0), 0);
+  const up = task.instances.some((i) => i.status === "running" && metrics.get(i.vmid)?.reachable);
+  return (
+    <div className="flex items-center justify-between gap-4 px-5 py-4">
+      <div className="flex items-center gap-3">
+        <div
+          className="flex h-9 w-9 items-center justify-center rounded-md"
+          style={{ background: `color-mix(in oklch, ${roleColor(task.role)} 16%, transparent)` }}
+        >
+          <ServerCog className="h-4.5 w-4.5" style={{ color: roleColor(task.role) }} />
+        </div>
+        <div>
+          <div className="flex items-center gap-2 text-[15px] font-semibold">{task.name}</div>
+          <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+            <RoleDot role={task.role} label />
+            <span>·</span>
+            <span>{task.softwareKind}{task.version ? ` ${task.version}` : ""}</span>
+            {group && <><span>·</span><span>{group.name}</span></>}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-4 text-right">
+        {(task.maintenance || group?.maintenance || group?.subgroups?.some((s) => s.id === task.subgroupId && s.maintenance)) && (
+          <span className="flex items-center gap-1 rounded bg-amber-500/15 px-2 py-1 text-[11px] font-medium text-amber-400">
+            <Wrench className="h-3 w-3" /> maintenance
+          </span>
+        )}
+        <div>
+          <div className="eyebrow">Players</div>
+          <div className="text-sm font-semibold tabular-nums">{up ? online : "—"}</div>
+        </div>
+        <div>
+          <div className="eyebrow">Instances</div>
+          <div className="text-sm font-semibold tabular-nums">{task.running}/{task.desired}</div>
+        </div>
+        <span className={cn(
+          "rounded px-2 py-1 text-[11px] font-medium",
+          up ? "bg-emerald-500/15 text-emerald-400" : "bg-accent text-muted-foreground",
+        )}>
+          {up ? "online" : "offline"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* ---- overview tab -------------------------------------------------------- */
+function OverviewTab({ task, metrics, busy, onScale }: { task: Task; metrics: Map<number, MetricRow>; busy: boolean; onScale: (t: Task, d: number) => void }) {
+  const online = task.instances.reduce((n, i) => n + (metrics.get(i.vmid)?.online ?? 0), 0);
+  const facts: [string, React.ReactNode][] = [
+    ["Role", <RoleDot key="r" role={task.role} label />],
+    ["Mode", task.mode],
+    ["Software", `${task.softwareKind}${task.version ? ` ${task.version}` : ""}`],
+    ["Port", task.port],
+    ["Resources", `${task.cores} vCPU · ${task.memory} MB · ${task.disk} GB`],
+    ["Persistent", task.persistent ? "yes" : "no (ephemeral)"],
+    ["Players online", online],
+    ["Autoscale", task.autoscale ? `${task.min}–${task.max || "∞"} · ~${task.playersPerInstance}/inst` : "off"],
+  ];
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <div className="panel p-4">
+        <div className="eyebrow mb-3">Configuration</div>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-[13px]">
+          {facts.map(([k, v]) => (
+            <div key={k} className="flex flex-col gap-0.5">
+              <dt className="text-[11px] text-muted-foreground">{k}</dt>
+              <dd className="font-medium">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+      <div className="panel flex flex-col gap-4 p-4">
+        <div>
+          <div className="eyebrow mb-2">Scaling</div>
+          <div className="flex items-center justify-between rounded-md bg-accent/50 px-3 py-2.5">
+            <div className="text-sm">
+              <span className="font-semibold tabular-nums">{task.running}</span>
+              <span className="text-muted-foreground"> running · {task.live} live · want {task.desired}</span>
+            </div>
+            {task.autoscale ? (
+              <span className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-brand">
+                <InfinityIcon className="h-3 w-3" /> auto {task.min}–{task.max || "∞"}
+              </span>
+            ) : (
+              <div className="flex items-center gap-1">
+                <button className="flex h-7 w-7 items-center justify-center rounded border border-hairline text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30" disabled={busy || task.desired <= task.min} onClick={() => onScale(task, -1)}><Minus className="h-3.5 w-3.5" /></button>
+                <span className="w-7 text-center text-sm font-semibold tabular-nums">{task.desired}</span>
+                <button className="flex h-7 w-7 items-center justify-center rounded border border-hairline text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30" disabled={busy} onClick={() => onScale(task, +1)}><Plus className="h-3.5 w-3.5" /></button>
+              </div>
+            )}
+          </div>
+        </div>
+        {task.motd && (
+          <div>
+            <div className="eyebrow mb-2">MOTD</div>
+            <div className="rounded-md bg-accent/50 px-3 py-2 font-mono text-xs text-muted-foreground">{task.motd}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---- instances tab ------------------------------------------------------- */
+function InstancesTab({ task, metrics, pending, onAction, onMigrate, onDelete, nodes }: {
+  task: Task; metrics: Map<number, MetricRow>; pending: Record<string, boolean>;
+  onAction: (i: Instance, a: "start" | "shutdown" | "stop" | "reboot") => void;
+  onMigrate: (i: Instance, target: string) => void;
+  onDelete: (i: Instance) => Promise<void>;
+  nodes: string[];
+}) {
+  const [del, setDel] = useState<Instance | null>(null);
+  if (task.instances.length === 0) {
+    return <div className="py-16 text-center text-sm text-muted-foreground">No instances running.</div>;
+  }
+  return (
+    <div className="overflow-x-auto rounded-md border border-hairline">
+      <table className="w-full min-w-[520px] text-[13px]">
+        <thead>
+          <tr className="border-b border-hairline text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+            <th className="px-3 py-2 font-medium">Instance</th>
+            <th className="px-3 py-2 font-medium">Node</th>
+            <th className="px-3 py-2 font-medium">Address</th>
+            <th className="px-3 py-2 font-medium">Players</th>
+            <th className="px-3 py-2 font-medium">Status</th>
+            <th className="px-3 py-2" />
+          </tr>
+        </thead>
+        <tbody>
+          {task.instances.map((inst) => {
+            const mr = metrics.get(inst.vmid);
+            const live = inst.status === "running" && mr?.reachable;
+            const busy = pending[`i${inst.vmid}`];
+            return (
+              <ContextMenu key={inst.vmid}>
+                <ContextMenuTrigger
+                  render={
+                    <tr className="group border-b border-hairline last:border-0 hover:bg-accent/40" />
+                  }
+                >
+                  <td className="px-3 py-2">
+                    <a href={`/services/${inst.vmid}`} className="flex items-center gap-2 hover:text-brand">
+                      {inst.status === "running" && inst.ready ? (
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      ) : (
+                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/30" />
+                      )}
+                      <span className="font-mono text-muted-foreground">#{inst.vmid}</span>
+                      <span>{inst.name}</span>
+                    </a>
+                  </td>
+                  <td className="px-3 py-2 text-muted-foreground">{inst.node}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{inst.ip ?? "…dhcp"}</td>
+                  <td className="px-3 py-2">
+                    {live ? <span className="flex items-center gap-1 text-emerald-400"><Users className="h-3 w-3" />{mr!.online}/{mr!.max}</span> : <span className="text-muted-foreground/50">—</span>}
+                  </td>
+                  <td className="px-3 py-2">
+                    {inst.status === "running" && !inst.ready ? (
+                      <span className="flex items-center gap-1 text-amber-400"><Loader2 className="h-3 w-3 animate-spin" />installing</span>
+                    ) : inst.status === "running" ? (
+                      <span className="flex items-center gap-1 text-emerald-400/80"><CheckCircle2 className="h-3 w-3" />ready</span>
+                    ) : (
+                      <StatusBadge status={inst.status} />
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {busy && <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                  </td>
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuLabel>#{inst.vmid} · {inst.name}</ContextMenuLabel>
+                  <ContextMenuItem onClick={() => { window.location.href = `/services/${inst.vmid}`; }}><Terminal /> Console</ContextMenuItem>
+                  <ContextMenuItem onClick={() => { window.location.href = `/services/${inst.vmid}?tab=files`; }}><FolderOpen /> Files</ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onClick={() => onAction(inst, "start")}><Play /> Start</ContextMenuItem>
+                  <ContextMenuItem onClick={() => onAction(inst, "reboot")}><RotateCw /> Reboot</ContextMenuItem>
+                  <ContextMenuItem onClick={() => onAction(inst, "shutdown")}><Power /> Shutdown</ContextMenuItem>
+                  {nodes.filter((n) => n !== inst.node).length > 0 && <ContextMenuSeparator />}
+                  {nodes.filter((n) => n !== inst.node).map((n) => (
+                    <ContextMenuItem key={n} onClick={() => onMigrate(inst, n)}><ArrowRightLeft /> Move to {n}</ContextMenuItem>
+                  ))}
+                  <ContextMenuSeparator />
+                  <ContextMenuItem variant="destructive" onClick={() => onAction(inst, "stop")}><Square /> Force stop</ContextMenuItem>
+                  <ContextMenuItem variant="destructive" onClick={() => setDel(inst)}><Trash2 /> Delete instance…</ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
+            );
+          })}
+        </tbody>
+      </table>
+      {del && (
+        <ConfirmDeleteDialog
+          open onOpenChange={(o) => !o && setDel(null)}
+          title={`Delete instance #${del.vmid}`}
+          confirmText={del.name}
+          warning={`This permanently destroys the container ${del.name} (#${del.vmid}) and its disk${task.persistent ? " — including its world/data, which is NOT backed up" : ""}. The task target is lowered so it won't respawn. This cannot be undone.`}
+          onConfirm={() => onDelete(del)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ---- routing tab (proxy) ------------------------------------------------- */
+function RoutingTab({ proxy, candidates, busy, onSetFronts, state, metrics }: {
+  proxy: Task; candidates: Task[]; busy: boolean;
+  onSetFronts: (p: Task, fronts: string[]) => void;
+  state: State; metrics: Metrics | null;
+}) {
+  const fronted = new Set(proxy.fronts);
+  const toggle = (id: string) => {
+    const next = new Set(fronted);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    onSetFronts(proxy, [...next]);
+  };
+  return (
+    <div className="space-y-4">
+      <div className="panel p-4">
+        <div className="mb-1 flex items-center gap-2">
+          <Network className="h-4 w-4 text-brand" />
+          <h3 className="text-sm font-semibold">Backend routing</h3>
+        </div>
+        <p className="mb-3 text-[12px] text-muted-foreground">
+          Select which servers <span className="text-foreground">{proxy.name}</span> routes players to.
+          Changes apply live via <span className="font-mono">velocity reload</span> — no player kicks.
+        </p>
+        <div className="space-y-1">
+          {candidates.length === 0 && <p className="py-3 text-center text-xs text-muted-foreground">No backend servers to route to yet.</p>}
+          {candidates.map((c) => {
+            const on = fronted.has(c.id);
+            return (
+              <button
+                key={c.id}
+                disabled={busy}
+                onClick={() => toggle(c.id)}
+                className={cn(
+                  "flex w-full items-center justify-between rounded-md border px-3 py-2 text-[13px] transition-colors disabled:opacity-50",
+                  on ? "border-brand/40 bg-brand/10" : "border-hairline hover:bg-accent/50",
+                )}
+              >
+                <span className="flex items-center gap-2"><RoleDot role={c.role} /> {c.name}</span>
+                <span className={cn("text-[11px] font-medium", on ? "text-brand" : "text-muted-foreground")}>
+                  {on ? "routed" : "not routed"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="panel overflow-hidden">
+        <div className="border-b border-hairline px-4 py-2.5"><div className="eyebrow">Live topology</div></div>
+        {/* No fixed height — the graph sizes to its content (height scales with node
+            count) so every route stays visible at any screen width, never clipped. */}
+        <FlowGraph state={state} metrics={metrics} />
+      </div>
+    </div>
+  );
+}
+
+/* ---- settings tab -------------------------------------------------------- */
+function SettingsTab({ task, frontCandidates, taskNameById, onSaved, onDelete }: {
+  task: Task;
+  frontCandidates: { id: string; name: string; role: string }[];
+  taskNameById: Map<string, string>;
+  onSaved: () => void;
+  onDelete: () => void;
+}) {
+  const frontsNames = task.fronts.map((id) => taskNameById.get(id) ?? id).join(", ");
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <div className="panel p-4">
+        <div className="eyebrow mb-3">Configuration</div>
+        <dl className="space-y-2.5 text-[13px]">
+          <Row k="Resources" v={`${task.cores} vCPU · ${task.memory} MB · ${task.disk} GB`} />
+          <Row k="Scaling" v={task.autoscale ? `auto ${task.min}–${task.max || "∞"}` : `manual · want ${task.desired} (min ${task.min}, max ${task.max || "∞"})`} />
+          <Row k="Software" v={`${task.softwareKind}${task.version ? ` ${task.version}` : ""}`} />
+          {task.role === "proxy" && <Row k="Routes" v={frontsNames || "none"} />}
+        </dl>
+        <div className="mt-4 flex items-center gap-2">
+          <EditTaskDialog task={task} frontCandidates={frontCandidates} onSaved={onSaved} />
+          {(task.softwareKind === "paper" || task.softwareKind === "velocity") && (
+            <MotdDialog taskId={task.id} taskName={task.name} current={task.motd} players={0} max={0} onSaved={onSaved} />
+          )}
+        </div>
+      </div>
+
+      <div className="panel border-destructive/30 p-4">
+        <div className="eyebrow mb-2 text-destructive/80">Danger zone</div>
+        <p className="mb-3 text-[12px] text-muted-foreground">
+          Deleting this server stops and destroys all {task.live} instance(s). This cannot be undone.
+        </p>
+        <button
+          onClick={onDelete}
+          className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-[13px] text-destructive transition-colors hover:bg-destructive/20"
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Delete server
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Row({ k, v }: { k: string; v: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <dt className="text-muted-foreground">{k}</dt>
+      <dd className="text-right font-medium">{v}</dd>
+    </div>
+  );
+}
+
+/* ---- empty state --------------------------------------------------------- */
+function EmptyState({ onCreated }: { onCreated: () => void }) {
+  return (
+    <div className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-hairline py-20 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-md bg-accent">
+        <ServerCog className="h-6 w-6 text-muted-foreground" />
+      </div>
+      <div>
+        <p className="font-medium">No server groups yet</p>
+        <p className="mt-1 text-sm text-muted-foreground">Create a group, then add servers from a blueprint.</p>
+      </div>
+      <NewGroupDialog onCreated={onCreated} />
+    </div>
   );
 }

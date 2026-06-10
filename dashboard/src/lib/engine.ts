@@ -11,17 +11,37 @@
  */
 import { api, lxcIp, waitTask, nodeIp, NODE } from "./proxmox";
 import { blueprint, loadBlueprints, type Blueprint, type Seed } from "./blueprints";
-import { getDB, saveDB, getNetwork, type Task, type Group } from "./store";
+import { getDB, saveDB, getNetwork, mutate, type Task, type Group, type ImageStatus } from "./store";
 import {
   installPaper,
   installVelocity,
+  installHytale,
+  installNginx,
+  installRedis,
+  setRedisReplication,
+  installPostgres,
+  installConnector,
+  installHytaleConnector,
+  installGenericCustom,
+  regenWorldWithSeed,
   syncVelocity,
   forgetVelocity,
   nodeExec,
+  pushInstallLog,
+  ctExec,
   type ProxyServer,
 } from "./provision";
-import { pingMc } from "./mcping";
+import { connServersByVmid } from "./metrics-source";
+import { allPlayers } from "./connector";
+import { recordMetrics } from "./metrics-history";
+import { imageFor, cloneInstance, clonePrepared, promotePrepared, PREPARED_TAG } from "./images";
+import { applyTemplate, serviceDir } from "./templates";
+import { ensureServiceShare } from "./serviceshare";
+import { syncTaskFiles } from "./taskfile";
 import { assetNodePath } from "./assets";
+import { recordReconcile } from "./events";
+import { redisPassword, setRedisCluster, REDIS_PORT } from "./redis-cluster";
+import { pgPassword, setPgCluster } from "./pg-cluster";
 
 export const CONDUIT_TAG = "conduit";
 export const READY_TAG = "ready";
@@ -49,58 +69,140 @@ function parseTags(tags?: string): string[] {
   return (tags ?? "").split(/[;,]/).map((t) => t.trim()).filter(Boolean);
 }
 
+// Controller runtime state. CRITICAL: this lives on `global` so it is shared across Next.js
+// module instances — route handlers and the instrumentation loop can load engine.ts in SEPARATE
+// instances (see store.ts), and a module-local reconcile lock / in-flight set is NOT shared
+// between them. That let two reconciles run concurrently (e.g. a POST /api/tasks reconcile + the
+// periodic loop), each seeing have=0 for desired=1 and BOTH provisioning → an extra instance.
+// One global keeps the lock + dedup authoritative process-wide.
+type ControllerState = {
+  recent: Map<string, Map<number, number>>; // taskId -> vmid -> ts (in-flight creates)
+  provisioning: Set<number>;                // vmids whose software install is running
+  lastSpawn: Map<string, number>;           // taskId -> ts of last provision (spawn cooldown)
+  emptySince: Map<number, number>;          // vmid -> ts it first appeared empty (idle drain)
+  busy: boolean;                            // reconcile in progress (single-flight lock)
+  restores: number;                         // active restores (pause reconcile)
+};
+declare global {
+  // eslint-disable-next-line no-var
+  var __conduitController: ControllerState | undefined;
+}
+const ctl: ControllerState = global.__conduitController ??= {
+  recent: new Map(), provisioning: new Set(), lastSpawn: new Map(), emptySince: new Map(),
+  busy: false, restores: 0,
+};
+const recent = ctl.recent;
+const provisioning = ctl.provisioning;
+const lastSpawn = ctl.lastSpawn;
+const emptySince = ctl.emptySince;
+
 // Containers we just asked Proxmox to create — cluster/resources lags ~10s, so
 // remember them briefly to avoid double-provisioning on the next tick.
-const recent = new Map<string, Map<number, number>>(); // taskId -> vmid -> ts
 function noteCreate(taskId: string, vmid: number) {
   if (!recent.has(taskId)) recent.set(taskId, new Map());
   recent.get(taskId)!.set(vmid, Date.now());
+}
+/** Drop a vmid from the in-flight set — e.g. a provision that failed, so it never counts
+ *  toward `have` (a phantom pending instance inflated `have` and triggered bad scale-downs). */
+function noteForget(taskId: string, vmid: number) {
+  recent.get(taskId)?.delete(vmid);
 }
 function recentVmids(taskId: string): number[] {
   const m = recent.get(taskId);
   if (!m) return [];
   const now = Date.now();
-  for (const [vmid, ts] of m) if (now - ts > 90_000) m.delete(vmid);
+  // 180s window — a clone/boot + cluster-cache lag can exceed 90s; expiring too early made
+  // the autoscaler re-provision a still-starting instance (runaway).
+  for (const [vmid, ts] of m) if (now - ts > 180_000) m.delete(vmid);
   return [...m.keys()];
 }
 
-// Instances whose software install is currently running (takes minutes — we kick
-// it in the background and let later ticks skip it until the `ready` tag lands).
-const provisioning = new Set<number>();
-
-let busy = false;
-
 // While a restore is in flight the target CT is stopped/replaced; pause reconcile
 // so the controller doesn't mistake it for a missing instance and spawn a duplicate.
-let restores = 0;
 export function beginRestore() {
-  restores++;
+  ctl.restores++;
 }
 export function endRestore() {
-  restores = Math.max(0, restores - 1);
+  ctl.restores = Math.max(0, ctl.restores - 1);
 }
 
 /** Install the role's MC software inside a running instance, then tag it ready. */
 async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
   const net = await getNetwork();
   const version = task.software?.version ?? bp.software.version;
-  const host = await nodeIp(inst.node); // SSH to the node that hosts this instance
-  if (bp.role === "proxy") {
+  const host = await nodeIp(inst.node);
+  const kind = bp.software.kind;
+
+  if (kind === "velocity") {
     await installVelocity(inst.vmid, task, net.forwardingSecret, version, host);
-  } else if (bp.role === "lobby" || bp.role === "smp") {
-    // task seed overrides/extends the blueprint's default seed
+  } else if (kind === "paper") {
     const merged = {
       ...bp.seed,
       ...task.seed,
       properties: { ...bp.seed?.properties, ...task.seed?.properties },
       plugins: [...(bp.seed?.plugins ?? []), ...(task.seed?.plugins ?? [])],
     };
-    // uploaded assets (conduit-asset: refs) → pct push into the CT, rewrite to local path
     const seed = await resolveSeedAssets(inst, merged);
     await installPaper(inst.vmid, task, net.forwardingSecret, seed, version, host);
+  } else if (kind === "hytale") {
+    // Hytale uses the shared /assets mount (sharedAssets: true on the blueprint).
+    // ensureHytaleAssets runs first: auto-downloads the binary when downloadUrl is set,
+    // or warns + waits if it's missing and no URL is configured.
+    const sw = { ...bp.software, ...task.software };
+    await installHytale(inst.vmid, task, sw, host);
+  } else if (kind === "mariadb") {
+    pushInstallLog(inst.vmid, `[conduit] MariaDB install recipe not yet implemented — container is a bare OS.`);
+    await ctExec(inst.vmid, `echo "[conduit] MariaDB placeholder." > /opt/conduit-info.txt`, 30_000, host);
+  } else if (kind === "nginx") {
+    await installNginx(inst.vmid, host);
+  } else if (kind === "redis") {
+    await installRedis(inst.vmid, await redisPassword(), host);
+  } else if (kind === "postgres") {
+    await installPostgres(inst.vmid, await pgPassword(), host);
   } else {
-    return; // db/generic: container lifecycle only, no MC software (yet)
+    // generic — run the custom provisioning recipe (packages/assets/install/start) if defined,
+    // else come up as a bare container.
+    if (bp.custom) pushInstallLog(inst.vmid, `[conduit] "${bp.name}" — running custom recipe (assets/install/start)…`);
+    else pushInstallLog(inst.vmid, `[conduit] Blueprint "${bp.name}" (${kind}) — bare container (no custom recipe).`);
+    await installGenericCustom(inst.vmid, bp, host);
   }
+
+  // CloudNet-style overlay: copy overlays/<egg>/ + tasks/<task>/ into the service dir.
+  try {
+    await applyTemplate(inst.vmid, bp.id, task.id, serviceDir(kind), host);
+  } catch (e) {
+    pushInstallLog(inst.vmid, `[conduit] file overlay skipped: ${String(e)}`);
+  }
+
+  // Bind the service's config/plugins onto the shared store (SFTP/file-manager editable).
+  try {
+    await ensureServiceShare(inst.vmid, kind, host);
+  } catch (e) {
+    pushInstallLog(inst.vmid, `[conduit] service share skipped: ${String(e)}`);
+  }
+
+  // Install the Conduit connector plugin into Paper/Velocity (CloudNet-Bridge equivalent).
+  // The jar lands AFTER installPaper/Velocity already booted the server and scanned plugins,
+  // so it must be restarted for the plugin to actually load (otherwise the instance runs
+  // without the connector → shows 0/0, no green dot, and can't shard). Velocity is restarted
+  // anyway by syncVelocity on the next routing pass; Paper backends need an explicit restart.
+  if (kind === "paper" || kind === "velocity") {
+    try {
+      await installConnector(inst.vmid, host);
+      if (kind === "paper") await ctExec(inst.vmid, `systemctl restart mc 2>/dev/null || true`, 30_000, host);
+    } catch (e) {
+      pushInstallLog(inst.vmid, `[conduit] connector install skipped: ${String(e)}`);
+    }
+  } else if (kind === "hytale") {
+    // Hytale gets its own connector mod (reports players to the panel like the MC connector).
+    try {
+      await installHytaleConnector(inst.vmid, host);
+      await ctExec(inst.vmid, `systemctl restart mc 2>/dev/null || true`, 30_000, host);
+    } catch (e) {
+      pushInstallLog(inst.vmid, `[conduit] hytale connector install skipped: ${String(e)}`);
+    }
+  }
+
   const tags = inst.tags ? `${inst.tags};${READY_TAG}` : READY_TAG;
   await api.setLxcConfig(inst.vmid, { tags }, inst.node);
 }
@@ -146,7 +248,7 @@ function provisionPass(db: Awaited<ReturnType<typeof getDB>>, all: Instance[], l
     if (provisioning.has(inst.vmid)) continue;
     const task = db.tasks.find((t) => t.id === inst.taskId);
     const bp = task ? blueprint(task.blueprintId) : undefined;
-    if (!task || !bp || bp.role === "db" || bp.role === "generic") continue;
+    if (!task || !bp) continue;
 
     provisioning.add(inst.vmid);
     log.push(`~ ${task.id}: installing ${bp.role} on ${inst.vmid}`);
@@ -172,9 +274,16 @@ async function velocityPass(
       if (!ft || !fbp) return [];
       return instancesOf(all, fid)
         .filter(ready)
-        .map((i) => ({ name: `${ft.name}-${i.vmid}`, ip: i.ip!, port: fbp.port }));
+        .map((i) => ({
+          name: `${ft.name.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "")}-${i.vmid}`,
+          ip: i.ip!,
+          port: fbp.port,
+        }));
     });
-    if (servers.length === 0) continue;
+    // Always push velocity.toml to every ready proxy — even with zero backends.
+    // Without this, a fresh proxy runs with Velocity's auto-generated placeholder config
+    // (lobby = "127.0.0.1:30066", etc.) which causes connection failures until backends
+    // arrive. An empty servers list produces a valid toml that Velocity accepts cleanly.
 
     for (const p of instancesOf(all, proxy.id).filter(ready)) {
       try {
@@ -186,6 +295,67 @@ async function velocityPass(
       }
     }
   }
+}
+
+// Track the last applied redis membership so we only re-issue replicaof on change.
+declare global { var __conduitRedisSig: string | undefined; }
+
+/**
+ * Designate a Redis cluster from the running redis-kind instances (lowest vmid = primary, rest
+ * replicate it) and publish the endpoint list for connectors. Re-wires replication only when
+ * membership changes; failover is the connector trying the published list in order.
+ */
+async function redisPass(
+  db: Awaited<ReturnType<typeof getDB>>,
+  all: Instance[],
+  log: string[],
+) {
+  const redisTasks = db.tasks.filter((t) => blueprint(t.blueprintId)?.software.kind === "redis");
+  if (redisTasks.length === 0) { setRedisCluster({ primary: null, endpoints: [], password: "", updatedAt: Date.now() }); return; }
+  const insts = redisTasks
+    .flatMap((t) => instancesOf(all, t.id))
+    .filter((i) => i.status === "running" && !!i.ip && i.ready)
+    .sort((a, b) => a.vmid - b.vmid);
+  const pw = await redisPassword();
+  if (insts.length === 0) { setRedisCluster({ primary: null, endpoints: [], password: pw, updatedAt: Date.now() }); return; }
+
+  const primary = insts[0];
+  setRedisCluster({
+    primary: { vmid: primary.vmid, ip: primary.ip! },
+    endpoints: insts.map((i) => `${i.ip}:${REDIS_PORT}`),
+    password: pw,
+    updatedAt: Date.now(),
+  });
+
+  const sig = insts.map((i) => `${i.vmid}@${i.ip}`).join(",") + `|p=${primary.vmid}`;
+  if (global.__conduitRedisSig === sig) return;
+  for (const i of insts) {
+    try {
+      const host = await nodeIp(i.node);
+      await setRedisReplication(i.vmid, pw, i.vmid === primary.vmid ? null : primary.ip!, host);
+    } catch (e) {
+      log.push(`! redis replication ${i.vmid}: ${String(e)}`);
+      return; // leave sig unset so we retry next pass
+    }
+  }
+  global.__conduitRedisSig = sig;
+  log.push(`= redis: primary ${primary.vmid} (${primary.ip}), ${insts.length - 1} replica(s)`);
+}
+
+/**
+ * Publish the Postgres primary (lowest-vmid running postgres-kind instance) for the
+ * LuckPerms storage link — read by the panel's LuckPerms client and the LP installer.
+ */
+async function pgPass(db: Awaited<ReturnType<typeof getDB>>, all: Instance[]) {
+  const pgTasks = db.tasks.filter((t) => blueprint(t.blueprintId)?.software.kind === "postgres");
+  const insts = pgTasks
+    .flatMap((t) => instancesOf(all, t.id))
+    .filter((i) => i.status === "running" && !!i.ip && i.ready)
+    .sort((a, b) => a.vmid - b.vmid);
+  setPgCluster({
+    primary: insts[0] ? { vmid: insts[0].vmid, ip: insts[0].ip! } : null,
+    updatedAt: Date.now(),
+  });
 }
 
 /** All Conduit-managed containers grouped by task, with live IPs. */
@@ -224,32 +394,34 @@ export function instancesOf(all: Instance[], taskId: string): Instance[] {
 }
 
 /** Live online-player count per vmid via SLP (best-effort; unreachable → absent). */
-async function playerCounts(
-  insts: Instance[],
-  portOf: (i: Instance) => number,
-): Promise<Map<number, number>> {
+/** Live player counts per instance, from the connector registry (SLP is gone). Instances
+ *  not yet reporting are simply absent (treated as 0 by callers). */
+function playerCounts(insts: Instance[]): Map<number, number> {
+  const conn = connServersByVmid();
   const out = new Map<number, number>();
-  await Promise.all(
-    insts
-      .filter((i) => i.status === "running" && i.ip && i.ready)
-      .map(async (i) => {
-        try {
-          const p = await pingMc(i.ip!, portOf(i), 2000);
-          out.set(i.vmid, p.online);
-        } catch {
-          /* not up yet / unreachable — leave absent */
-        }
-      }),
-  );
+  for (const i of insts) {
+    const s = conn.get(i.vmid);
+    if (s) out.set(i.vmid, s.online);
+  }
   return out;
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(n, hi));
 
-/** Autoscale target for a dynamic task: one spare joinable server above current load. */
-export function autoscaleTarget(players: number, perInstance: number, min: number, max: number) {
+/**
+ * Autoscale target for a dynamic task (CloudNet Smart-style). Scale up a spare once any
+ * server would exceed `scaleUpPercent` of capacity; keep `min` as the always-on floor; cap
+ * at `max`/`maxServices`. Percent defaults to 100 (= "one spare above full").
+ */
+export function autoscaleTarget(
+  players: number, perInstance: number, min: number, max: number, scaleUpPercent = 100,
+) {
   const per = Math.max(1, perInstance);
-  const loadBased = Math.ceil(players / per) + 1; // +1 keeps a fresh lobby ready
+  const threshold = Math.max(1, Math.floor((per * Math.max(1, scaleUpPercent)) / 100));
+  // how many servers are needed so none exceeds the scale-up threshold
+  const needed = Math.ceil(players / threshold);
+  const spare = needed > min ? 1 : 0; // a spare joinable server above the floor
+  const loadBased = Math.max(min, needed + spare);
   const cap = max > 0 ? max : loadBased;
   return clamp(loadBased, min, cap);
 }
@@ -259,6 +431,15 @@ async function ensurePool(group: Group) {
   if (!pools.some((p) => p.poolid === group.id)) {
     await api.createPool(group.id, `Conduit group: ${group.name}`).catch(() => {});
   }
+}
+
+/** Use a pinned node when it's set and currently online; otherwise auto-pick. */
+async function resolveNode(pinned?: string): Promise<string> {
+  if (pinned) {
+    const nodes = await api.nodes().catch(() => []);
+    if (nodes.some((n) => n.node === pinned && n.status === "online")) return pinned;
+  }
+  return pickNode();
 }
 
 /**
@@ -289,9 +470,27 @@ async function provision(task: Task, group: Group): Promise<number> {
   if (!bp) throw new Error(`unknown blueprint ${task.blueprintId}`);
   await ensurePool(group);
 
-  const node = await pickNode();
+  // Honor a pinned node if set + still valid; otherwise auto-pick the least-loaded one.
+  const node = await resolveNode(task.node);
+
+  // FAST PATH: if a golden image exists for this egg on the picked node, linked-clone it
+  // (seconds) instead of a from-scratch install (minutes). Software is already baked.
+  // On any clone failure, fall through to the from-scratch path so scaling never stalls.
+  const db = await getDB();
+  const tmpl = imageFor(db.images, task.blueprintId, node);
+  if (tmpl) {
+    try {
+      const cloned = await cloneInstance(task, group, node, tmpl);
+      noteCreate(task.id, cloned);
+      return cloned;
+    } catch (e) {
+      console.error(`[conduitd] clone ${task.id} from ${tmpl} failed, falling back to install:`, String(e));
+    }
+  }
+
   const vmid = await api.nextVmid(VMID_FROM, VMID_TO);
   noteCreate(task.id, vmid);
+  try {
 
   const tags = [CONDUIT_TAG, taskTag(task.id), groupTag(group.id), bp.role].join(";");
   const params: Record<string, string | number> = {
@@ -330,6 +529,29 @@ async function provision(task: Task, group: Group): Promise<number> {
     ).catch((e) => console.error(`[conduitd] assets mount ${vmid} failed:`, String(e)));
   }
   return vmid;
+  } catch (e) {
+    // A failed provision must not leave a phantom in the in-flight set (it would inflate
+    // `have` and could drive an erroneous scale-down). Best-effort destroy any half-made CT.
+    noteForget(task.id, vmid);
+    await api.deleteLxc(vmid, node).catch(() => {});
+    throw e;
+  }
+}
+
+/** Keep `preparedPool` STOPPED, pre-cloned warm instances ready (golden image required). */
+async function maintainWarmPool(
+  task: Task, group: Group, prepared: Instance[], images: ImageStatus[] | undefined, log: string[],
+): Promise<void> {
+  const want = task.preparedPool ?? 0;
+  // include recently-created prepared clones not yet visible in the cluster cache
+  const have = prepared.length;
+  for (let i = have; i < want; i++) {
+    const node = await pickNode();
+    const tmpl = imageFor(images, task.blueprintId, node);
+    if (!tmpl) { log.push(`warmpool ${task.id}: no golden image on ${node} — skipping`); return; }
+    const vmid = await clonePrepared(task, group, node, tmpl);
+    log.push(`* ${task.id}: warm clone ${vmid} ready on ${node}`);
+  }
 }
 
 async function destroy(inst: Instance) {
@@ -342,6 +564,44 @@ async function destroy(inst: Instance) {
   forgetVelocity(inst.vmid);
 }
 
+/**
+ * Enable world-sharding on a task and apply ONE shared seed across every region instance,
+ * regenerating each world so the terrain is continuous (different seeds = same X/Z is different
+ * terrain). DESTRUCTIVE — wipes each instance's current world; the explicit operator-approved
+ * "enable sharding" flow calls this. `seed` empty → mint a fresh one. Returns {seed, regenerated}.
+ */
+export async function enableShardingWithSeed(taskId: string, seed?: string): Promise<{ seed: string; regenerated: number }> {
+  const finalSeed = (seed && seed.trim()) ? seed.trim() : String(Math.floor(Math.random() * 9_000_000_000) + 1_000_000_000);
+  let cfg: Task["sharding"] | undefined;
+  await mutate((db) => {
+    const t = db.tasks.find((x) => x.id === taskId);
+    if (!t) throw new Error("task not found");
+    t.sharding = {
+      enabled: true,
+      world: t.sharding?.world ?? "world",
+      stripWidth: t.sharding?.stripWidth ?? 5000,
+      splitEnd: t.sharding?.splitEnd ?? true,
+      borderCancelRange: t.sharding?.borderCancelRange ?? 30,
+      seed: finalSeed,
+    };
+    cfg = t.sharding;
+  });
+  void cfg;
+  const all = await discoverInstances();
+  const mine = instancesOf(all, taskId).filter((i) => i.status === "running" && !i.tags?.includes(PREPARED_TAG));
+  let regenerated = 0;
+  for (const inst of mine) {
+    try {
+      const host = await nodeIp(inst.node);
+      await regenWorldWithSeed(inst.vmid, finalSeed, host);
+      regenerated++;
+    } catch (e) {
+      console.error(`[conduitd] regen ${inst.vmid} failed:`, String(e));
+    }
+  }
+  return { seed: finalSeed, regenerated };
+}
+
 /** Destroy every live instance of a task (used when a task/group is deleted). */
 export async function decommissionTask(taskId: string): Promise<number> {
   const all = await discoverInstances();
@@ -351,11 +611,51 @@ export async function decommissionTask(taskId: string): Promise<number> {
   return mine.length;
 }
 
+/**
+ * Permanently delete a single instance and lower its task's target so the controller doesn't
+ * immediately re-provision it (otherwise reconcile restarts/recreates it). This is the explicit
+ * operator delete — the only way a persistent instance is destroyed (auto-GC never touches them).
+ * Returns the task id, or null if the vmid isn't a Conduit instance.
+ */
+export async function destroyInstance(vmid: number): Promise<string | null> {
+  const all = await discoverInstances();
+  const inst = all.find((i) => i.vmid === vmid);
+  if (!inst) return null;
+  await destroy(inst);
+  noteForget(inst.taskId, vmid);
+  if (inst.taskId) {
+    // Clamp the task target to the instances that remain — only LOWER desired when the deletion
+    // would otherwise leave fewer than wanted. Deleting a SURPLUS (over-provisioned) instance
+    // therefore leaves the wanted count untouched (e.g. want 2, had 3, delete 1 → still want 2,
+    // shows 2/2). Deleting one of the wanted instances lowers the target by one (want 2 → 1).
+    const remaining = all.filter(
+      (i) => i.taskId === inst.taskId && i.vmid !== vmid && !i.tags?.includes(PREPARED_TAG),
+    ).length;
+    await mutate((db) => {
+      const t = db.tasks.find((x) => x.id === inst.taskId);
+      if (!t) return;
+      t.desired = Math.min(t.desired, remaining);
+      if (t.min > t.desired) t.min = t.desired;
+    }).catch(() => {});
+  }
+  // Immediately drop the stale routing entry: re-render every proxy's velocity.toml from the
+  // now-live backends (the deleted vmid is gone from a fresh discovery) and reload Velocity.
+  // Done inline (not just via the post-delete reconcile, which may be skipped if one is busy).
+  try {
+    const db = await getDB();
+    const fresh = await discoverInstances();
+    await velocityPass(db, fresh, []);
+  } catch { /* the next reconcile will reconcile routing anyway */ }
+  return inst.taskId || null;
+}
+
 /** One reconcile pass over every task. Returns a short action log. */
 export async function reconcileAll(): Promise<string[]> {
-  if (busy) return ["skip: busy"];
-  if (restores > 0) return ["skip: restore in progress"];
-  busy = true;
+  // Single-flight across the whole process (incl. separate Next module instances): the check +
+  // set has no await between them, so it's an atomic guard on JS's single thread.
+  if (ctl.busy) return ["skip: busy"];
+  if (ctl.restores > 0) return ["skip: restore in progress"];
+  ctl.busy = true;
   const log: string[] = [];
   let dirty = false;
   try {
@@ -363,33 +663,59 @@ export async function reconcileAll(): Promise<string[]> {
     const db = await getDB();
     const all = await discoverInstances();
 
-    // Gather live player counts once if any task autoscales (drives desired + safe drain).
+    // Sample players + live containers (+ per-vmid players) into the metrics history.
+    try {
+      const running = all.filter((i) => i.status === "running").length;
+      const perVmid: Record<number, number> = {};
+      for (const [vmid, s] of connServersByVmid()) perVmid[vmid] = s.online ?? 0;
+      recordMetrics(allPlayers().length, running, perVmid);
+    } catch { /* non-critical */ }
+
+    // SAFETY: never act on a suspiciously-empty desired state while real conduit
+    // instances exist. An empty store almost always means a state-load failure
+    // (agent unreachable → {} fallback, or a not-yet-seeded shared file), NOT an
+    // intent to tear down the whole network. Acting here would GC every container.
+    if (db.tasks.length === 0 && db.groups.length === 0 && all.length > 0) {
+      ctl.busy = false;
+      return [`skip: empty desired state but ${all.length} live conduit instance(s) — refusing to GC (likely state-load failure)`];
+    }
+
+    // Two-way sync each task ⇄ tasks/<id>/task.yaml on the shared store. If a YAML was
+    // edited externally, apply it into the store before reconciling so changes take effect.
+    if (db.tasks.length) {
+      try {
+        const imported = await syncTaskFiles(db, log);
+        if (imported) Object.assign(db, await getDB()); // pick up the mutate() result
+      } catch (e) {
+        log.push(`! task file sync failed: ${String(e)}`);
+      }
+    }
+
+    // Live player counts from the connector (drives desired + safe drain).
     const autoTasks = db.tasks.filter((t) => t.autoscale);
-    const portOf = (i: Instance) => {
-      const t = db.tasks.find((x) => x.id === i.taskId);
-      return (t ? blueprint(t.blueprintId)?.port : undefined) ?? 25565;
-    };
     const players = autoTasks.length
-      ? await playerCounts(
-          autoTasks.flatMap((t) => instancesOf(all, t.id)),
-          portOf,
-        )
+      ? playerCounts(autoTasks.flatMap((t) => instancesOf(all, t.id)))
       : new Map<number, number>();
 
     for (const task of db.tasks) {
       const group = db.groups.find((g) => g.id === task.groupId);
       if (!group) continue;
 
-      const live = instancesOf(all, task.id);
+      // Prepared (warm-pool) instances are a separate pool — exclude them from live accounting.
+      const allOfTask = instancesOf(all, task.id);
+      const preparedInsts = allOfTask.filter((i) => i.tags?.includes(PREPARED_TAG));
+      const live = allOfTask.filter((i) => !i.tags?.includes(PREPARED_TAG));
       // count live + recently-created (not yet visible in cluster cache)
       const liveIds = new Set(live.map((i) => i.vmid));
       const pending = recentVmids(task.id).filter((v) => !liveIds.has(v));
       const have = live.length + pending.length;
 
+      // Effective cap: maxServices overrides max when set (CloudNet Smart parity).
+      const cap = task.maxServices && task.maxServices > 0 ? task.maxServices : task.max;
       let desired: number;
       if (task.autoscale) {
         const load = live.reduce((n, i) => n + (players.get(i.vmid) ?? 0), 0);
-        desired = autoscaleTarget(load, task.playersPerInstance, task.min, task.max);
+        desired = autoscaleTarget(load, task.playersPerInstance, task.min, cap, task.scaleUpPercent);
         if (desired !== task.desired) {
           task.desired = desired; // reflect the live target in the store/UI
           dirty = true;
@@ -397,37 +723,107 @@ export async function reconcileAll(): Promise<string[]> {
         if (desired !== have)
           log.push(`autoscale ${task.id}: ${load}p → want ${desired} (have ${have})`);
       } else {
-        desired = clamp(task.desired, task.min, task.max > 0 ? task.max : task.desired);
+        desired = clamp(task.desired, task.min, cap > 0 ? cap : task.desired);
       }
 
+      // Restart any stopped containers that should be running — a crash or manual
+      // stop leaves the CT in Proxmox but the controller previously ignored it,
+      // counting it against `have` while leaving it offline.
+      for (const inst of live) {
+        if (inst.status === "stopped") {
+          try {
+            await api.lxcAction(inst.vmid, "start", inst.node);
+            log.push(`~ ${task.id}: restarted stopped instance ${inst.vmid}`);
+          } catch (e) {
+            log.push(`! ${task.id}: failed to start ${inst.vmid}: ${String(e)}`);
+          }
+        }
+      }
+
+      const now = Date.now();
       if (have < desired) {
-        for (let i = 0; i < desired - have; i++) {
-          try {
-            const vmid = await provision(task, group);
-            log.push(`+ ${task.id}: provisioned ${vmid}`);
-          } catch (e) {
-            log.push(`! ${task.id}: provision failed ${String(e)}`);
+        // Honor a spawn cooldown so a burst doesn't create a thundering herd of clones.
+        const cooldownMs = (task.spawnCooldownSec ?? 0) * 1000;
+        const lastTs = lastSpawn.get(task.id) ?? 0;
+        if (cooldownMs > 0 && now - lastTs < cooldownMs) {
+          log.push(`autoscale ${task.id}: spawn on cooldown (${Math.ceil((cooldownMs - (now - lastTs)) / 1000)}s)`);
+        } else {
+          const warm = preparedInsts.filter((i) => i.status === "stopped");
+          for (let i = 0; i < desired - have; i++) {
+            // Hard ceiling on LIVE instances: never exceed the cap regardless of `have`. The
+            // in-memory in-flight dedup (`recent`) is lost on a panel restart, so without this
+            // a slow provision mid-restart could be re-issued and overshoot (e.g. 3 when max=2).
+            // Re-read live count each iteration since provision() can take minutes.
+            const liveNow = instancesOf(await discoverInstances(), task.id).filter((x) => !x.tags?.includes(PREPARED_TAG)).length;
+            const ceiling = cap > 0 ? cap : desired;
+            if (liveNow >= ceiling) { log.push(`= ${task.id}: at ceiling ${ceiling}, not provisioning more`); break; }
+            try {
+              const w = warm.shift();
+              if (w) {
+                await promotePrepared(w.vmid, w.node, task, group);
+                noteCreate(task.id, w.vmid);
+                log.push(`+ ${task.id}: promoted warm ${w.vmid}`);
+              } else {
+                const vmid = await provision(task, group);
+                log.push(`+ ${task.id}: provisioned ${vmid}`);
+              }
+            } catch (e) {
+              log.push(`! ${task.id}: scale-up failed ${String(e)}`);
+            }
+          }
+          lastSpawn.set(task.id, now);
+        }
+      } else if (live.length > desired) {
+        // Scale down is driven by the LIVE excess only — never by `have` (which includes
+        // in-flight `pending` creations); a failed/slow provision must not trigger destroys
+        // of real instances.
+        if (task.persistent) {
+          // SAFETY: persistent instances own data — the controller never auto-destroys them.
+          // Removing one is an explicit operator action (decommission/delete in the UI).
+          log.push(`= ${task.id}: ${live.length} live > desired ${desired}, persistent — NOT auto-destroying (remove manually)`);
+        } else {
+          // prefer stopped, then highest vmid; for autoscale only drain EMPTY instances idle
+          // ≥ scaleDownAfterSec (CloudNet auto-stop) so we never kick players or flap.
+          let removable = [...live].sort(
+            (a, b) =>
+              Number(a.status === "running") - Number(b.status === "running") ||
+              b.vmid - a.vmid,
+          );
+          if (task.autoscale) {
+            const idleMs = (task.scaleDownAfterSec ?? 60) * 1000;
+            removable = removable.filter((i) => {
+              if ((players.get(i.vmid) ?? 0) !== 0) return false;
+              const since = emptySince.get(i.vmid) ?? now;
+              return now - since >= idleMs;
+            });
+          }
+          for (let i = 0; i < live.length - desired && removable.length; i++) {
+            const victim = removable.shift()!;
+            try {
+              await destroy(victim);
+              emptySince.delete(victim.vmid);
+              log.push(`- ${task.id}: destroyed ${victim.vmid}`);
+            } catch (e) {
+              log.push(`! ${task.id}: destroy failed ${String(e)}`);
+            }
           }
         }
-      } else if (have > desired) {
-        // scale down: prefer stopped, then highest vmid; never below min.
-        // For autoscale tasks, only drain EMPTY instances so we never kick players.
-        let removable = [...live].sort(
-          (a, b) =>
-            Number(a.status === "running") - Number(b.status === "running") ||
-            b.vmid - a.vmid,
-        );
-        if (task.autoscale)
-          removable = removable.filter((i) => (players.get(i.vmid) ?? 0) === 0);
-        for (let i = 0; i < have - desired && removable.length; i++) {
-          const victim = removable.shift()!;
-          try {
-            await destroy(victim);
-            log.push(`- ${task.id}: destroyed ${victim.vmid}`);
-          } catch (e) {
-            log.push(`! ${task.id}: destroy failed ${String(e)}`);
-          }
+      }
+
+      // Track empty-since timestamps for the idle-drain delay (autoscale tasks only).
+      if (task.autoscale) {
+        for (const inst of live) {
+          if ((players.get(inst.vmid) ?? 0) === 0) {
+            if (!emptySince.has(inst.vmid)) emptySince.set(inst.vmid, now);
+          } else emptySince.delete(inst.vmid);
         }
+      }
+
+      // Warm pool: keep `preparedPool` pre-cloned, STOPPED instances ready for instant
+      // scale-up. Only meaningful when a golden image exists for the egg (clones are cheap).
+      if (task.autoscale && (task.preparedPool ?? 0) > 0) {
+        await maintainWarmPool(task, group, preparedInsts, db.images, log)
+          .catch((e) => log.push(`! warmpool ${task.id}: ${String(e)}`));
       }
     }
 
@@ -449,15 +845,22 @@ export async function reconcileAll(): Promise<string[]> {
     // software provisioning (background) + proxy routing config push
     provisionPass(db, all, log);
     await velocityPass(db, all, log);
+    await redisPass(db, all, log);
+    await pgPass(db, all);
 
     if (dirty) await saveDB(db).catch(() => {});
   } catch (e) {
     log.push(`! reconcile error: ${String(e)}`);
   } finally {
-    busy = false;
+    ctl.busy = false;
   }
+  recordReconcile(log); // surface acted lines in the Activity feed
   return log;
 }
+
+// The periodic reconcile loop lives in src/instrumentation.ts (the Next.js bootstrap
+// hook), which is leader-gated on the VIP for the HA panel-per-node deployment.
+// Keeping a single loop there avoids double reconciles on the leader.
 
 /** Proxy routing tables: for each proxy task, its fronted backends + IPs. */
 export async function routingTables() {

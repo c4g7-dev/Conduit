@@ -38,10 +38,21 @@ export async function POST(req: NextRequest) {
       disk: Number(b.disk ?? 8),
       port: Number(b.port ?? 25565),
       description: String(b.description ?? "Custom template"),
+      longDescription: b.longDescription ? String(b.longDescription) : undefined,
       provision: String(b.provision ?? `${kind} (custom)`),
       software: { kind, version: String(b.software?.version ?? "latest") },
       sharedAssets: Boolean(b.sharedAssets),
       seed: b.seed && typeof b.seed === "object" ? b.seed : undefined,
+      // Custom provisioning recipe (generic templates): packages / assets / install / start.
+      custom: b.custom && typeof b.custom === "object" ? {
+        packages: b.custom.packages ? String(b.custom.packages) : undefined,
+        assets: Array.isArray(b.custom.assets)
+          ? b.custom.assets.filter((a: { url?: string; dest?: string }) => a?.url && a?.dest)
+              .map((a: { url: string; dest: string }) => ({ url: String(a.url), dest: String(a.dest) }))
+          : undefined,
+        installScript: b.custom.installScript ? String(b.custom.installScript) : undefined,
+        startCommand: b.custom.startCommand ? String(b.custom.startCommand) : undefined,
+      } : undefined,
     };
 
     await mutate((db) => {

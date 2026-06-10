@@ -4,29 +4,17 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { bytes, pct } from "@/lib/format";
-import { Archive, HardDrive, Clock, Trash2, Play, CalendarClock, RotateCcw } from "lucide-react";
+import {
+  Archive,
+  HardDrive,
+  Clock,
+  Trash2,
+  Play,
+  CalendarClock,
+  RotateCcw,
+  AlertCircle,
+} from "lucide-react";
 
 type Storage = {
   storage: string;
@@ -57,7 +45,20 @@ type Group = { id: string; name: string };
 type GroupsState = { groups: Group[] };
 
 const when = (ctime: number) =>
-  ctime ? new Date(ctime * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—";
+  ctime
+    ? new Date(ctime * 1000).toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      })
+    : "—";
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-white/35">
+      {children}
+    </div>
+  );
+}
 
 export default function BackupsPage() {
   const { data, loading, refresh } = usePoll<Data>("/api/backups", 8000);
@@ -70,11 +71,12 @@ export default function BackupsPage() {
   const [busy, setBusy] = useState(false);
 
   const storages = data?.storages ?? [];
-  // prefer a PBS datastore as the backup target over plain local dir storage
   const defaultStorage =
     storage || storages.find((s) => s.type === "pbs")?.storage || storages[0]?.storage || "";
 
-  // when there's only one group, pre-select it (the dropdown is then non-interactive)
+  const allBackups = data?.backups ?? [];
+  const displayedBackups = storage ? allBackups.filter((b) => b.storage === storage) : allBackups;
+
   useEffect(() => {
     if (groups.length === 1 && !pool) setPool(groups[0].id);
   }, [groups, pool]);
@@ -127,7 +129,8 @@ export default function BackupsPage() {
   }
 
   async function delBackup(b: Backup) {
-    if (!confirm(`Delete this snapshot of ${b.name ?? "#" + b.vmid} from ${when(b.ctime)}?`)) return;
+    if (!confirm(`Delete this snapshot of ${b.name ?? "#" + b.vmid} from ${when(b.ctime)}?`))
+      return;
     setBusy(true);
     try {
       const res = await fetch(
@@ -180,206 +183,286 @@ export default function BackupsPage() {
         loading={loading}
       >
         {storages.length > 1 && (
-          <Select value={defaultStorage} onValueChange={(v) => setStorage(v ?? "")}>
-            <SelectTrigger className="w-44">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {storages.map((s) => (
-                <SelectItem key={s.storage} value={s.storage}>
-                  {s.storage}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex overflow-hidden rounded-lg border border-white/[0.08]">
+            <button
+              onClick={() => setStorage("")}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                !storage ? "bg-white/[0.08] text-white" : "text-white/30 hover:text-white/60"
+              }`}
+            >
+              All
+            </button>
+            {storages.map((s) => (
+              <button
+                key={s.storage}
+                onClick={() => setStorage(s.storage)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  storage === s.storage
+                    ? "bg-white/[0.08] text-white"
+                    : "text-white/30 hover:text-white/60"
+                }`}
+              >
+                {s.storage}
+              </button>
+            ))}
+          </div>
         )}
       </PageHeader>
 
-      {/* storages */}
-      <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {!data && loading &&
+      {/* Storage cards */}
+      <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {!data &&
+          loading &&
           Array.from({ length: 2 }).map((_, i) => (
-            <Card key={i}>
-              <CardHeader className="pb-2">
-                <Skeleton className="h-5 w-28" />
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <Skeleton className="h-2 w-full" />
-                <Skeleton className="h-3 w-32" />
-              </CardContent>
-            </Card>
+            <div
+              key={i}
+              className="h-24 animate-pulse rounded-xl border border-white/[0.07] bg-white/[0.03]"
+            />
           ))}
-        {storages.map((s) => (
-          <Card key={s.storage}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <HardDrive className="h-4 w-4 text-muted-foreground" />
-                {s.storage}
-              </CardTitle>
-              <Badge variant="secondary" className="uppercase">{s.type}</Badge>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {s.total ? <Progress value={pct(s.used ?? 0, s.total)} /> : null}
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>{bytes(s.used ?? 0)} used</span>
-                <span>{bytes(s.avail ?? 0)} free</span>
+        {storages.map((s) => {
+          const usedPct = s.total ? pct(s.used ?? 0, s.total) : 0;
+          const fillColor =
+            usedPct > 85 ? "#f87171" : usedPct > 65 ? "#fb923c" : "#34d399";
+          return (
+            <div
+              key={s.storage}
+              className="overflow-hidden rounded-xl border border-white/[0.07] bg-panel p-4"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <HardDrive className="h-4 w-4 text-white/30" />
+                  <span className="font-semibold text-white">{s.storage}</span>
+                </div>
+                <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium uppercase text-white/40">
+                  {s.type}
+                </span>
               </div>
-            </CardContent>
-          </Card>
-        ))}
+              {s.total ? (
+                <div className="mt-3">
+                  <div className="mb-1.5 flex justify-between text-[11px] text-white/30">
+                    <span>{bytes(s.used ?? 0)} used</span>
+                    <span>{bytes(s.avail ?? 0)} free</span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{ width: `${usedPct}%`, background: fillColor }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-2 text-[11px] text-white/25">No size info available</p>
+              )}
+            </div>
+          );
+        })}
         {data && storages.length === 0 && (
-          <Card className="border-dashed sm:col-span-2 lg:col-span-3">
-            <CardContent className="py-10 text-center text-sm text-muted-foreground">
-              No backup storage attached. Add a PBS datastore as Proxmox storage with
-              content type <code className="rounded bg-muted px-1">backup</code>.
-            </CardContent>
-          </Card>
+          <div className="flex items-center gap-3 rounded-xl border border-dashed border-white/[0.08] px-4 py-8 text-sm text-white/25 sm:col-span-2 lg:col-span-3">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            No backup storage attached. Add a PBS datastore as Proxmox storage with content type{" "}
+            <code className="rounded bg-white/[0.06] px-1">backup</code>.
+          </div>
         )}
       </div>
 
-      {/* scheduled jobs */}
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        <CalendarClock className="h-4 w-4" /> Scheduled backups (per group)
-      </h2>
-      <Card className="mb-8">
-        <CardContent className="space-y-3 py-1">
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Group</label>
-              <Select value={pool} onValueChange={(v) => setPool(v ?? "")} disabled={groups.length <= 1}>
-                <SelectTrigger className="w-48">
-                  <SelectValue placeholder="Choose a group…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {groups.map((g) => (
-                    <SelectItem key={g.id} value={g.id}>
-                      {g.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Schedule (systemd calendar)</label>
-              <Input className="w-40" value={schedule} onChange={(e) => setSchedule(e.target.value)} placeholder="02:00" />
-            </div>
-            <Button onClick={addJob} disabled={busy || !pool}>
-              <CalendarClock className="h-4 w-4" /> Schedule
-            </Button>
-            {pool && (
-              <Button variant="outline" onClick={() => backupNow(pool)} disabled={busy}>
-                <Play className="h-4 w-4" /> Back up now
-              </Button>
-            )}
-          </div>
-
-          <div className="divide-y divide-border/50">
-            {(data?.jobs ?? []).map((j) => (
-              <div key={j.id} className="flex items-center justify-between py-2 text-sm">
-                <span className="flex items-center gap-2">
-                  <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="font-medium">{j.pool ?? j.comment ?? j.id}</span>
-                  <span className="text-muted-foreground">@ {j.schedule}</span>
-                  <Badge variant="secondary" className="text-[10px]">{j.storage}</Badge>
-                  {j.enabled === 0 && <Badge variant="outline" className="text-[10px]">disabled</Badge>}
-                </span>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="h-7 w-7 text-destructive hover:text-destructive"
-                  onClick={() => delJob(j.id)}
-                  title="Remove schedule"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            ))}
-            {data && (data.jobs ?? []).length === 0 && (
-              <p className="py-3 text-sm text-muted-foreground">
-                No schedules yet — pick a group and a time above.
-              </p>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* recent backups */}
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        <Archive className="h-4 w-4" /> Recent snapshots
-      </h2>
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>When</TableHead>
-                <TableHead>Guest</TableHead>
-                <TableHead>Storage</TableHead>
-                <TableHead>Notes</TableHead>
-                <TableHead className="text-right">Size</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(data?.backups ?? []).map((b) => (
-                <TableRow key={b.volid}>
-                  <TableCell className="text-sm">{when(b.ctime)}</TableCell>
-                  <TableCell className="font-medium">
-                    {b.name ?? "—"}{" "}
-                    {b.vmid != null && (
-                      <span className="font-mono text-xs text-muted-foreground">#{b.vmid}</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary" className="text-[10px]">{b.storage}</Badge>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{b.notes || "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
-                    {bytes(b.size)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-8"
-                        disabled={busy || b.vmid == null}
-                        onClick={() => restore(b)}
-                        title="Restore this snapshot (overwrites the container)"
-                      >
-                        <RotateCcw className="h-4 w-4" /> Restore
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-8 w-8 text-destructive hover:text-destructive"
-                        disabled={busy}
-                        onClick={() => delBackup(b)}
-                        title="Delete this snapshot"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {!data && loading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={6}><Skeleton className="h-6 w-full" /></TableCell>
-                  </TableRow>
+      {/* Scheduled jobs */}
+      <div className="mb-2 flex items-center gap-2">
+        <CalendarClock className="h-4 w-4 text-white/30" />
+        <h2 className="text-[11px] font-semibold uppercase tracking-widest text-white/40">
+          Scheduled backups
+        </h2>
+      </div>
+      <div className="mb-8 overflow-hidden rounded-xl border border-white/[0.07] bg-panel">
+        <div className="flex flex-wrap items-end gap-3 border-b border-white/[0.06] bg-white/[0.02] p-4">
+          <div>
+            <FieldLabel>Group</FieldLabel>
+            {groups.length <= 4 ? (
+              <div className="flex overflow-hidden rounded-lg border border-white/[0.08]">
+                {groups.map((g) => (
+                  <button
+                    key={g.id}
+                    onClick={() => setPool(g.id)}
+                    disabled={groups.length <= 1}
+                    className={`px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-default ${
+                      pool === g.id
+                        ? "bg-white/[0.08] text-white"
+                        : "text-white/30 hover:text-white/60"
+                    }`}
+                  >
+                    {g.name}
+                  </button>
                 ))}
-              {data && (data.backups ?? []).length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
-                    No backups yet.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                {groups.length === 0 && (
+                  <span className="px-3 py-1.5 text-xs text-white/20">No groups</span>
+                )}
+              </div>
+            ) : (
+              <select
+                value={pool}
+                onChange={(e) => setPool(e.target.value)}
+                className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs text-white/80 outline-none"
+              >
+                <option value="">Choose group…</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div>
+            <FieldLabel>Schedule (systemd calendar)</FieldLabel>
+            <input
+              value={schedule}
+              onChange={(e) => setSchedule(e.target.value)}
+              placeholder="02:00"
+              className="w-32 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 font-mono text-xs text-white/80 outline-none placeholder:text-white/20 focus:border-white/[0.15]"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={addJob}
+              disabled={busy || !pool}
+              className="flex items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-40"
+            >
+              <CalendarClock className="h-3.5 w-3.5" /> Schedule
+            </button>
+            {pool && (
+              <button
+                onClick={() => backupNow(pool)}
+                disabled={busy}
+                className="flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-white/60 transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-40"
+              >
+                <Play className="h-3.5 w-3.5" /> Back up now
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="divide-y divide-white/[0.04]">
+          {(data?.jobs ?? []).map((j) => (
+            <div key={j.id} className="flex items-center justify-between px-4 py-3">
+              <div className="flex items-center gap-3 text-sm">
+                <Clock className="h-3.5 w-3.5 shrink-0 text-white/25" />
+                <span className="font-medium text-white/70">{j.pool ?? j.comment ?? j.id}</span>
+                <span className="text-white/30">@ {j.schedule}</span>
+                <span className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-white/40">
+                  {j.storage}
+                </span>
+                {j.enabled === 0 && (
+                  <span className="rounded border border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-400">
+                    disabled
+                  </span>
+                )}
+              </div>
+              <button
+                className="flex h-7 w-7 items-center justify-center rounded-md text-red-400/40 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                onClick={() => delJob(j.id)}
+                title="Remove schedule"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          {data && (data.jobs ?? []).length === 0 && (
+            <p className="px-4 py-4 text-sm text-white/25">
+              No schedules yet — pick a group and time above.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Recent snapshots */}
+      <div className="mb-2 flex items-center gap-2">
+        <Archive className="h-4 w-4 text-white/30" />
+        <h2 className="text-[11px] font-semibold uppercase tracking-widest text-white/40">
+          Recent snapshots
+        </h2>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-white/[0.07]">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-white/[0.06] bg-white/[0.02]">
+              {["When", "Guest", "Storage", "Notes", "Size", ""].map((h, i) => (
+                <th
+                  key={h || i}
+                  className={`px-4 py-2.5 text-[11px] font-medium uppercase tracking-widest text-white/30 ${
+                    i >= 4 ? "text-right" : "text-left"
+                  }`}
+                >
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {displayedBackups.map((b) => (
+              <tr
+                key={b.volid}
+                className="border-b border-white/[0.03] transition-colors hover:bg-white/[0.02] last:border-b-0"
+              >
+                <td className="px-4 py-3 text-xs tabular-nums text-white/50">{when(b.ctime)}</td>
+                <td className="px-4 py-3">
+                  <span className="font-medium text-white/70">{b.name ?? "—"}</span>
+                  {b.vmid != null && (
+                    <span className="ml-1.5 font-mono text-[11px] text-white/25">#{b.vmid}</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  <span className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-white/40">
+                    {b.storage}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-xs text-white/30">{b.notes || "—"}</td>
+                <td className="px-4 py-3 text-right font-mono text-xs text-white/30">
+                  {bytes(b.size)}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex justify-end gap-1">
+                    <button
+                      disabled={busy || b.vmid == null}
+                      onClick={() => restore(b)}
+                      className="flex items-center gap-1.5 rounded-md border border-white/[0.07] px-2 py-1 text-[11px] text-white/40 transition-colors hover:border-sky-500/30 hover:bg-sky-500/10 hover:text-sky-300 disabled:opacity-30"
+                      title="Restore this snapshot"
+                    >
+                      <RotateCcw className="h-3 w-3" /> Restore
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() => delBackup(b)}
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-red-400/40 transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:opacity-30"
+                      title="Delete this snapshot"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!data &&
+              loading &&
+              Array.from({ length: 3 }).map((_, i) => (
+                <tr key={`sk-${i}`} className="border-b border-white/[0.03]">
+                  <td colSpan={6} className="px-4 py-3">
+                    <div className="h-4 animate-pulse rounded bg-white/[0.04]" />
+                  </td>
+                </tr>
+              ))}
+            {data && displayedBackups.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-4 py-12 text-center text-sm text-white/25">
+                  {storage && allBackups.length > 0
+                    ? `No backups in "${storage}" — pick a different storage above.`
+                    : "No backups yet."}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }

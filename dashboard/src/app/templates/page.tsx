@@ -1,29 +1,31 @@
 "use client";
 
+import { useState } from "react";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { NewTemplateDialog } from "@/components/new-template-dialog";
+import { DeployEggDialog } from "@/components/deploy-egg-dialog";
+import { EggDetailDialog } from "@/components/egg-detail-dialog";
 import { AssetsSection } from "@/components/assets-section";
+import { RoleDot, roleColor } from "@/components/role-dot";
 import { bytes, pct } from "@/lib/format";
-import { HardDrive, LayoutTemplate, Boxes, Trash2, Cpu, MemoryStick } from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+  HardDrive, LayoutTemplate, Trash2, Cpu, MemoryStick,
+  Cable, Gamepad2, Server, Database, Box,
+  Infinity as InfinityIcon, Pin, Zap, Info,
+} from "lucide-react";
 
 type Blueprint = {
-  id: string; name: string; role: string; mode: string; cores: number; memory: number;
-  disk: number; port: number; description: string; software: { kind: string; version: string };
+  id: string; name: string; role: string; mode: string; persistent?: boolean;
+  base?: string; cores: number; memory: number; disk: number; port: number;
+  description: string; longDescription?: string;
+  software: { kind: string; version: string };
+  sharedAssets?: boolean; seed?: unknown;
+  custom?: { packages?: string; assets?: { url: string; dest: string }[]; installScript?: string; startCommand?: string };
 };
 type Data = {
   templates: { volid: string; file: string; os: string; size: number; format: string }[];
@@ -31,167 +33,202 @@ type Data = {
 };
 type Bps = { blueprints: Blueprint[]; builtin: string[] };
 
+const ROLE_ICON: Record<string, React.ElementType> = {
+  proxy: Cable, lobby: Gamepad2, smp: Server, db: Database, generic: Box,
+};
+
+function SectionLabel({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <div className="mb-3 mt-8 flex items-center justify-between">
+      <h2 className="eyebrow">{children}</h2>
+      {action}
+    </div>
+  );
+}
+
+type Img = { eggId: string; templates: Record<string, number>; version: number; builtAt: number; building?: boolean; error?: string };
+
 export default function TemplatesPage() {
   const { data, loading, refresh } = usePoll<Data>("/api/templates", 15000);
   const { data: bps, refresh: refreshBps } = usePoll<Bps>("/api/blueprints", 15000);
+  const { data: imgs, refresh: refreshImgs } = usePoll<{ images: Img[] }>("/api/images", 6000);
   const builtin = new Set(bps?.builtin ?? []);
+  const CLONEABLE = new Set(["paper", "velocity", "nginx"]);
+  const [detail, setDetail] = useState<Blueprint | null>(null);
+
+  async function buildImage(eggId: string) {
+    await fetch("/api/images/build", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ eggId }) });
+    toast.success(`Building fast-clone image for ${eggId}…`);
+    setTimeout(refreshImgs, 1000);
+  }
 
   async function delTemplate(id: string) {
-    if (!confirm(`Delete template "${id}"?`)) return;
+    if (!confirm(`Delete egg "${id}"?`)) return;
     const res = await fetch(`/api/blueprints/${id}`, { method: "DELETE" });
     const json = await res.json();
     if (json.error) return toast.error(json.error);
-    toast.success("Template deleted");
+    toast.success("Egg deleted");
     refreshBps();
   }
 
   return (
     <>
       <PageHeader
-        title="Templates & Storage"
-        subtitle="Server templates, base images, and the datastores backing them"
+        title="Templates"
+        subtitle="Deployable server eggs, uploaded assets, and node storage"
         onRefresh={() => { refresh(); refreshBps(); }}
         loading={loading}
       >
         <NewTemplateDialog onCreated={refreshBps} />
       </PageHeader>
 
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        <Boxes className="h-4 w-4" /> Server templates
-      </h2>
-      <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {(bps?.blueprints ?? []).map((b) => (
-          <Card key={b.id}>
-            <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
-              <div>
-                <CardTitle className="text-base">{b.name}</CardTitle>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {b.role} · {b.software.kind} {b.software.version}
-                </p>
+      {/* ── Egg gallery ───────────────────────────────────────────────── */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {(bps?.blueprints ?? []).map((b) => {
+          const Icon = ROLE_ICON[b.role] ?? Box;
+          const color = roleColor(b.role);
+          const isDynamic = b.mode === "dynamic";
+          const isBuiltin = builtin.has(b.id);
+
+          return (
+            <div key={b.id} className="group flex flex-col overflow-hidden rounded-lg border border-hairline bg-panel transition-colors hover:border-white/15">
+              {/* Header */}
+              <div className="flex items-start gap-3 p-4">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md" style={{ background: `color-mix(in oklch, ${color} 14%, transparent)` }}>
+                  <Icon className="h-5 w-5" style={{ color }} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="truncate font-semibold">{b.name}</div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground/50 hover:bg-accent hover:text-foreground" onClick={() => setDetail(b)} title="Details">
+                        <Info className="h-3.5 w-3.5" />
+                      </Button>
+                      {isBuiltin ? (
+                        <span className="rounded bg-accent px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">built-in</span>
+                      ) : (
+                        <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive/50 hover:bg-destructive/10 hover:text-destructive" onClick={() => delTemplate(b.id)} title="Delete">
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <RoleDot role={b.role} label />
+                    <span>·</span>
+                    <span className="font-mono">{b.software.kind} {b.software.version}</span>
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center gap-1">
-                <Badge variant="outline" className={b.mode === "dynamic" ? "border-orange-500/30 bg-orange-500/10 text-orange-400" : "border-sky-500/30 bg-sky-500/10 text-sky-400"}>
-                  {b.mode}
-                </Badge>
-                {builtin.has(b.id) ? (
-                  <Badge variant="secondary" className="text-[10px]">built-in</Badge>
-                ) : (
-                  <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => delTemplate(b.id)} title="Delete template">
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <p className="line-clamp-2 text-xs text-muted-foreground">{b.description}</p>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+
+              {/* Description — click to open the full detail view */}
+              {b.description && (
+                <button onClick={() => setDetail(b)} className="px-4 text-left">
+                  <span className="line-clamp-2 text-[12px] leading-relaxed text-muted-foreground/80 transition-colors hover:text-muted-foreground">{b.description}</span>
+                </button>
+              )}
+
+              {/* Spec strip — mt-auto pins this + the fast-image row + deploy button to the
+                  bottom, so cards in a row align regardless of description length. */}
+              <div className="mt-auto flex items-center gap-3 px-4 pt-3 font-mono text-[11px] text-muted-foreground">
                 <span className="flex items-center gap-1"><Cpu className="h-3 w-3" />{b.cores}c</span>
                 <span className="flex items-center gap-1"><MemoryStick className="h-3 w-3" />{b.memory}MB</span>
                 <span className="flex items-center gap-1"><HardDrive className="h-3 w-3" />{b.disk}GB</span>
-                <span>:{b.port}</span>
+                <span className="ml-auto flex items-center gap-1">
+                  {isDynamic ? <InfinityIcon className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+                  {b.mode}
+                </span>
               </div>
-            </CardContent>
-          </Card>
-        ))}
-        {!bps && <Skeleton className="h-28 w-full rounded-xl" />}
+
+              {/* Fast-clone image status (for autoscaling) */}
+              {CLONEABLE.has(b.software.kind) && (() => {
+                const img = imgs?.images.find((x) => x.eggId === b.id);
+                const nodes = img ? Object.keys(img.templates).length : 0;
+                return (
+                  <div className="mt-3 flex items-center gap-2 px-4 text-[11px]">
+                    <Zap className={cn("h-3 w-3", img && nodes > 0 && !img.building ? "text-brand" : "text-muted-foreground/50")} />
+                    <span className="text-muted-foreground">
+                      {img?.building ? "building image…"
+                        : img && nodes > 0 ? `fast image · ${nodes} node(s) · v${img.version}`
+                        : "no fast image"}
+                    </span>
+                    <button onClick={() => buildImage(b.id)} disabled={img?.building}
+                      className="ml-auto rounded border border-hairline px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground disabled:opacity-50">
+                      {img && nodes > 0 ? "Rebuild" : "Build"}
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {/* Deploy CTA */}
+              <div className="mt-3 border-t border-hairline p-3">
+                <DeployEggDialog egg={b} onDeployed={refreshBps} />
+              </div>
+            </div>
+          );
+        })}
+        {!bps && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-52 rounded-lg" />)}
       </div>
 
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        <HardDrive className="h-4 w-4" /> Assets (worlds &amp; plugins)
-      </h2>
+      {/* ── Assets ────────────────────────────────────────────────────── */}
+      <SectionLabel>Assets · Worlds &amp; Plugins</SectionLabel>
       <AssetsSection />
 
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        Storage
-      </h2>
-      <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {!data &&
-          loading &&
-          Array.from({ length: 3 }).map((_, i) => (
-            <Card key={`sk-${i}`}>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <Skeleton className="h-5 w-24" />
-                <Skeleton className="h-5 w-12 rounded-full" />
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <Skeleton className="h-2 w-full" />
-                <Skeleton className="h-3 w-32" />
-              </CardContent>
-            </Card>
-          ))}
-        {data?.storage.map((s) => (
-          <Card key={s.storage}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <HardDrive className="h-4 w-4 text-muted-foreground" />
-                {s.storage}
-              </CardTitle>
-              <Badge variant="secondary">{s.type}</Badge>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {s.total > 0 && <Progress value={pct(s.used, s.total)} />}
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>{bytes(s.avail)} free</span>
-                <span>{s.total > 0 ? bytes(s.total) : "—"} total</span>
+      {/* ── Storage ───────────────────────────────────────────────────── */}
+      <SectionLabel>Node storage</SectionLabel>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {!data && loading && Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
+        {data?.storage.map((s) => {
+          const usedPct = s.total > 0 ? pct(s.used, s.total) : 0;
+          const fill = usedPct > 85 ? "#f87171" : usedPct > 65 ? "#fb923c" : "#34d399";
+          return (
+            <div key={s.storage} className="panel p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2"><HardDrive className="h-4 w-4 text-muted-foreground" /><span className="font-semibold">{s.storage}</span></div>
+                <span className="rounded bg-accent px-2 py-0.5 text-[10px] font-medium text-muted-foreground">{s.type}</span>
               </div>
-              <div className="text-[11px] text-muted-foreground">{s.content}</div>
-            </CardContent>
-          </Card>
-        ))}
+              {s.total > 0 && (
+                <div className="mt-3">
+                  <div className="mb-1.5 flex justify-between text-[11px] text-muted-foreground"><span>{bytes(s.avail)} free</span><span>{Math.round(usedPct)}% used</span></div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-accent"><div className="h-full rounded-full transition-all" style={{ width: `${usedPct}%`, background: fill }} /></div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        LXC Templates
-      </h2>
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Image</TableHead>
-                <TableHead>OS</TableHead>
-                <TableHead>Format</TableHead>
-                <TableHead className="text-right">Size</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data?.templates.map((t) => (
-                <TableRow key={t.volid}>
-                  <TableCell className="flex items-center gap-2 font-medium">
-                    <LayoutTemplate className="h-4 w-4 text-muted-foreground" />
-                    {t.file}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="capitalize">{t.os}</Badge>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {t.format || (t.file.endsWith(".zst") ? "tar.zst" : "tar.gz")}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
-                    {bytes(t.size)}
-                  </TableCell>
-                </TableRow>
+      {/* ── LXC base images ───────────────────────────────────────────── */}
+      <SectionLabel>LXC base images</SectionLabel>
+      <div className="overflow-x-auto rounded-lg border border-hairline bg-panel">
+        <table className="w-full min-w-[480px] text-sm">
+          <thead>
+            <tr className="border-b border-hairline">
+              {["Image", "OS", "Format", "Size"].map((h, i) => (
+                <th key={h} className={`px-4 py-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground ${i === 3 ? "text-right" : "text-left"}`}>{h}</th>
               ))}
-              {!data &&
-                loading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={`sk-${i}`}>
-                    <TableCell colSpan={4}>
-                      <Skeleton className="h-6 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              {data && data.templates.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={4} className="py-10 text-center text-sm text-muted-foreground">
-                    No templates downloaded yet.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+            </tr>
+          </thead>
+          <tbody>
+            {data?.templates.map((t) => (
+              <tr key={t.volid} className="border-b border-hairline transition-colors last:border-0 hover:bg-accent/40">
+                <td className="px-4 py-2.5"><span className="flex items-center gap-2"><LayoutTemplate className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /><span className="font-mono text-xs">{t.file}</span></span></td>
+                <td className="px-4 py-2.5"><span className="rounded bg-accent px-2 py-0.5 text-[10px] capitalize text-muted-foreground">{t.os}</span></td>
+                <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{t.format || (t.file.endsWith(".zst") ? "tar.zst" : "tar.gz")}</td>
+                <td className="px-4 py-2.5 text-right font-mono text-xs text-muted-foreground">{bytes(t.size)}</td>
+              </tr>
+            ))}
+            {!data && loading && Array.from({ length: 3 }).map((_, i) => (
+              <tr key={i}><td colSpan={4} className="px-4 py-2"><Skeleton className="h-4 w-full" /></td></tr>
+            ))}
+            {data && data.templates.length === 0 && (
+              <tr><td colSpan={4} className="px-4 py-10 text-center text-sm text-muted-foreground">No LXC base images downloaded yet.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {detail && <EggDetailDialog egg={detail} open={!!detail} onOpenChange={(o) => !o && setDetail(null)} />}
     </>
   );
 }
