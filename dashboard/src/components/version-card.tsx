@@ -20,6 +20,7 @@ export function VersionCard({ status, onChanged }: { status: TaskVersionStatus; 
   const [busy, setBusy] = useState<string | null>(null);
   const [versions, setVersions] = useState<string[]>([]);
   const [pickOpen, setPickOpen] = useState(false);
+  const [pickVersion, setPickVersion] = useState("");
 
   useEffect(() => {
     if (!pickOpen || versions.length) return;
@@ -130,23 +131,33 @@ export function VersionCard({ status, onChanged }: { status: TaskVersionStatus; 
             <ChevronDown className={cn("h-3 w-3 transition-transform", pickOpen && "rotate-180")} /> pin a different version
           </button>
           {pickOpen && (
-            <div className="player-row-in mt-2 flex flex-wrap gap-1">
-              {versions.length === 0 && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-              {versions.slice(0, 16).map((v) => (
-                <button
-                  key={v}
-                  disabled={busy !== null || v === status.version}
-                  onClick={() => {
-                    if (confirm(`Pin ${status.name} to ${status.kind} ${v} and install its latest build now?`)) post({ version: v }, "pin");
-                  }}
-                  className={cn(
-                    "rounded border px-2 py-0.5 font-mono text-[11px] transition-colors",
-                    v === status.version ? "border-brand/50 bg-brand/10 text-brand" : "border-hairline text-muted-foreground hover:bg-accent hover:text-foreground",
-                  )}
-                >
-                  {v}
-                </button>
-              ))}
+            <div className="player-row-in mt-2 flex items-center gap-2">
+              <select
+                value={pickVersion}
+                onChange={(e) => setPickVersion(e.target.value)}
+                disabled={busy !== null}
+                className="h-8 min-w-44 rounded-md border border-hairline bg-panel px-2 font-mono text-xs outline-none focus:border-brand/50"
+              >
+                <option value="">{versions.length === 0 ? "loading versions…" : "select a version…"}</option>
+                {versions.map((v) => (
+                  <option key={v} value={v}>
+                    {v}{v === status.version ? "  (current)" : ""}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => {
+                  if (!pickVersion) return;
+                  if (confirm(`Pin ${status.name} to ${status.kind} ${pickVersion} and install its latest build now? Running instances restart.`)) {
+                    post({ version: pickVersion }, "pin");
+                  }
+                }}
+                disabled={busy !== null || !pickVersion || pickVersion === status.version}
+                className="flex h-8 items-center gap-1.5 rounded-md border border-hairline px-3 text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+              >
+                {busy === "pin" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PackageCheck className="h-3.5 w-3.5" />}
+                Pin &amp; install
+              </button>
             </div>
           )}
         </div>

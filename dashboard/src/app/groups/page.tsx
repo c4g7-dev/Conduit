@@ -435,7 +435,7 @@ export default function ServersPage() {
                           if (!v || (!v.hotfixAvailable && !v.updateAvailable)) return null;
                           return (
                             <ArrowUpCircle
-                              className={cn("h-3 w-3 shrink-0", v.updateAvailable ? "text-brand" : "text-amber-400")}
+                              className={cn("h-3 w-3 shrink-0", v.updateAvailable ? "text-yellow-400" : "text-amber-500")}
                               aria-label={v.updateAvailable ? `update available: ${v.latestVersion}` : `hotfix available: build ${v.latestBuild}`}
                             />
                           );
