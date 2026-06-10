@@ -102,11 +102,13 @@ export function VersionCard({ status, onChanged }: { status: TaskVersionStatus; 
       </div>
 
       {status.updateAvailable && (
-        <div className="mt-3 rounded-md border border-brand/30 bg-brand/[0.06] p-3">
+        // deliberately muted: the pinned version is intact and running — a newer full
+        // version is information, not a problem.
+        <div className="mt-3 rounded-md border border-hairline bg-accent/30 p-3">
           <div className="flex flex-wrap items-center gap-2">
-            <ArrowUpCircle className="h-4 w-4 shrink-0 text-brand" />
-            <span className="text-[13px]">
-              New version available: <span className="font-mono font-semibold text-brand">{status.latestVersion}</span>
+            <ArrowUpCircle className="h-4 w-4 shrink-0 text-muted-foreground/60" />
+            <span className="text-[13px] text-muted-foreground">
+              Newer version exists: <span className="font-mono text-foreground/80">{status.latestVersion}</span>
             </span>
             <button
               onClick={() => {
@@ -115,13 +117,13 @@ export function VersionCard({ status, onChanged }: { status: TaskVersionStatus; 
                 }
               }}
               disabled={busy !== null}
-              className="ml-auto flex items-center gap-1.5 rounded-md bg-brand/15 px-2.5 py-1.5 text-[12px] font-medium text-brand transition-colors hover:bg-brand/25 disabled:opacity-50"
+              className="ml-auto flex items-center gap-1.5 rounded-md border border-hairline px-2.5 py-1.5 text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
             >
               {busy === "upgrade" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowUpCircle className="h-3.5 w-3.5" />}
               Upgrade to {status.latestVersion}
             </button>
           </div>
-          <p className="mt-1.5 text-[11px] text-muted-foreground">Full versions are never applied automatically — only on this explicit action.</p>
+          <p className="mt-1.5 text-[11px] text-muted-foreground/70">Full versions are never applied automatically — only on this explicit action.</p>
         </div>
       )}
 
@@ -148,15 +150,18 @@ export function VersionCard({ status, onChanged }: { status: TaskVersionStatus; 
               <button
                 onClick={() => {
                   if (!pickVersion) return;
-                  if (confirm(`Pin ${status.name} to ${status.kind} ${pickVersion} and install its latest build now? Running instances restart.`)) {
+                  const same = pickVersion === status.version;
+                  if (confirm(same
+                    ? `Re-pin ${status.name} to ${status.kind} ${pickVersion} and reinstall its latest build? Running instances restart.`
+                    : `Pin ${status.name} to ${status.kind} ${pickVersion} and install its latest build now? Running instances restart.`)) {
                     post({ version: pickVersion }, "pin");
                   }
                 }}
-                disabled={busy !== null || !pickVersion || pickVersion === status.version}
+                disabled={busy !== null || !pickVersion}
                 className="flex h-8 items-center gap-1.5 rounded-md border border-hairline px-3 text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
               >
                 {busy === "pin" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PackageCheck className="h-3.5 w-3.5" />}
-                Pin &amp; install
+                {pickVersion && pickVersion === status.version ? "Pin" : "Pin & install"}
               </button>
             </div>
           )}

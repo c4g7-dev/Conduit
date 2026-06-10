@@ -463,10 +463,12 @@ export default function ServersPage() {
                         {(() => {
                           const v = verByTask.get(task.id);
                           if (!v || (!v.hotfixAvailable && !v.updateAvailable)) return null;
+                          // hotfix (same line, actionable) = amber; a newer FULL version while the
+                          // pinned one runs fine = muted grey — informational, not an alert.
                           return (
                             <ArrowUpCircle
-                              className={cn("h-3 w-3 shrink-0", v.updateAvailable ? "text-yellow-400" : "text-amber-500")}
-                              aria-label={v.updateAvailable ? `update available: ${v.latestVersion}` : `hotfix available: build ${v.latestBuild}`}
+                              className={cn("h-3 w-3 shrink-0", v.hotfixAvailable ? "text-amber-500" : "text-muted-foreground/50")}
+                              aria-label={v.hotfixAvailable ? `hotfix available: build ${v.latestBuild}` : `newer version exists: ${v.latestVersion}`}
                             />
                           );
                         })()}
