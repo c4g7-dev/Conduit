@@ -124,9 +124,39 @@ public class ConduitVelocityPlugin {
             players.add(m);
         }
         int max = maxPlayers();
+        client.queues = queueSnapshot();
         for (ConduitClient.Action a : client.heartbeat(players.size(), max, null, players)) execute(a);
         updateTablist();
         processQueues();
+    }
+
+    /** Queue state for the panel: [{id, players: [{uuid,name,priority}]}] in admit order. */
+    private com.google.gson.JsonArray queueSnapshot() {
+        com.google.gson.JsonArray out = new com.google.gson.JsonArray();
+        for (var entry : queues.entrySet()) {
+            var q = entry.getValue();
+            synchronized (q) {
+                if (q.isEmpty()) continue;
+                java.util.List<java.util.UUID> order = new java.util.ArrayList<>(q.keySet());
+                order.sort((a, b) -> Boolean.compare(!hasQueuePriority(a), !hasQueuePriority(b)));
+                com.google.gson.JsonArray ps = new com.google.gson.JsonArray();
+                for (java.util.UUID id : order) {
+                    Player p = proxy.getPlayer(id).orElse(null);
+                    if (p == null) continue;
+                    JsonObject pj = new JsonObject();
+                    pj.addProperty("uuid", id.toString());
+                    pj.addProperty("name", p.getUsername());
+                    if (hasQueuePriority(id)) pj.addProperty("priority", true);
+                    ps.add(pj);
+                }
+                if (ps.size() == 0) continue;
+                JsonObject qj = new JsonObject();
+                qj.addProperty("id", entry.getKey());
+                qj.add("players", ps);
+                out.add(qj);
+            }
+        }
+        return out;
     }
 
     /* ---- config helpers (panel-driven) ---- */
@@ -410,6 +440,10 @@ public class ConduitVelocityPlugin {
             case "broadcast" -> proxy.getAllPlayers().forEach(p -> p.sendMessage(LEGACY.deserialize(a.text())));
             case "kick" -> proxy.getPlayer(a.player()).ifPresent(p ->
                     p.disconnect(LEGACY.deserialize(a.reason() == null ? "Kicked" : a.reason())));
+            case "unqueue" -> proxy.getPlayer(a.player()).ifPresent(p -> {
+                dropFromQueues(p.getUniqueId());
+                p.sendMessage(LEGACY.deserialize("&8[&bConduit&8] &7You were removed from the queue."));
+            });
             default -> {}
         }
     }

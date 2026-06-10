@@ -52,6 +52,9 @@ import {
   CornerUpLeft,
   FolderPlus,
   Rocket,
+  Hourglass,
+  Star,
+  X,
 } from "lucide-react";
 
 /* ---- types (mirror /api/conduit/state) ----------------------------------- */
@@ -76,9 +79,21 @@ type Metrics = { instances: MetricRow[]; totals: { players: number; capacity: nu
 
 type Tab = "overview" | "instances" | "routing" | "world" | "settings";
 
+type ConnQueues = { servers: { env: string; queues?: { id: string; players: { uuid: string; name: string; priority?: boolean }[] }[] }[] };
+
 export default function ServersPage() {
   const { data, loading, refresh } = usePoll<State>("/api/conduit/state", 4000);
   const { data: metrics } = usePoll<Metrics>("/api/metrics", 5000);
+  // live subgroup join queues, reported by the proxy connector each heartbeat
+  const { data: connData, refresh: refreshConn } = usePoll<ConnQueues>("/api/connector/servers", 5000);
+  const queuesById = useMemo(() => {
+    const m = new Map<string, { uuid: string; name: string; priority?: boolean }[]>();
+    for (const s of connData?.servers ?? []) {
+      if (s.env !== "proxy") continue;
+      for (const q of s.queues ?? []) m.set(q.id, q.players);
+    }
+    return m;
+  }, [connData]);
 
   const groups = useMemo(() => data?.groups ?? [], [data]);
   const allTasks = useMemo(() => groups.flatMap((g) => g.tasks), [groups]);
@@ -98,6 +113,19 @@ export default function ServersPage() {
   const [sgSettings, setSgSettings] = useState<{ group: Group; sg: Subgroup } | null>(null);
   const [deployTo, setDeployTo] = useState<{ group: Group; sg?: Subgroup } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null); // "g:<id>" | "sg:<gid>:<sgid>"
+  const [queueView, setQueueView] = useState<{ sg: Subgroup } | null>(null);
+
+  async function unqueue(name: string) {
+    const res = await fetch("/api/connector/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "unqueue", player: name }),
+    });
+    const json = await res.json();
+    if (json.error) return toast.error(json.error);
+    toast.success(`${name} removed from the queue`);
+    setTimeout(refreshConn, 1500); // proxy drains within its 1s tick
+  }
   const { data: nodesData } = usePoll<{ nodes: { node: string; status: string }[] }>("/api/nodes", 15000);
   const nodeNames = (nodesData?.nodes ?? []).filter((n) => n.status === "online").map((n) => n.node);
   const [tab, setTab] = useState<Tab>("overview");
@@ -460,6 +488,8 @@ export default function ServersPage() {
                   const running = sgTasks.reduce((n, t) => n + t.running, 0);
                   const dKey = `sg:${group.id}:${sg.id}`;
                   const maint = chainMaint(sg.id);
+                  const sgCol = collapsed[dKey];
+                  const queued = queuesById.get(sg.id) ?? [];
                   return (
                     <div key={sg.id} className="pt-0.5">
                       <ContextMenu>
@@ -467,14 +497,15 @@ export default function ServersPage() {
                           render={
                             <div
                               className={cn(
-                                "flex cursor-default items-center gap-1.5 rounded px-2 py-1 transition-colors hover:bg-accent/40",
+                                "flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 transition-colors hover:bg-accent/40",
                                 dropTarget === dKey && "bg-brand/15 ring-1 ring-brand/50",
                               )}
+                              onClick={() => setCollapsed((c) => ({ ...c, [dKey]: !c[dKey] }))}
                               {...dragProps(dKey, group.id, sg.id)}
                             />
                           }
                         >
-                          <CornerDownRight className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+                          <ChevronDown className={cn("h-3 w-3 shrink-0 text-muted-foreground/50 transition-transform", sgCol && "-rotate-90")} />
                           <span className={cn(
                             "flex-1 truncate text-[10px] font-semibold uppercase tracking-wider",
                             maint ? "text-amber-400/90" : "text-muted-foreground/80",
@@ -482,12 +513,22 @@ export default function ServersPage() {
                             {sg.name}
                           </span>
                           {maint && <Wrench className="h-3 w-3 text-amber-400" />}
+                          {queued.length > 0 && (
+                            <span className="flex items-center gap-0.5 rounded bg-brand/15 px-1 py-0.5 text-[9px] font-semibold text-brand" title={`${queued.length} player(s) queued`}>
+                              <Hourglass className="h-2.5 w-2.5" /> {queued.length}
+                            </span>
+                          )}
                           <span className="tabular-nums text-[10px] text-muted-foreground/60" title={`${online} players · ${running} server(s)${sg.slotLimit ? ` · cap ${sg.slotLimit}` : ""}`}>
                             {online}{sg.slotLimit ? `/${sg.slotLimit}` : ""}P · {running}S
                           </span>
                         </ContextMenuTrigger>
                         <ContextMenuContent>
                           <ContextMenuLabel>{group.name} / {sg.name}</ContextMenuLabel>
+                          {queued.length > 0 && (
+                            <ContextMenuItem onClick={() => setQueueView({ sg })}>
+                              <Hourglass /> View queue ({queued.length})
+                            </ContextMenuItem>
+                          )}
                           <ContextMenuItem onClick={() => setDeployTo({ group, sg })}>
                             <Rocket /> Deploy server…
                           </ContextMenuItem>
@@ -506,13 +547,15 @@ export default function ServersPage() {
                           </ContextMenuItem>
                         </ContextMenuContent>
                       </ContextMenu>
-                      <div className="ml-3 space-y-px border-l border-hairline pl-1.5">
-                        {sgTasks.length === 0 && children.length === 0 && (
-                          <div className="px-2 py-1 text-[11px] text-muted-foreground/50">empty — drag a server here</div>
-                        )}
-                        {sgTasks.map((task) => taskRow(task, maint))}
-                        {children.map((c) => renderSg(c, depth + 1))}
-                      </div>
+                      {!sgCol && (
+                        <div className="ml-3 space-y-px border-l border-hairline pl-1.5">
+                          {sgTasks.length === 0 && children.length === 0 && (
+                            <div className="px-2 py-1 text-[11px] text-muted-foreground/50">empty — drag a server here</div>
+                          )}
+                          {sgTasks.map((task) => taskRow(task, maint))}
+                          {children.map((c) => renderSg(c, depth + 1))}
+                        </div>
+                      )}
                     </div>
                   );
                 };
@@ -661,6 +704,15 @@ export default function ServersPage() {
           open={!!sgSettings}
           onOpenChange={(o) => { if (!o) setSgSettings(null); }}
           onSaved={refresh}
+        />
+      )}
+      {queueView && (
+        <QueueDialog
+          sgName={queueView.sg.name}
+          slotLimit={queueView.sg.slotLimit}
+          players={queuesById.get(queueView.sg.id) ?? []}
+          onClose={() => setQueueView(null)}
+          onUnqueue={unqueue}
         />
       )}
       {deployTo && (
@@ -1001,6 +1053,63 @@ function Row({ k, v }: { k: string; v: React.ReactNode }) {
       <dt className="text-muted-foreground">{k}</dt>
       <dd className="text-right font-medium">{v}</dd>
     </div>
+  );
+}
+
+/* ---- subgroup queue dialog ------------------------------------------------ */
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+
+/** Live view of a capped subgroup's join queue (admit order — priority first), with
+ *  per-player remove. Player data refreshes with the connector poll while open. */
+function QueueDialog({ sgName, slotLimit, players, onClose, onUnqueue }: {
+  sgName: string;
+  slotLimit?: number;
+  players: { uuid: string; name: string; priority?: boolean }[];
+  onClose: () => void;
+  onUnqueue: (name: string) => void;
+}) {
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Hourglass className="h-4 w-4 text-brand" /> Queue · {sgName}
+            <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {players.length} waiting{slotLimit ? ` · cap ${slotLimit}` : ""}
+            </span>
+          </DialogTitle>
+          <DialogDescription>
+            Admit order — <Star className="inline h-3 w-3 text-amber-400" /> priority (conduit.queue.priority)
+            skips ahead. The proxy admits players automatically as slots free.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-80 space-y-1 overflow-y-auto py-1">
+          {players.length === 0 && (
+            <p className="player-empty-in py-6 text-center text-sm text-muted-foreground">Queue is empty.</p>
+          )}
+          {players.map((p, i) => (
+            <div
+              key={p.uuid}
+              className="player-row-in flex items-center gap-2.5 rounded-md border border-hairline px-3 py-2"
+              style={{ animationDelay: `${Math.min(i * 20, 200)}ms` }}
+            >
+              <span className="w-6 text-center font-mono text-[11px] text-muted-foreground">#{i + 1}</span>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={`https://mc-heads.net/avatar/${p.name}/20`} alt="" className="h-5 w-5 rounded-sm" />
+              <span className="flex-1 truncate text-[13px]">{p.name}</span>
+              {p.priority && <Star className="h-3.5 w-3.5 text-amber-400" />}
+              <button
+                onClick={() => onUnqueue(p.name)}
+                className="rounded p-1 text-destructive/60 transition-colors hover:bg-destructive/10 hover:text-destructive"
+                title="Remove from queue"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
