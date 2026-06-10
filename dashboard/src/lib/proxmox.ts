@@ -12,7 +12,7 @@ const HOST = process.env.PROXMOX_HOST ?? "10.27.27.126";
 const PORT = Number(process.env.PROXMOX_PORT ?? "8006");
 const USER = process.env.PROXMOX_USER ?? "root@pam";
 const PASS = process.env.PROXMOX_PASS ?? "";
-export const NODE = process.env.PROXMOX_NODE ?? "skdCore01";
+export const NODE = process.env.PROXMOX_NODE ?? "SkdCore01";
 
 // Preferred auth: a PVE API token (revocable, scoped, no CSRF). Falls back to a
 // password ticket only if no token is configured. Format: USER!TOKENID = SECRET.
@@ -173,7 +173,7 @@ export type RrdPoint = {
   netin?: number; netout?: number; diskread?: number; diskwrite?: number;
 };
 
-/** Stable node ordering by name (numeric + case-insensitive): skdCore01 < SkdCore02 < SkdCore03. */
+/** Stable node ordering by name (numeric + case-insensitive): SkdCore01 < SkdCore02 < SkdCore03. */
 export const byNodeName = (a: { node: string }, b: { node: string }) =>
   a.node.localeCompare(b.node, undefined, { numeric: true, sensitivity: "base" });
 

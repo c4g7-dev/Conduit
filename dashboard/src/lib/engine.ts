@@ -775,7 +775,10 @@ export async function reconcileAll(): Promise<string[]> {
   if (ctl.restores > 0) return ["skip: restore in progress"];
   ctl.busy = true;
   const log: string[] = [];
-  let dirty = false;
+  // Autoscale desired-count updates collected during the tick and applied via mutate() at the
+  // end. NEVER saveDB(db) wholesale here: `db` was read at tick start, and a long tick would
+  // clobber anything written to the store meanwhile (schedules/templates silently vanished).
+  const desiredChanges = new Map<string, number>();
   try {
     await loadBlueprints(); // refresh custom templates so blueprint() sees them
     const db = await getDB();
@@ -835,8 +838,8 @@ export async function reconcileAll(): Promise<string[]> {
         const load = live.reduce((n, i) => n + (players.get(i.vmid) ?? 0), 0);
         desired = autoscaleTarget(load, task.playersPerInstance, task.min, cap, task.scaleUpPercent);
         if (desired !== task.desired) {
-          task.desired = desired; // reflect the live target in the store/UI
-          dirty = true;
+          task.desired = desired; // reflect the live target for the rest of this tick
+          desiredChanges.set(task.id, desired);
         }
         if (desired !== have)
           log.push(`autoscale ${task.id}: ${load}p → want ${desired} (have ${have})`);
@@ -968,7 +971,14 @@ export async function reconcileAll(): Promise<string[]> {
     await autoUpdatePass(db, all, log);
     await templateSyncPass(db, log);
 
-    if (dirty) await saveDB(db).catch(() => {});
+    if (desiredChanges.size) {
+      await mutate((d) => {
+        for (const [id, want] of desiredChanges) {
+          const x = d.tasks.find((t) => t.id === id);
+          if (x) x.desired = want;
+        }
+      }).catch(() => {});
+    }
   } catch (e) {
     log.push(`! reconcile error: ${String(e)}`);
   } finally {

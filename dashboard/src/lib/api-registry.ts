@@ -87,16 +87,16 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
   { method: "POST", path: "/api/luckperms/tracks", group: "Automation", desc: "Create/replace a track's ladder, low → high (networksync).", sampleBody: { name: "staff", groups: ["helper", "mod", "admin"] } },
   { method: "DELETE", path: "/api/luckperms/tracks", group: "Automation", desc: "Delete a track.", sampleBody: { name: "staff" } },
   { method: "GET", path: "/api/activity", group: "Automation", safe: true, desc: "Engine event feed + derived health alerts." },
-  { method: "GET", path: "/api/schedules", group: "Automation", safe: true, desc: "Scheduled restarts/broadcasts." },
-  { method: "POST", path: "/api/schedules", group: "Automation", desc: "Create a schedule (restart/broadcast, daily HH:MM, warnings).", sampleBody: { name: "Nightly", groupId: "network", action: "restart", at: "04:00", warnMins: [5, 1] } },
-  { method: "PATCH", path: "/api/schedules/:id", group: "Automation", desc: "Update/toggle a schedule.", params: [{ name: "id", example: "nightly-ab12" }], sampleBody: { enabled: false } },
+  { method: "GET", path: "/api/schedules", group: "Automation", safe: true, desc: "Scheduled restarts/commands/backups." },
+  { method: "POST", path: "/api/schedules", group: "Automation", desc: "Create a schedule. target = {type:group|subgroup|task|instance,…}; action = restart (warnMins + onlyWhenEmpty) | command (command) | backup (backupStorage). Daily HH:MM.", sampleBody: { name: "Nightly", target: { type: "task", id: "network-world" }, action: "restart", at: "04:00", warnMins: [5, 1], onlyWhenEmpty: true } },
+  { method: "PATCH", path: "/api/schedules/:id", group: "Automation", desc: "Update/toggle a schedule (enabled, name, at, command, warnMins, onlyWhenEmpty).", params: [{ name: "id", example: "nightly-ab12" }], sampleBody: { enabled: false } },
   { method: "DELETE", path: "/api/schedules/:id", group: "Automation", destructive: true, desc: "Delete a schedule.", params: [{ name: "id", example: "nightly-ab12" }] },
   { method: "POST", path: "/api/groups/:id/broadcast", group: "Automation", desc: "Broadcast a console command to every running server in a group.", params: [{ name: "id", example: "network" }], sampleBody: { command: "say hello" } },
 
   // ── Infrastructure ───────────────────────────────────────────────────
   { method: "GET", path: "/api/nodes", group: "Infrastructure", safe: true, desc: "Proxmox nodes (name + online status)." },
   { method: "GET", path: "/api/containers", group: "Infrastructure", safe: true, desc: "All LXC instances across the cluster." },
-  { method: "POST", path: "/api/containers/:vmid/action", group: "Infrastructure", desc: "start | stop | shutdown | reboot a container.", params: [{ name: "vmid", example: "202" }], sampleBody: { action: "reboot", node: "skdCore01" } },
+  { method: "POST", path: "/api/containers/:vmid/action", group: "Infrastructure", desc: "start | stop | shutdown | reboot a container.", params: [{ name: "vmid", example: "202" }], sampleBody: { action: "reboot", node: "SkdCore01" } },
   { method: "POST", path: "/api/containers/:vmid/migrate", group: "Infrastructure", desc: "Live-migrate a container to another node.", params: [{ name: "vmid", example: "202" }], sampleBody: { target: "SkdCore02" } },
   { method: "DELETE", path: "/api/containers/:vmid", group: "Infrastructure", destructive: true, desc: "Permanently delete an instance + purge its disk; lowers the task target so it isn't recreated.", params: [{ name: "vmid", example: "207" }] },
   { method: "GET", path: "/api/blueprints", group: "Infrastructure", safe: true, desc: "Server eggs (built-in + custom)." },
@@ -122,8 +122,8 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
 
   // ── Backups ──────────────────────────────────────────────────────────
   { method: "GET", path: "/api/backups", group: "Backups", safe: true, desc: "Snapshots on the backup store." },
-  { method: "POST", path: "/api/backups", group: "Backups", desc: "Create an on-demand backup.", sampleBody: { vmid: 202, node: "skdCore01" } },
+  { method: "POST", path: "/api/backups", group: "Backups", desc: "Create an on-demand backup.", sampleBody: { vmid: 202, node: "SkdCore01" } },
   { method: "POST", path: "/api/backups/jobs", group: "Backups", desc: "Schedule a recurring backup job.", sampleBody: { schedule: "03:00", vmid: 202 } },
   { method: "DELETE", path: "/api/backups/jobs/:id", group: "Backups", destructive: true, desc: "Delete a scheduled backup job.", params: [{ name: "id", example: "backup-202" }] },
-  { method: "POST", path: "/api/backups/restore", group: "Backups", destructive: true, desc: "Restore a container from a snapshot.", sampleBody: { volid: "…", vmid: 202, node: "skdCore01" } },
+  { method: "POST", path: "/api/backups/restore", group: "Backups", destructive: true, desc: "Restore a container from a snapshot.", sampleBody: { volid: "…", vmid: 202, node: "SkdCore01" } },
 ];

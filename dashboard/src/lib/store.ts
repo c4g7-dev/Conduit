@@ -148,15 +148,32 @@ export type ImageStatus = {
 /** Network-wide settings shared by all instances (e.g. proxy↔backend secret). */
 export type Network = { forwardingSecret: string };
 
-/** A recurring scheduled action against a group (run by the leader controller). */
+/** What a schedule acts on — a whole group, one subgroup (incl. nested), a service, or a
+ *  single instance. Replaces the old group-only target; `Schedule.groupId` stays for back-compat. */
+export type ScheduleTarget =
+  | { type: "group"; id: string }
+  | { type: "subgroup"; groupId: string; id: string }
+  | { type: "task"; id: string }
+  | { type: "instance"; vmid: number };
+
+/** A recurring scheduled action (run by the leader controller). */
 export type Schedule = {
   id: string;
   name: string;
-  groupId: string;
-  action: "restart" | "broadcast";
+  /** legacy group-only target — old schedules; new ones use `targets` */
+  groupId?: string;
+  /** legacy single target (kept readable for back-compat; superseded by `targets`) */
+  target?: ScheduleTarget;
+  /** fine-grained targets (any mix of groups / subgroups / services / instances; deduped) */
+  targets?: ScheduleTarget[];
+  action: "restart" | "command" | "broadcast" | "backup";
   at: string; // "HH:MM" 24h, daily
-  command?: string; // for broadcast
+  command?: string; // for command/broadcast
   warnMins: number[]; // pre-action `say` warnings (restart), e.g. [5, 1]
+  /** restart only when the target is empty — occupied instances are deferred until they empty */
+  onlyWhenEmpty?: boolean;
+  /** storage for the backup action (vzdump) */
+  backupStorage?: string;
   enabled: boolean;
   lastRun?: string; // "YYYY-MM-DD HH:MM" of the last action run (dedup)
 };

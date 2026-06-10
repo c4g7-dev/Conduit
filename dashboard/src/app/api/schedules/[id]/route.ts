@@ -15,6 +15,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       if (typeof b.name === "string") s.name = b.name;
       if (typeof b.at === "string" && /^\d{1,2}:\d{2}$/.test(b.at)) s.at = b.at;
       if (typeof b.command === "string") s.command = b.command;
+      if (typeof b.onlyWhenEmpty === "boolean") s.onlyWhenEmpty = b.onlyWhenEmpty;
       if (Array.isArray(b.warnMins)) s.warnMins = b.warnMins.map(Number).filter((n: number) => n > 0);
       return s;
     });

@@ -10,7 +10,7 @@ import {
   ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator,
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
-import { Users, Send, UserX, Radio, Loader2, MoveRight, MessageSquare, Gamepad2, Boxes } from "lucide-react";
+import { Users, UserX, Loader2, MoveRight, MessageSquare, Gamepad2, Boxes } from "lucide-react";
 import { MessageDialog, MoveDialog, KickDialog } from "@/components/player-action-dialogs";
 
 type MetricRow = {
@@ -36,9 +36,6 @@ export default function PlayersPage() {
   const { data: state } = usePoll<State>("/api/conduit/state", 10000);
   // Live connector state via SSE (instant join/quit/kick/move), polling fallback.
   const { data: conn } = useStream<Conn>("/api/stream", "/api/connector/servers", 5000);
-  const [cmd, setCmd] = useState("");
-  const [groupId, setGroupId] = useState("__all");
-  const [busy, setBusy] = useState(false);
   const [kicking, setKicking] = useState<string | null>(null);
   const [dlg, setDlg] = useState<DialogState>(null);
   // Optimistically hidden players (kick/move just issued) so the row disappears instantly;
@@ -84,7 +81,7 @@ export default function PlayersPage() {
     return out.sort((a, b) => a.name.localeCompare(b.name));
   }, [metrics, conn, connActive]);
 
-  const groups = state?.groups ?? [];
+
   const total = metrics?.totals.players ?? 0;
   const capacity = metrics?.totals.capacity ?? 0;
   const mByVmid = useMemo(() => new Map((metrics?.instances ?? []).map((r) => [r.vmid, r])), [metrics]);
@@ -144,32 +141,6 @@ export default function PlayersPage() {
     return groups;
   }, [state, mByVmid]);
   const totalGameInstances = useMemo(() => gameServices.reduce((n, g) => n + g.instances.length, 0), [gameServices]);
-
-  async function broadcast() {
-    const c = cmd.trim();
-    if (!c) return;
-    setBusy(true);
-    try {
-      const ids = groupId === "__all" ? groups.map((g) => g.id) : [groupId];
-      let sent = 0;
-      for (const gid of ids) {
-        const res = await fetch(`/api/groups/${gid}/broadcast`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ command: c }),
-        });
-        const j = await res.json();
-        if (j.error) throw new Error(j.error);
-        sent += j.sent ?? 0;
-      }
-      toast.success(`Sent to ${sent} server(s)`);
-      setCmd("");
-      setTimeout(refresh, 800);
-    } catch (e) {
-      toast.error(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   // Player actions: prefer the connector (network-wide via the proxy); fall back to console.
   async function playerAction(kind: "kick" | "move" | "message", p: PlayerRow, extra?: string) {
@@ -267,26 +238,6 @@ export default function PlayersPage() {
           })}
         </div>
       )}
-
-      {/* Broadcast bar */}
-      <div className="panel mb-4 p-3">
-        <div className="mb-2 flex items-center gap-2"><Radio className="h-3.5 w-3.5 text-brand" /><span className="eyebrow">Broadcast command</span></div>
-        <div className="flex flex-wrap items-center gap-2">
-          <select value={groupId} onChange={(e) => setGroupId(e.target.value)}
-            className="shrink-0 rounded-md border border-hairline bg-accent/30 px-2.5 py-2 text-[13px] outline-none">
-            <option value="__all">All groups</option>
-            {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-          </select>
-          <input value={cmd} onChange={(e) => setCmd(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") broadcast(); }}
-            placeholder='e.g. say Server restarting in 5 minutes'
-            className="min-w-[12rem] flex-1 rounded-md border border-hairline bg-accent/30 px-3 py-2 font-mono text-[13px] outline-none placeholder:text-muted-foreground/50" />
-          <button onClick={broadcast} disabled={busy || !cmd.trim()}
-            className="flex shrink-0 items-center gap-1.5 rounded-md bg-brand px-4 py-2 text-[13px] font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-40">
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Send
-          </button>
-        </div>
-      </div>
 
       {/* Minecraft players */}
       <PlayerTable
