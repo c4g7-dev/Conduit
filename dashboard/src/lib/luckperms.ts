@@ -342,6 +342,70 @@ export async function lpKnownPermissions(): Promise<string[]> {
   return [...out].sort();
 }
 
+/**
+ * Usernames that hold `perm` — resolved from the LP tables including group inheritance:
+ * a group has the perm if itself or any ancestor (via group.<parent> nodes) holds it; a user
+ * has it via a direct node, their primary group, or any group.<g> membership. Wildcards
+ * (`*`, `conduit.*`) are honored. Used to ship proxy-side bypass lists (PreLogin denies
+ * happen BEFORE auth, where permissions can't be checked).
+ */
+export async function lpUsersWithPermission(perm: string): Promise<string[]> {
+  const client = await lpClient().catch(() => null);
+  if (!client) return [];
+  try {
+    const wild = ["*", perm];
+    for (let i = perm.indexOf("."); i > 0; i = perm.indexOf(".", i + 1)) wild.push(perm.slice(0, i) + ".*");
+    const gp = await client.query(
+      `SELECT name, permission FROM luckperms_group_permissions WHERE value = true AND (permission = ANY($1) OR permission LIKE 'group.%')`,
+      [wild],
+    );
+    const direct = new Set<string>();
+    const parents = new Map<string, string[]>(); // child group -> parent groups
+    for (const r of gp.rows) {
+      if (r.permission.startsWith("group.")) {
+        const arr = parents.get(r.name) ?? [];
+        arr.push(r.permission.slice(6));
+        parents.set(r.name, arr);
+      } else direct.add(r.name);
+    }
+    const holds = (g: string, seen: Set<string>): boolean => {
+      if (direct.has(g)) return true;
+      if (seen.has(g)) return false;
+      seen.add(g);
+      return (parents.get(g) ?? []).some((p) => holds(p, seen));
+    };
+    const effective = new Set([...new Set([...direct, ...parents.keys()])].filter((g) => holds(g, new Set())));
+
+    const up = await client.query(
+      `SELECT uuid, permission FROM luckperms_user_permissions WHERE value = true AND (permission = ANY($1) OR permission LIKE 'group.%')`,
+      [wild],
+    );
+    const userDirect = new Set<string>();
+    const memberships = new Map<string, string[]>();
+    for (const r of up.rows) {
+      if (r.permission.startsWith("group.")) {
+        const arr = memberships.get(r.uuid) ?? [];
+        arr.push(r.permission.slice(6));
+        memberships.set(r.uuid, arr);
+      } else userDirect.add(r.uuid);
+    }
+    const players = await client.query(`SELECT uuid, username, primary_group FROM luckperms_players`);
+    const names: string[] = [];
+    for (const p of players.rows) {
+      if (!p.username) continue;
+      if (userDirect.has(p.uuid) || effective.has(p.primary_group)
+          || (memberships.get(p.uuid) ?? []).some((g) => effective.has(g))) {
+        names.push(p.username);
+      }
+    }
+    return names;
+  } catch {
+    return [];
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
 /* ---- tracks (promotion ladders) ---- */
 
 export type LpTrack = { name: string; groups: string[] };

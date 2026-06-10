@@ -11,6 +11,26 @@
 import { getDB } from "./store";
 import { blueprint, loadBlueprints } from "./blueprints";
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __conduitBypassNames: { names: string[]; at: number } | undefined;
+}
+
+/** conduit.full.bypass holders, cached 30s — buildProxyConfig runs every proxy heartbeat (~1s),
+ *  so this keeps the LuckPerms Postgres out of the hot path. Serves stale on lookup failure. */
+async function fullBypassNames(): Promise<string[]> {
+  const c = global.__conduitBypassNames;
+  if (c && Date.now() - c.at < 30_000) return c.names;
+  try {
+    const { lpUsersWithPermission } = await import("./luckperms");
+    const names = await lpUsersWithPermission("conduit.full.bypass");
+    global.__conduitBypassNames = { names, at: Date.now() };
+    return names;
+  } catch {
+    return c?.names ?? [];
+  }
+}
+
 export type ProxyConfig = {
   fallbacks: { task: string; permission: string | null }[];
   defaultFallback: string | null;
@@ -24,9 +44,13 @@ export type ProxyConfig = {
   maxPlayers: number;
   /** custom kick message when the network is full (legacy & colors) */
   fullMessage: string;
-  /** per-subgroup player caps: the proxy sums online across `tasks` and denies connects into
-   *  them at the limit (bypass: conduit.full.bypass). Nested subgroups included. */
+  /** per-subgroup player caps: the proxy sums online across `tasks` and queues/denies connects
+   *  into them at the limit (bypass: conduit.full.bypass). Nested subgroups included. */
   limits: { id: string; tasks: string[]; limit: number; message: string }[];
+  /** usernames holding conduit.full.bypass (resolved from LuckPerms incl. group inheritance) —
+   *  lets the proxy deny "network full" at PreLogin, BEFORE Mojang auth, where permissions
+   *  aren't available yet. Refreshed every ~30s. */
+  bypassNames: string[];
   tablistHeader: string;
   tablistFooter: string;
 };
@@ -107,6 +131,7 @@ export async function buildProxyConfig(taskName: string, groupId: string): Promi
     maintenanceTasks,
     fullMessage: group?.fullMessage ?? "&8[&bConduit&8] &cThe network is full.",
     limits,
+    bypassNames: await fullBypassNames(),
     maxPlayers: group?.slotLimit ?? 1000,
     tablistHeader: "&b%proxy%\n&7on &f%server%",
     tablistFooter: "&7%online%&8/&7%max% online &8• &7%ping%ms",
