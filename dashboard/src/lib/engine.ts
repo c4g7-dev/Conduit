@@ -176,9 +176,9 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
     await installGenericCustom(inst.vmid, bp, host);
   }
 
-  // CloudNet-style overlay: copy overlays/<egg>/ + tasks/<task>/ into the service dir.
+  // CloudNet-style overlay: _global/<kind>/ + overlays/<egg>/ + tasks/<task>/ → service dir.
   try {
-    await applyTemplate(inst.vmid, bp.id, task.id, serviceDir(kind), host);
+    await applyTemplate(inst.vmid, bp.id, task.id, serviceDir(kind), host, kind);
   } catch (e) {
     pushInstallLog(inst.vmid, `[conduit] file overlay skipped: ${String(e)}`);
   }
@@ -406,6 +406,63 @@ async function autoUpdatePass(
       }
     } catch (e) {
       log.push(`! hotfix ${t.name}: ${String(e)}`);
+    }
+  }
+}
+
+/** Re-apply a task's overlay chain to its running instances (+ restart so changes load). */
+export async function resyncTaskFiles(taskId: string, restart = true): Promise<{ vmid: number; ok: boolean; error?: string }[]> {
+  await loadBlueprints();
+  const db = await getDB();
+  const t = db.tasks.find((x) => x.id === taskId);
+  const bp = t && blueprint(t.blueprintId);
+  if (!t || !bp) throw new Error("task not found");
+  const kind = bp.software.kind;
+  const all = await discoverInstances();
+  const results: { vmid: number; ok: boolean; error?: string }[] = [];
+  for (const inst of instancesOf(all, t.id)) {
+    if (inst.status !== "running" || !inst.ready) continue;
+    try {
+      const host = await nodeIp(inst.node);
+      await applyTemplate(inst.vmid, bp.id, t.id, serviceDir(kind), host, kind);
+      if (restart) await ctExec(inst.vmid, `systemctl restart mc 2>/dev/null || true`, 30_000, host);
+      results.push({ vmid: inst.vmid, ok: true });
+    } catch (e) {
+      results.push({ vmid: inst.vmid, ok: false, error: String(e) });
+    }
+  }
+  return results;
+}
+
+/**
+ * Rewrite-on-change (ideas.md §2): for templateSync tasks, watch the overlay chain's
+ * signature; when an edit lands (file manager/SFTP on the shared store), re-apply the files
+ * and restart the instances. First sighting only arms the baseline (no restart storm on boot).
+ * Throttled to one scan per minute.
+ */
+async function templateSyncPass(
+  db: Awaited<ReturnType<typeof getDB>>,
+  log: string[],
+) {
+  const g = global as unknown as { __conduitTplAt?: number; __conduitTplSigs?: Map<string, string> };
+  if (Date.now() - (g.__conduitTplAt ?? 0) < 60_000) return;
+  g.__conduitTplAt = Date.now();
+  g.__conduitTplSigs ??= new Map();
+
+  const { overlaySignature } = await import("./templates");
+  for (const t of db.tasks) {
+    if (!t.templateSync) continue;
+    const bp = blueprint(t.blueprintId);
+    if (!bp) continue;
+    try {
+      const sig = await overlaySignature(bp.id, t.id, bp.software.kind);
+      const prev = g.__conduitTplSigs.get(t.id);
+      g.__conduitTplSigs.set(t.id, sig);
+      if (prev === undefined || prev === sig) continue;
+      const res = await resyncTaskFiles(t.id, true);
+      log.push(`~ template sync ${t.name}: overlay changed → re-applied to ${res.filter((r) => r.ok).length} instance(s)`);
+    } catch (e) {
+      log.push(`! template sync ${t.name}: ${String(e)}`);
     }
   }
 }
@@ -900,6 +957,7 @@ export async function reconcileAll(): Promise<string[]> {
     await redisPass(db, all, log);
     await pgPass(db, all);
     await autoUpdatePass(db, all, log);
+    await templateSyncPass(db, log);
 
     if (dirty) await saveDB(db).catch(() => {});
   } catch (e) {

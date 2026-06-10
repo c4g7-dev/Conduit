@@ -39,11 +39,15 @@ export async function ensureTemplate(eggId: string, seed?: Record<string, string
 }
 
 /**
- * Copy templates/<eggId>/ then tasks/<taskId>/ into <destDir> inside the container.
- * No-op for an empty/missing template. Runs entirely on the host (tar + pct push + extract).
+ * Copy the overlay chain into <destDir> inside the container, lowest priority first so later
+ * layers overwrite earlier ones (ideas.md §2 prioritization):
+ *   overlays/_global/<kind>/  → every service of that software kind (e.g. all paper servers)
+ *   overlays/<eggId>/         → the egg's base tree
+ *   tasks/<taskId>/           → per-task overrides
+ * No-op for empty/missing layers. Runs entirely on the host (tar + pct push + extract).
  */
 export async function applyTemplate(
-  vmid: number, eggId: string, taskId: string, destDir: string, host?: string,
+  vmid: number, eggId: string, taskId: string, destDir: string, host?: string, kind?: string,
 ): Promise<void> {
   const one = async (srcDir: string) => {
     const tgz = `/tmp/ct-tmpl-${vmid}.tgz`;
@@ -58,6 +62,22 @@ export async function applyTemplate(
       120_000, host,
     );
   };
+  if (kind) await one(`${OVERLAYS_DIR}/_global/${kind}`);
   await one(`${OVERLAYS_DIR}/${eggId}`);
   await one(`${TASKS_DIR}/${taskId}`);
+}
+
+/**
+ * Change signature of a task's full overlay chain (file paths + sizes + mtimes). The reconcile
+ * loop diffs this for templateSync tasks: when an overlay edit lands (file manager / SFTP),
+ * affected services get the files re-applied + a restart automatically — ideas.md §2
+ * "rewrite on restart" for static services, without manual re-seeding.
+ */
+export async function overlaySignature(eggId: string, taskId: string, kind: string, host?: string): Promise<string> {
+  const dirs = [`${OVERLAYS_DIR}/_global/${kind}`, `${OVERLAYS_DIR}/${eggId}`, `${TASKS_DIR}/${taskId}`];
+  const out = await nodeExec(
+    dirs.map((d) => `([ -d '${d}' ] && find '${d}' -type f -printf '%P %s %T@\\n' | sort) || true`).join("; "),
+    30_000, host,
+  );
+  return out.trim();
 }

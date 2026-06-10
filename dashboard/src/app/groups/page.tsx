@@ -57,6 +57,8 @@ import {
   Star,
   X,
   ArrowUpCircle,
+  RefreshCw,
+  FolderSync,
 } from "lucide-react";
 
 /* ---- types (mirror /api/conduit/state) ----------------------------------- */
@@ -67,7 +69,7 @@ type Task = {
   mode: "dynamic" | "static"; desired: number; min: number; max: number;
   autoscale: boolean; playersPerInstance: number; cores: number; memory: number;
   disk: number; persistent: boolean; port: number; fronts: string[];
-  subgroupId?: string; maintenance?: boolean;
+  subgroupId?: string; maintenance?: boolean; templateSync?: boolean;
   instances: Instance[]; live: number; running: number;
 };
 type Subgroup = { id: string; name: string; maintenance: boolean; parentId?: string; slotLimit?: number; fullMessage?: string };
@@ -237,6 +239,34 @@ export default function ServersPage() {
     const json = await res.json();
     if (json.error) return toast.error(json.error);
     toast.success(sgId ? `${task.name} → subgroup ${sgId}` : `${task.name} removed from subgroup`);
+    refresh();
+  }
+
+  async function resyncFiles(task: Task) {
+    if (!confirm(`Re-apply the template files (global/${task.softwareKind} + egg + task overlays) to ${task.name}'s ${task.running} running instance(s) and restart them?`)) return;
+    set(task.id, true);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/resync`, { method: "POST" });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      toast.success(`${task.name}: files re-applied to ${json.results.filter((r: { ok: boolean }) => r.ok).length} instance(s)`);
+      refresh();
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      set(task.id, false);
+    }
+  }
+
+  async function toggleTemplateSync(task: Task) {
+    const res = await fetch(`/api/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ templateSync: !task.templateSync }),
+    });
+    const json = await res.json();
+    if (json.error) return toast.error(json.error);
+    toast.success(`${task.name}: auto file-sync ${!task.templateSync ? "ON — overlay edits re-apply + restart automatically" : "off"}`);
     refresh();
   }
 
@@ -472,6 +502,12 @@ export default function ServersPage() {
                         )}
                         <ContextMenuItem onClick={() => toggleTaskMaintenance(task, !task.maintenance)}>
                           <Wrench /> {task.maintenance ? "Disable maintenance" : "Enable maintenance"}
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => resyncFiles(task)}>
+                          <RefreshCw /> Re-sync files from template
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => toggleTemplateSync(task)}>
+                          <FolderSync /> {task.templateSync ? "Disable auto file-sync" : "Enable auto file-sync"}
                         </ContextMenuItem>
                         {(sgs.length > 0 || task.subgroupId) && <ContextMenuSeparator />}
                         {sgs.filter((s) => s.id !== task.subgroupId).map((s) => (

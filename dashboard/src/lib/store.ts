@@ -79,6 +79,9 @@ export type Task = {
   software?: Software;
   /** auto-apply hotfixes (new BUILDS of the pinned version line) — never a new full version */
   autoUpdate?: boolean;
+  /** rewrite-on-change: when the overlay chain (global/egg/task files) changes, re-apply it to
+   *  running instances and restart them — keeps static services in sync with their template */
+  templateSync?: boolean;
   /** newest upstream build installed across this task's instances (hotfix tracking) */
   installedBuild?: number;
   /** server list MOTD (supports & colour codes); applied to this task's instances */

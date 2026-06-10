@@ -42,6 +42,7 @@ export async function PATCH(
         t.subgroupId = sgId;
       }
       if (typeof body.maintenance === "boolean") t.maintenance = body.maintenance;
+      if (typeof body.templateSync === "boolean") t.templateSync = body.templateSync;
       if (Array.isArray(body.fronts)) t.fronts = body.fronts;
       if (typeof body.autoscale === "boolean") t.autoscale = body.autoscale;
       if (typeof body.playersPerInstance === "number") t.playersPerInstance = body.playersPerInstance;
