@@ -19,6 +19,7 @@ import {
   installNginx,
   installRedis,
   setRedisReplication,
+  installPostgres,
   installConnector,
   installHytaleConnector,
   installGenericCustom,
@@ -40,6 +41,7 @@ import { syncTaskFiles } from "./taskfile";
 import { assetNodePath } from "./assets";
 import { recordReconcile } from "./events";
 import { redisPassword, setRedisCluster, REDIS_PORT } from "./redis-cluster";
+import { pgPassword, setPgCluster } from "./pg-cluster";
 
 export const CONDUIT_TAG = "conduit";
 export const READY_TAG = "ready";
@@ -155,6 +157,8 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
     await installNginx(inst.vmid, host);
   } else if (kind === "redis") {
     await installRedis(inst.vmid, await redisPassword(), host);
+  } else if (kind === "postgres") {
+    await installPostgres(inst.vmid, await pgPassword(), host);
   } else {
     // generic — run the custom provisioning recipe (packages/assets/install/start) if defined,
     // else come up as a bare container.
@@ -336,6 +340,22 @@ async function redisPass(
   }
   global.__conduitRedisSig = sig;
   log.push(`= redis: primary ${primary.vmid} (${primary.ip}), ${insts.length - 1} replica(s)`);
+}
+
+/**
+ * Publish the Postgres primary (lowest-vmid running postgres-kind instance) for the
+ * LuckPerms storage link — read by the panel's LuckPerms client and the LP installer.
+ */
+async function pgPass(db: Awaited<ReturnType<typeof getDB>>, all: Instance[]) {
+  const pgTasks = db.tasks.filter((t) => blueprint(t.blueprintId)?.software.kind === "postgres");
+  const insts = pgTasks
+    .flatMap((t) => instancesOf(all, t.id))
+    .filter((i) => i.status === "running" && !!i.ip && i.ready)
+    .sort((a, b) => a.vmid - b.vmid);
+  setPgCluster({
+    primary: insts[0] ? { vmid: insts[0].vmid, ip: insts[0].ip! } : null,
+    updatedAt: Date.now(),
+  });
 }
 
 /** All Conduit-managed containers grouped by task, with live IPs. */
@@ -826,6 +846,7 @@ export async function reconcileAll(): Promise<string[]> {
     provisionPass(db, all, log);
     await velocityPass(db, all, log);
     await redisPass(db, all, log);
+    await pgPass(db, all);
 
     if (dirty) await saveDB(db).catch(() => {});
   } catch (e) {

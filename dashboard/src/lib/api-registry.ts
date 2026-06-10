@@ -65,6 +65,8 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
   { method: "POST", path: "/api/connector/maintenance", group: "Players & Connector", desc: "(plugin) /conduit maintenance <target> <on|off> — resolves a group, subgroup or server by name and toggles its maintenance. Token-auth.", sampleBody: { target: "timesmp", on: true } },
 
   // ── Automation ───────────────────────────────────────────────────────
+  { method: "GET", path: "/api/luckperms/status", group: "Automation", safe: true, desc: "LuckPerms link health: Postgres storage reachability, schema state, group/user/track counts, Redis messaging endpoint." },
+  { method: "POST", path: "/api/luckperms/install", group: "Automation", desc: "Install/refresh LuckPerms on every running Paper + Velocity instance (Postgres storage + Redis messaging wired automatically; each server restarts).", sampleBody: {} },
   { method: "GET", path: "/api/activity", group: "Automation", safe: true, desc: "Engine event feed + derived health alerts." },
   { method: "GET", path: "/api/schedules", group: "Automation", safe: true, desc: "Scheduled restarts/broadcasts." },
   { method: "POST", path: "/api/schedules", group: "Automation", desc: "Create a schedule (restart/broadcast, daily HH:MM, warnings).", sampleBody: { name: "Nightly", groupId: "network", action: "restart", at: "04:00", warnMins: [5, 1] } },

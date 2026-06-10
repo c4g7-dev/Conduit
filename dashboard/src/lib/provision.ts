@@ -741,6 +741,104 @@ export async function setRedisReplication(vmid: number, password: string, primar
   await ctExec(vmid, cmd, 20_000, host);
 }
 
+/* ---- PostgreSQL (permissions backend for LuckPerms) ----------------------- */
+
+function postgresScript(password: string): string {
+  // Self-configuring: listen on all interfaces, scram auth for the cluster subnet only,
+  // `conduit` role + `luckperms` db created idempotently. Password derives from the
+  // network secret (pgPassword()) so panel + servers compute it without any exchange.
+  const shellUnit = `[Unit]
+Description=Conduit postgres shell (tmux)
+After=network-online.target
+[Service]
+Type=forking
+WorkingDirectory=/opt
+ExecStart=/usr/bin/tmux -L mc new-session -d -s mc -x 220 -y 50
+ExecStop=/usr/bin/tmux -L mc kill-session -t mc
+RemainAfterExit=yes
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target`;
+  return `set -e
+if [ -f /opt/.conduit-ready ]; then echo already-provisioned; exit 0; fi
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq || true
+apt-get install -y -qq postgresql tmux >/dev/null
+PGDIR=$(ls -d /etc/postgresql/*/main | head -1)
+sed -i "s/^#\\?listen_addresses.*/listen_addresses = '*'/" "$PGDIR/postgresql.conf"
+grep -q 'conduit-net' "$PGDIR/pg_hba.conf" || echo 'host all all 10.0.0.0/8 scram-sha-256 # conduit-net' >> "$PGDIR/pg_hba.conf"
+systemctl enable postgresql >/dev/null 2>&1 || true
+systemctl restart postgresql
+sleep 2
+su - postgres -c "psql -tc \\"SELECT 1 FROM pg_roles WHERE rolname='conduit'\\"" | grep -q 1 \\
+  || su - postgres -c "psql -c \\"CREATE ROLE conduit LOGIN PASSWORD '${password}'\\""
+su - postgres -c "psql -c \\"ALTER ROLE conduit PASSWORD '${password}'\\"" >/dev/null
+su - postgres -c "psql -tc \\"SELECT 1 FROM pg_database WHERE datname='luckperms'\\"" | grep -q 1 \\
+  || su - postgres -c "psql -c \\"CREATE DATABASE luckperms OWNER conduit\\""
+mkdir -p /opt
+cat > /etc/systemd/system/mc.service <<'UNIT'
+${shellUnit}
+UNIT
+systemctl daemon-reload
+systemctl enable mc >/dev/null 2>&1 || true; systemctl restart mc || true
+touch /opt/.conduit-ready
+echo CONDUIT_PROVISIONED_POSTGRES
+`;
+}
+
+export async function installPostgres(vmid: number, password: string, host?: string): Promise<void> {
+  await ctExec(vmid, postgresScript(password), 300_000, host);
+}
+
+/* ---- LuckPerms (network permissions, Postgres storage + Redis sync) ------- */
+
+export type LuckPermsWiring = {
+  jarUrl: string;       // platform build (bukkit or velocity) from metadata.luckperms.net
+  pgHost: string;       // postgres primary ip
+  pgPassword: string;
+  redisAddr: string | null; // "ip:port" — instant cross-server sync (null = no messaging)
+  redisPassword: string;
+  serverName: string;   // LuckPerms `server` context = the instance id
+};
+
+/**
+ * Install LuckPerms into a Paper or Velocity container: drop the jar in plugins/ and write a
+ * config pointing at the shared Postgres (storage) + Conduit Redis (messaging). LuckPerms
+ * fills unspecified keys with defaults, so the config stays minimal. Caller restarts the
+ * service (Paper) / lets syncVelocity restart the proxy.
+ */
+export async function installLuckPerms(vmid: number, kind: "paper" | "velocity", w: LuckPermsWiring, host?: string): Promise<void> {
+  // Bukkit reads plugins/LuckPerms/, Velocity plugins/luckperms/.
+  const dir = kind === "paper" ? "/opt/mc/plugins/LuckPerms" : "/opt/mc/plugins/luckperms";
+  const redisBlock = w.redisAddr
+    ? `messaging-service: redis
+redis:
+  enabled: true
+  address: ${w.redisAddr}
+  password: '${w.redisPassword}'`
+    : `messaging-service: auto`;
+  await ctExec(
+    vmid,
+    `set -e
+mkdir -p /opt/mc/plugins '${dir}'
+curl -fsSL -o /opt/mc/plugins/LuckPerms.jar '${w.jarUrl}'
+cat > '${dir}/config.yml' <<'LPCONF'
+# Managed by Conduit — storage on the shared Postgres, instant sync via the Redis cluster.
+server: ${w.serverName}
+storage-method: postgresql
+data:
+  address: ${w.pgHost}:5432
+  database: luckperms
+  username: conduit
+  password: '${w.pgPassword}'
+${redisBlock}
+LPCONF
+echo CONDUIT_LUCKPERMS_INSTALLED`,
+    180_000, host,
+  );
+}
+
 /* ---- Velocity (proxy) ---------------------------------------------------- */
 
 function velocityScript(task: Task, secret: string, build: Resolved, vmid: number): string {

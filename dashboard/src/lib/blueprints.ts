@@ -19,7 +19,7 @@ export type Role = "proxy" | "lobby" | "smp" | "db" | "generic";
  * `version` is what gets pulled — e.g. the Minecraft version for paper, the Velocity
  * version for velocity. Selectable per-task in the UI.
  */
-export type SoftwareKind = "paper" | "velocity" | "mariadb" | "hytale" | "nginx" | "redis" | "generic";
+export type SoftwareKind = "paper" | "velocity" | "mariadb" | "postgres" | "hytale" | "nginx" | "redis" | "generic";
 export type Software = {
   kind: SoftwareKind;
   version: string;
@@ -211,6 +211,22 @@ export const BLUEPRINTS: Blueprint[] = [
       "Redis store for seamless-world player-data sync (inventory/HP/XP across shard handoffs). Self-configuring: the first instance is primary, extras auto-replicate it, and connectors discover the endpoints dynamically with failover. Scale to 2+ for redundancy.",
     provision: "redis-server, auth from network secret, replication auto-wired by the controller",
     software: { kind: "redis", version: "stable" },
+  },
+  {
+    id: "postgres",
+    name: "PostgreSQL (permissions)",
+    role: "db",
+    mode: "static",
+    persistent: true,
+    base: DEBIAN,
+    cores: 1,
+    memory: 1024,
+    disk: 10,
+    port: 5432,
+    description:
+      "PostgreSQL database — backs LuckPerms (network permissions). Self-configuring: auth derives from the network secret, a `luckperms` database is created on first boot, and the panel + every MC server discover the endpoint automatically. LuckPerms syncs changes instantly across servers via the Conduit Redis cluster.",
+    provision: "postgresql, conduit role + luckperms db, auth from network secret",
+    software: { kind: "postgres", version: "stable" },
   },
 ];
 
