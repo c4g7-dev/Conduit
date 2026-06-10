@@ -18,9 +18,12 @@ import { agentGetState, agentPutState } from "./agent";
 export type Group = {
   id: string; // kebab, also the Proxmox pool id
   name: string;
+  /** network player cap — ENFORCED at the proxy login (cheap deny, no backend connect) */
   slotLimit: number;
+  /** custom kick message shown when the network is full (legacy & colors) */
+  fullMessage?: string;
   maintenance: boolean;
-  /** named sub-buckets of tasks (Untergruppen) — addressable for maintenance/ops */
+  /** named sub-buckets of tasks (Untergruppen) — addressable for maintenance/ops; nestable */
   subgroups?: Subgroup[];
   createdAt: number;
 };
@@ -29,11 +32,20 @@ export type Group = {
  * A subgroup (Untergruppe) separates a group's tasks into addressable units, so ops like
  * maintenance can target e.g. just `timesmp` inside the main network group. Tasks opt in
  * via Task.subgroupId; tasks without one belong to the group directly (back-compat).
+ * Subgroups nest via parentId (a subgroup of a subgroup) — maintenance and slot limits
+ * cascade down the chain.
  */
 export type Subgroup = {
   id: string; // kebab, unique within the group
   name: string;
+  /** parent subgroup id (same group) — undefined = top-level under the group */
+  parentId?: string;
   maintenance: boolean;
+  /** player cap across this subgroup's servers (incl. nested) — 0/undefined = unlimited.
+   *  Enforced by the proxy on connect with a custom message. */
+  slotLimit?: number;
+  /** custom deny message when the subgroup is full (legacy & colors) */
+  fullMessage?: string;
   createdAt: number;
 };
 

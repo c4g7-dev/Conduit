@@ -370,7 +370,7 @@ export default function PermissionsPage() {
                 </div>
 
                 {/* Nodes table */}
-                <div className="flex-1 overflow-y-auto">
+                <div className="flex-1 overflow-y-auto overflow-x-auto">
                   {!nodes ? (
                     <div className="flex h-32 items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
                   ) : nodes.length === 0 ? (
@@ -473,10 +473,12 @@ function NodeRow({ node, index, busy, onToggle, onRemove, onEdit }: {
 
   if (editing) {
     const isStyled = k === "prefix" || k === "suffix";
+    // One full-width cell with a wrapping flex layout — the fixed table columns made the
+    // expiry input + hint overflow off-screen; this adapts to ANY panel width instead.
     return (
       <tr ref={rowRef} className="border-b border-hairline bg-brand/[0.04] last:border-0">
-        <td className="px-4 py-1.5">
-          <span className="flex items-center gap-2">
+        <td colSpan={4} className="px-4 py-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
             <span className="w-14 shrink-0 rounded px-1.5 py-0.5 text-center text-[9px] font-semibold uppercase tracking-wide" style={{ background: `color-mix(in oklch, ${c.color} 14%, transparent)`, color: c.color }}>
               {c.label}
             </span>
@@ -484,25 +486,19 @@ function NodeRow({ node, index, busy, onToggle, onRemove, onEdit }: {
               autoFocus
               value={draft.permission}
               onChange={(e) => setDraft({ ...draft, permission: e.target.value })}
-              className={cn(inputCls, "min-w-48 flex-1")}
+              className={cn(inputCls, "min-w-40 flex-1 basis-56")}
             />
             {isStyled && (
               <span className="shrink-0 rounded bg-black/40 px-1.5 py-0.5 text-xs">
                 <McText text={draft.permission.split(".").slice(2).join(".")} />
               </span>
             )}
-          </span>
-        </td>
-        <td className="px-3 py-1.5">
-          <button
-            onClick={() => setDraft({ ...draft, value: !draft.value })}
-            className={cn("rounded px-2 py-0.5 font-mono text-[11px] font-semibold", draft.value ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400")}
-          >
-            {String(draft.value)}
-          </button>
-        </td>
-        <td className="px-3 py-1.5">
-          <span className="flex items-center gap-1">
+            <button
+              onClick={() => setDraft({ ...draft, value: !draft.value })}
+              className={cn("shrink-0 rounded px-2 py-0.5 font-mono text-[11px] font-semibold", draft.value ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400")}
+            >
+              {String(draft.value)}
+            </button>
             <input
               value={draft.server === "global" ? "" : draft.server}
               onChange={(e) => setDraft({ ...draft, server: e.target.value.trim() || "global" })}
@@ -515,18 +511,14 @@ function NodeRow({ node, index, busy, onToggle, onRemove, onEdit }: {
               placeholder="world"
               className={cn(inputCls, "w-20 placeholder:text-muted-foreground/40")}
             />
-          </span>
-        </td>
-        <td className="px-3 py-1.5">
-          <span className="flex items-center gap-2">
             <input
               type="datetime-local"
               value={draft.expiry > 0 ? new Date(draft.expiry * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ""}
               onChange={(e) => setDraft({ ...draft, expiry: e.target.value ? Math.floor(new Date(e.target.value).getTime() / 1000) : 0 })}
-              className={cn(inputCls, "text-muted-foreground")}
+              className={cn(inputCls, "w-44 shrink-0 text-muted-foreground")}
             />
-            <span className="shrink-0 text-[10px] text-muted-foreground/60">⏎ save · esc cancel</span>
-          </span>
+            <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/60">⏎ save · esc cancel</span>
+          </div>
         </td>
       </tr>
     );

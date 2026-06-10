@@ -24,6 +24,15 @@ export async function PATCH(
       if (typeof body.min === "number") t.min = body.min;
       if (typeof body.max === "number") t.max = body.max;
 
+      // move to another group (drag & drop) — the new group's settings (maintenance,
+      // slot limits, routing scope) apply immediately via the next proxy-config build;
+      // existing instances keep their Proxmox pool/tags until reprovisioned.
+      if (typeof body.groupId === "string" && body.groupId.trim() && body.groupId !== t.groupId) {
+        if (!db.groups.some((g) => g.id === body.groupId)) throw new Error(`group "${body.groupId}" not found`);
+        t.groupId = body.groupId;
+        t.subgroupId = undefined; // subgroups are per-group; re-assign explicitly after the move
+      }
+
       // subgroup membership (null/"" clears) + per-task maintenance
       if (body.subgroupId !== undefined) {
         const sgId = typeof body.subgroupId === "string" && body.subgroupId.trim() ? body.subgroupId.trim() : undefined;

@@ -158,6 +158,34 @@ public class ConduitVelocityPlugin {
         return !p.hasPermission("conduit.maintenance.bypass")
                 && !p.hasPermission("conduit.maintenance.bypass." + task);
     }
+
+    /* ---- player caps (panel-enforced: network slotLimit + per-subgroup limits) ---- */
+
+    /** If `serverName`'s subgroup is at its player cap (and the player has no
+     *  conduit.full.bypass), return the configured deny message; else null. */
+    private String fullMessageFor(Player p, String serverName) {
+        JsonObject c = cfg();
+        if (c == null || !c.has("limits") || !c.get("limits").isJsonArray()) return null;
+        if (p.hasPermission("conduit.full.bypass")) return null;
+        String task = taskOf(serverName);
+        for (var el : c.getAsJsonArray("limits")) {
+            JsonObject lim = el.getAsJsonObject();
+            boolean member = false;
+            for (var t : lim.getAsJsonArray("tasks")) {
+                if (t.getAsString().equalsIgnoreCase(task)) { member = true; break; }
+            }
+            if (!member) continue;
+            int online = 0;
+            for (RegisteredServer s : proxy.getAllServers()) {
+                String st = taskOf(s.getServerInfo().getName());
+                for (var t : lim.getAsJsonArray("tasks")) {
+                    if (t.getAsString().equalsIgnoreCase(st)) { online += s.getPlayersConnected().size(); break; }
+                }
+            }
+            if (online >= lim.get("limit").getAsInt()) return lim.get("message").getAsString();
+        }
+        return null;
+    }
     private int maxPlayers() { JsonObject c = cfg(); return (c != null && c.has("maxPlayers")) ? c.get("maxPlayers").getAsInt() : proxy.getConfiguration().getShowMaxPlayers(); }
 
     /** Ordered fallback task-name prefixes from config (default first). */
@@ -226,6 +254,13 @@ public class ConduitVelocityPlugin {
             e.setResult(ServerPreConnectEvent.ServerResult.denied());
             e.getPlayer().sendMessage(LEGACY.deserialize(
                     "&8[&bConduit&8] &7" + taskOf(name) + " &cis in maintenance."));
+            return;
+        }
+        // Per-subgroup player cap (panel subgroup.slotLimit): deny entering a full slice.
+        String full = fullMessageFor(e.getPlayer(), name);
+        if (full != null) {
+            e.setResult(ServerPreConnectEvent.ServerResult.denied());
+            e.getPlayer().sendMessage(LEGACY.deserialize(full));
         }
     }
 
@@ -249,6 +284,14 @@ public class ConduitVelocityPlugin {
         if (maintenance() && !e.getPlayer().hasPermission("conduit.maintenance.bypass")) {
             e.setResult(com.velocitypowered.api.event.ResultedEvent.ComponentResult
                     .denied(Component.text("Network is in maintenance.", NamedTextColor.RED)));
+            return;
+        }
+        // ENFORCE the network slot limit (panel group.slotLimit): deny at login — the cheapest
+        // reject point, before any backend connection — with the panel-configured message.
+        int max = maxPlayers();
+        if (max > 0 && proxy.getPlayerCount() >= max && !e.getPlayer().hasPermission("conduit.full.bypass")) {
+            e.setResult(com.velocitypowered.api.event.ResultedEvent.ComponentResult
+                    .denied(LEGACY.deserialize(cfgStr("fullMessage", "&cThe network is full."))));
         }
     }
 
