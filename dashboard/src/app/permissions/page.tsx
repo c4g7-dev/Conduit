@@ -18,6 +18,15 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { McText } from "@/components/mc-text";
 import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+} from "@/components/ui/context-menu";
+import { Pencil, ToggleLeft } from "lucide-react";
+import {
   KeyRound, Search, Plus, Trash2, X, ChevronDown, Loader2,
   Milestone, Shield, ArrowRight, Scale, Tag,
 } from "lucide-react";
@@ -211,11 +220,12 @@ export default function PermissionsPage() {
             <div className="flex-1 overflow-y-auto p-1.5">
               {/* Tracks */}
               <RailHeader label={`Tracks (${tracks.length})`} onAdd={() => setTrackEdit({ name: "", groups: [] })} />
-              {tracks.map((t) => (
+              {tracks.map((t, ti) => (
                 <button
                   key={t.name}
                   onClick={() => setTrackEdit(t)}
-                  className="group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                  className="player-row-in group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                  style={{ animationDelay: `${Math.min(ti * 22, 240)}ms` }}
                 >
                   <Milestone className="h-3 w-3 shrink-0 text-muted-foreground/60" />
                   <span className="truncate font-medium">{t.name}</span>
@@ -233,16 +243,21 @@ export default function PermissionsPage() {
 
               {/* Groups */}
               <RailHeader label={`Groups (${groups.length})`} onAdd={createGroup} className="mt-4" />
-              {groups.map((g) => {
+              {groups.map((g, gi) => {
                 const active = target?.type === "group" && target.id === g.name;
                 return (
-                  <div key={g.name} className="group/row">
-                    <button
-                      onClick={() => select({ type: "group", id: g.name })}
-                      className={cn(
-                        "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors",
-                        active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                      )}
+                  <ContextMenu key={g.name}>
+                    <ContextMenuTrigger
+                      render={
+                        <button
+                          onClick={() => select({ type: "group", id: g.name })}
+                          className={cn(
+                            "player-row-in flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors",
+                            active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                          )}
+                          style={{ animationDelay: `${Math.min(gi * 22, 240)}ms` }}
+                        />
+                      }
                     >
                       <Shield className="h-3 w-3 shrink-0" style={{ color: KIND.inheritance.color }} />
                       <span className="flex-1 truncate">{g.name}</span>
@@ -251,24 +266,23 @@ export default function PermissionsPage() {
                           <McText text={g.prefix} className="text-[10px]" />
                         </span>
                       )}
-                      {/* fixed-width slot: weight normally, trash on hover — same footprint, no overlap */}
-                      <span className="flex w-6 shrink-0 items-center justify-end">
-                        <span className={cn("tabular-nums text-[11px] text-muted-foreground/60", g.name !== "default" && "group-hover/row:hidden")}>
-                          {g.weight ?? "—"}
-                        </span>
-                        {g.name !== "default" && (
-                          <span
-                            role="button"
-                            onClick={(e) => { e.stopPropagation(); deleteGroup(g.name); }}
-                            className="hidden rounded p-0.5 text-destructive/60 hover:bg-destructive/10 hover:text-destructive group-hover/row:block"
-                            title="Delete group"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </span>
-                        )}
-                      </span>
-                    </button>
-                  </div>
+                      <span className="w-6 shrink-0 text-right tabular-nums text-[11px] text-muted-foreground/60">{g.weight ?? "—"}</span>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent>
+                      <ContextMenuLabel>{g.name}</ContextMenuLabel>
+                      <ContextMenuItem onClick={() => select({ type: "group", id: g.name })}>
+                        <Pencil /> Edit nodes
+                      </ContextMenuItem>
+                      {g.name !== "default" && (
+                        <>
+                          <ContextMenuSeparator />
+                          <ContextMenuItem variant="destructive" onClick={() => deleteGroup(g.name)}>
+                            <Trash2 /> Delete group
+                          </ContextMenuItem>
+                        </>
+                      )}
+                    </ContextMenuContent>
+                  </ContextMenu>
                 );
               })}
 
@@ -283,16 +297,17 @@ export default function PermissionsPage() {
                   className="w-full bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/60"
                 />
               </div>
-              {found.map((u) => {
+              {found.map((u, ui) => {
                 const active = target?.type === "user" && target.id === u.uuid;
                 return (
                   <button
                     key={u.uuid}
                     onClick={() => select({ type: "user", id: u.uuid, name: u.username ?? u.uuid })}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors",
+                      "player-row-in flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors",
                       active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                     )}
+                    style={{ animationDelay: `${Math.min(ui * 22, 240)}ms` }}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={`https://mc-heads.net/avatar/${u.username ?? u.uuid}/16`} alt="" className="h-4 w-4 rounded-sm" />
@@ -368,7 +383,6 @@ export default function PermissionsPage() {
                           <th className="px-3 py-2 font-medium">Value</th>
                           <th className="px-3 py-2 font-medium">Context</th>
                           <th className="px-3 py-2 font-medium">Expiry</th>
-                          <th className="px-3 py-2" />
                         </tr>
                       </thead>
                       <tbody>
@@ -376,6 +390,7 @@ export default function PermissionsPage() {
                           <NodeRow
                             key={`${n.permission}|${n.server}|${n.world}|${i}`}
                             node={n}
+                            index={i}
                             busy={busy}
                             onToggle={() => toggleValue(n)}
                             onRemove={() => removeNode(n)}
@@ -409,8 +424,9 @@ export default function PermissionsPage() {
 /* ---- node row: dblclick → inline edit (Esc cancels, click-out saves) -------
  * The delete button keeps its footprint (opacity swap) so hovering never shifts
  * the layout. Prefix/suffix bodies render as a chat-accurate MC preview chip. */
-function NodeRow({ node, busy, onToggle, onRemove, onEdit }: {
+function NodeRow({ node, index, busy, onToggle, onRemove, onEdit }: {
   node: LpNode;
+  index: number;
   busy: boolean;
   onToggle: () => void;
   onRemove: () => void;
@@ -502,71 +518,73 @@ function NodeRow({ node, busy, onToggle, onRemove, onEdit }: {
           </span>
         </td>
         <td className="px-3 py-1.5">
-          <input
-            type="datetime-local"
-            value={draft.expiry > 0 ? new Date(draft.expiry * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ""}
-            onChange={(e) => setDraft({ ...draft, expiry: e.target.value ? Math.floor(new Date(e.target.value).getTime() / 1000) : 0 })}
-            className={cn(inputCls, "text-muted-foreground")}
-          />
-        </td>
-        <td className="px-3 py-1.5 text-right">
-          <span className="text-[10px] text-muted-foreground/60">⏎ save · esc cancel</span>
+          <span className="flex items-center gap-2">
+            <input
+              type="datetime-local"
+              value={draft.expiry > 0 ? new Date(draft.expiry * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ""}
+              onChange={(e) => setDraft({ ...draft, expiry: e.target.value ? Math.floor(new Date(e.target.value).getTime() / 1000) : 0 })}
+              className={cn(inputCls, "text-muted-foreground")}
+            />
+            <span className="shrink-0 text-[10px] text-muted-foreground/60">⏎ save · esc cancel</span>
+          </span>
         </td>
       </tr>
     );
   }
 
   return (
-    <tr
-      className="group border-b border-hairline last:border-0 hover:bg-accent/40"
-      onDoubleClick={begin}
-      title="Double-click to edit"
-    >
-      <td className="px-4 py-2">
-        <span className="flex items-center gap-2">
-          <span className="w-14 shrink-0 rounded px-1.5 py-0.5 text-center text-[9px] font-semibold uppercase tracking-wide" style={{ background: `color-mix(in oklch, ${c.color} 14%, transparent)`, color: c.color }}>
-            {c.label}
-          </span>
-          {k === "prefix" || k === "suffix" ? (
-            <span className="flex min-w-0 items-center gap-2">
-              <span className="shrink-0 rounded bg-black/40 px-1.5 py-0.5 text-xs">
-                <McText text={nodeBody(node.permission)} />
-              </span>
-              <span className="shrink-0 text-[10px] text-muted-foreground/50">prio {node.permission.split(".")[1] ?? "?"}</span>
-              <span className="truncate font-mono text-[10px] text-muted-foreground/40">{node.permission}</span>
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <tr
+            className="player-row-in border-b border-hairline last:border-0 hover:bg-accent/40"
+            style={{ animationDelay: `${Math.min(index * 18, 220)}ms` }}
+            onDoubleClick={begin}
+            title="Double-click to edit · right-click for actions"
+          />
+        }
+      >
+        <td className="px-4 py-2">
+          <span className="flex items-center gap-2">
+            <span className="w-14 shrink-0 rounded px-1.5 py-0.5 text-center text-[9px] font-semibold uppercase tracking-wide" style={{ background: `color-mix(in oklch, ${c.color} 14%, transparent)`, color: c.color }}>
+              {c.label}
             </span>
-          ) : (
-            <span className="break-all font-mono text-xs">{k === "permission" ? node.permission : nodeBody(node.permission)}</span>
-          )}
-        </span>
-      </td>
-      <td className="px-3 py-2">
-        <button
-          onClick={onToggle}
-          disabled={busy}
-          className={cn("rounded px-2 py-0.5 font-mono text-[11px] font-semibold transition-colors", node.value ? "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25" : "bg-red-500/15 text-red-400 hover:bg-red-500/25")}
-          title="Toggle value"
-        >
-          {String(node.value)}
-        </button>
-      </td>
-      <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        {node.server === "global" && node.world === "global" ? <span className="text-muted-foreground/40">global</span> : `${node.server}${node.world !== "global" ? ` · ${node.world}` : ""}`}
-      </td>
-      <td className="px-3 py-2 text-[11px] text-muted-foreground">{fmtExpiry(node.expiry)}</td>
-      <td className="w-12 px-3 py-2 text-right">
-        {/* opacity swap (not display) so the cell never resizes on hover */}
-        <button
-          onClick={onRemove}
-          disabled={busy}
-          className="rounded p-1 text-destructive/60 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-          title="Remove node"
-          tabIndex={-1}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
-      </td>
-    </tr>
+            {k === "prefix" || k === "suffix" ? (
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="shrink-0 rounded bg-black/40 px-1.5 py-0.5 text-xs">
+                  <McText text={nodeBody(node.permission)} />
+                </span>
+                <span className="shrink-0 text-[10px] text-muted-foreground/50">prio {node.permission.split(".")[1] ?? "?"}</span>
+                <span className="truncate font-mono text-[10px] text-muted-foreground/40">{node.permission}</span>
+              </span>
+            ) : (
+              <span className="break-all font-mono text-xs">{k === "permission" ? node.permission : nodeBody(node.permission)}</span>
+            )}
+          </span>
+        </td>
+        <td className="px-3 py-2">
+          <button
+            onClick={onToggle}
+            disabled={busy}
+            className={cn("rounded px-2 py-0.5 font-mono text-[11px] font-semibold transition-colors", node.value ? "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25" : "bg-red-500/15 text-red-400 hover:bg-red-500/25")}
+            title="Toggle value"
+          >
+            {String(node.value)}
+          </button>
+        </td>
+        <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">
+          {node.server === "global" && node.world === "global" ? <span className="text-muted-foreground/40">global</span> : `${node.server}${node.world !== "global" ? ` · ${node.world}` : ""}`}
+        </td>
+        <td className="px-3 py-2 text-[11px] text-muted-foreground">{fmtExpiry(node.expiry)}</td>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuLabel className="max-w-64 truncate font-mono text-xs">{node.permission}</ContextMenuLabel>
+        <ContextMenuItem onClick={begin}><Pencil /> Edit node</ContextMenuItem>
+        <ContextMenuItem onClick={onToggle}><ToggleLeft /> Set {String(!node.value)}</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem variant="destructive" onClick={onRemove}><Trash2 /> Remove node</ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -590,15 +608,33 @@ function RailEmpty({ text }: { text: string }) {
 /* ---- parent adder ---------------------------------------------------------- */
 function AddParent({ groups, exclude, onAdd }: { groups: string[]; exclude: string[]; onAdd: (g: string) => void }) {
   const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const avail = groups.filter((g) => !exclude.includes(g));
+
+  // dismiss when clicking anywhere else, pressing Esc, or moving the pointer away
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
   if (avail.length === 0) return null;
   return (
-    <div className="relative">
+    <div
+      ref={wrapRef}
+      className="relative"
+      onMouseLeave={() => { leaveTimer.current = setTimeout(() => setOpen(false), 350); }}
+      onMouseEnter={() => { if (leaveTimer.current) { clearTimeout(leaveTimer.current); leaveTimer.current = null; } }}
+    >
       <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-0.5 rounded border border-hairline px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
-        <Plus className="h-3 w-3" /> add <ChevronDown className="h-3 w-3" />
+        <Plus className="h-3 w-3" /> add <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-1 max-h-48 w-36 overflow-y-auto rounded-md border border-hairline bg-panel py-1 shadow-lg">
+        <div className="player-row-in absolute right-0 top-full z-20 mt-1 max-h-48 w-36 overflow-y-auto rounded-md border border-hairline bg-panel py-1 shadow-lg">
           {avail.map((g) => (
             <button key={g} onClick={() => { setOpen(false); onAdd(g); }} className="block w-full px-3 py-1.5 text-left text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground">
               {g}
