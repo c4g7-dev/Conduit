@@ -10,8 +10,9 @@ import {
   ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator,
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
-import { Users, UserX, Loader2, MoveRight, MessageSquare, Gamepad2, Boxes } from "lucide-react";
+import { Users, UserX, Loader2, MoveRight, MessageSquare, Gamepad2, Boxes, History } from "lucide-react";
 import { MessageDialog, MoveDialog, KickDialog } from "@/components/player-action-dialogs";
+import { PlayerHistoryDialog } from "@/components/player-history-dialog";
 
 type MetricRow = {
   vmid: number; taskName: string; role: string; reachable: boolean;
@@ -38,6 +39,9 @@ export default function PlayersPage() {
   const { data: conn } = useStream<Conn>("/api/stream", "/api/connector/servers", 5000);
   const [kicking, setKicking] = useState<string | null>(null);
   const [dlg, setDlg] = useState<DialogState>(null);
+  // audit-trail dialog (any player, online or not)
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
+  const [historyQuery, setHistoryQuery] = useState("");
   // Optimistically hidden players (kick/move just issued) so the row disappears instantly;
   // re-confirmed by the next stream push (cleared when the player actually leaves the list).
   const [removed, setRemoved] = useState<Set<string>>(new Set());
@@ -189,7 +193,21 @@ export default function PlayersPage() {
         subtitle={`${connActive ? visible.length : total}/${capacity} online · ${totalGameInstances} instance(s) across ${gameServices.length} service(s)${connActive ? " · live" : " · SLP (sample)"}`}
         onRefresh={refresh}
         loading={loading}
-      />
+      >
+        {/* audit lookup — works for OFFLINE players too (queries the stored trail) */}
+        <form
+          onSubmit={(e) => { e.preventDefault(); if (historyQuery.trim()) setHistoryFor(historyQuery.trim()); }}
+          className="flex items-center gap-1.5 rounded-md border border-hairline bg-accent/30 px-2 py-1.5"
+        >
+          <History className="h-3.5 w-3.5 text-muted-foreground" />
+          <input
+            value={historyQuery}
+            onChange={(e) => setHistoryQuery(e.target.value)}
+            placeholder="Player history…"
+            className="w-32 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/60"
+          />
+        </form>
+      </PageHeader>
 
       {/* Game services presence strip — one card per server task; scaled tasks list their
           instances (vmid + count) inside, with an aggregate header. */}
@@ -248,6 +266,7 @@ export default function PlayersPage() {
         kicking={kicking}
         connActive={connActive}
         onOpenDialog={(kind, p) => setDlg({ kind, player: p })}
+        onHistory={setHistoryFor}
         emptyHint={(metrics?.instances ?? []).every((r) => !r.reachable) ? "(no reachable Minecraft servers)" : undefined}
       />
 
@@ -262,9 +281,12 @@ export default function PlayersPage() {
             kicking={kicking}
             connActive={connActive}
             onOpenDialog={(kind, p) => setDlg({ kind, player: p })}
+            onHistory={setHistoryFor}
           />
         </div>
       )}
+
+      {historyFor && <PlayerHistoryDialog player={historyFor} onClose={() => setHistoryFor(null)} />}
 
       {/* player-action dialogs (styled message, compatible-service move picker, kick) */}
       {dlg?.kind === "message" && (
@@ -340,7 +362,7 @@ function useAnimatedRows(players: PlayerRow[]) {
 }
 
 function PlayerTable({
-  icon, label, count, players, kicking, connActive, onOpenDialog, emptyHint,
+  icon, label, count, players, kicking, connActive, onOpenDialog, onHistory, emptyHint,
 }: {
   icon: ReactNode;
   label: string;
@@ -349,6 +371,7 @@ function PlayerTable({
   kicking: string | null;
   connActive: boolean;
   onOpenDialog: (kind: "kick" | "move" | "message", p: PlayerRow) => void;
+  onHistory: (name: string) => void;
   emptyHint?: string;
 }) {
   const rows = useAnimatedRows(players);
@@ -390,6 +413,7 @@ function PlayerTable({
                   <ContextMenuLabel>{p.name}{p.uuid ? ` · ${p.uuid.slice(0, 8)}` : ""}</ContextMenuLabel>
                   <ContextMenuItem disabled={!connActive} onClick={() => onOpenDialog("move", p)}><MoveRight /> Move to…</ContextMenuItem>
                   <ContextMenuItem disabled={!connActive} onClick={() => onOpenDialog("message", p)}><MessageSquare /> Message…</ContextMenuItem>
+                  <ContextMenuItem onClick={() => onHistory(p.name)}><History /> History…</ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem disabled={!connActive} variant="destructive" onClick={() => onOpenDialog("kick", p)}><UserX /> Kick</ContextMenuItem>
                 </ContextMenuContent>

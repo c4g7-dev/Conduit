@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
@@ -15,6 +15,31 @@ type LpStatus = {
 export default function SettingsPage() {
   const { data: lp, refresh: refreshLp } = usePoll<LpStatus>("/api/luckperms/status", 10000);
   const [installing, setInstalling] = useState(false);
+
+  // DSGVO audit retention (days)
+  const [retention, setRetention] = useState<number | null>(null);
+  const [savingRetention, setSavingRetention] = useState(false);
+  useEffect(() => {
+    fetch("/api/audit?days=1").then((r) => r.json())
+      .then((j) => setRetention(j.retentionDays ?? 30))
+      .catch(() => setRetention(30));
+  }, []);
+  async function saveRetention() {
+    if (retention === null) return;
+    setSavingRetention(true);
+    try {
+      const r = await fetch("/api/audit", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ retentionDays: retention }),
+      }).then((x) => x.json());
+      if (r.error) throw new Error(r.error);
+      toast.success(`Audit retention set to ${r.retentionDays} days`);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setSavingRetention(false);
+    }
+  }
 
   async function installLp() {
     if (!confirm("Install/refresh LuckPerms on every running Paper + Velocity instance? Each server restarts to load it.")) return;
@@ -120,6 +145,35 @@ export default function SettingsPage() {
             >
               {installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
               {installing ? "Installing…" : "Install LuckPerms on all servers"}
+            </button>
+          </div>
+        </div>
+
+        {/* ── Player audit (DSGVO) ─────────────────────────────────────── */}
+        <div className="panel p-5 sm:col-span-2">
+          <div className="mb-3 flex items-center gap-2.5">
+            <ShieldCheck className="h-4 w-4 text-brand" />
+            <h2 className="text-sm font-semibold">Player audit · DSGVO retention</h2>
+          </div>
+          <p className="mb-3 text-[12px] leading-relaxed text-muted-foreground">
+            Joins, quits, server switches and operator actions are logged per player (no chat,
+            no message contents). Day files older than the retention window are purged
+            automatically; per-player erasure is available in each player&apos;s History dialog.
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              type="number" min={1} max={365}
+              value={retention ?? ""}
+              onChange={(e) => setRetention(Number(e.target.value))}
+              className="w-24 rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 font-mono text-sm outline-none"
+            />
+            <span className="text-[12px] text-muted-foreground">days</span>
+            <button
+              onClick={saveRetention}
+              disabled={retention === null || savingRetention}
+              className="ml-2 flex items-center gap-1.5 rounded-md border border-hairline px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+            >
+              {savingRetention ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save retention
             </button>
           </div>
         </div>

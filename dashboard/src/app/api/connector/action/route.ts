@@ -4,6 +4,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { queueAction, connectorActive } from "@/lib/connector";
+import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -21,6 +22,16 @@ export async function POST(req: NextRequest) {
       case "kick": if (!b.player) return NextResponse.json({ error: "player required" }, { status: 400 }); id = queueAction({ kind: "kick", player: b.player, reason: b.reason, serverId: sid, env }); break;
       case "unqueue": if (!b.player) return NextResponse.json({ error: "player required" }, { status: 400 }); id = queueAction({ kind: "unqueue", player: b.player, env: "proxy" }); break;
       default: return NextResponse.json({ error: `bad kind: ${b.kind}` }, { status: 400 });
+    }
+    // operator-action audit (message TEXT deliberately not stored — privacy)
+    if (b.player && (b.kind === "kick" || b.kind === "move" || b.kind === "message" || b.kind === "unqueue")) {
+      recordAudit({
+        type: b.kind,
+        player: b.player,
+        server: b.kind === "move" ? b.target : sid,
+        detail: b.kind === "kick" ? b.reason : undefined,
+        actor: "panel",
+      });
     }
     return NextResponse.json({ ok: true, id });
   } catch (e) {

@@ -88,6 +88,9 @@ export type Task = {
   /** whether auto file-sync also RESTARTS the instance on change (default off: files re-applied,
    *  picked up on the next natural restart so players aren't kicked) */
   templateSyncRestart?: boolean;
+  /** last overlay-chain signature applied by auto file-sync — PERSISTED so panel restarts
+   *  don't silently absorb overlay edits as a fresh baseline */
+  templateSyncSig?: string;
   /** newest upstream build installed across this task's instances (hotfix tracking) */
   installedBuild?: number;
   /** server list MOTD (supports & colour codes); applied to this task's instances */
@@ -146,7 +149,11 @@ export type ImageStatus = {
 };
 
 /** Network-wide settings shared by all instances (e.g. proxy↔backend secret). */
-export type Network = { forwardingSecret: string };
+export type Network = {
+  forwardingSecret: string;
+  /** player-audit retention in days (DSGVO) — older day files are purged; default 30 */
+  auditRetentionDays?: number;
+};
 
 /** What a schedule acts on — a whole group, one subgroup (incl. nested), a service, or a
  *  single instance. Replaces the old group-only target; `Schedule.groupId` stays for back-compat. */

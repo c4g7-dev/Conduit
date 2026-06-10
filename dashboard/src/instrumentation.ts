@@ -48,8 +48,12 @@ export async function register() {
       // Run due scheduled actions — leader-only, so they never double-fire.
       const { runSchedules } = await import("./lib/scheduler");
       await runSchedules().catch((e) => console.error("[conduitd] schedules:", e));
-      // Persist the audit log to the shared store (only flushes if it changed).
+      // Persist the activity feed to the shared store (only flushes if it changed).
       await flushEvents().catch(() => {});
+      // Player audit trail: flush pending entries + daily DSGVO retention purge.
+      const { flushAudit, purgeAudit } = await import("./lib/audit");
+      await flushAudit().catch(() => {});
+      await purgeAudit().catch(() => {});
     } catch (e) {
       console.error("[conduitd] tick failed:", e);
     } finally {

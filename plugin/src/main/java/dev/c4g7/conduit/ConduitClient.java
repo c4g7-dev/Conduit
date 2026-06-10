@@ -74,6 +74,15 @@ public final class ConduitClient {
         }
     }
 
+    /** Deregister on shutdown so the panel flips this service to "restarting…" instantly
+     *  instead of waiting out the heartbeat-staleness window. Best-effort. */
+    public void unregister() {
+        try {
+            post("/api/connector/unregister", base());
+            System.out.println("[Conduit] unregistered " + id);
+        } catch (Throwable ignored) {}
+    }
+
     /** A queued action the proxy must run, as returned by the heartbeat. `serverId`/`env` scope it
      *  to the player's current server so cross-platform same-name players aren't both hit. */
     public record Action(long id, String kind, String player, String target, String text, String group, String reason, String serverId, String env) {}

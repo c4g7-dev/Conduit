@@ -52,6 +52,12 @@ public class ConduitPaperPlugin extends JavaPlugin implements Listener {
         getServer().getScheduler().runTaskTimer(this, this::shardTick, 100L, 10L);
     }
 
+    @Override
+    public void onDisable() {
+        // drop out of the panel's live set immediately → "restarting…" shows within a second
+        if (client != null) client.unregister();
+    }
+
     /** Main-thread sharding loop: refresh grid from the panel config, then tick each player. */
     private void shardTick() {
         JsonObject cfg = client.config;

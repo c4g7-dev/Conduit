@@ -17,6 +17,7 @@ import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyPingEvent;
+import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
@@ -82,6 +83,12 @@ public class ConduitVelocityPlugin {
         // instead of up to 3s (the lag felt during a handoff).
         proxy.getScheduler().buildTask(this, this::tick)
                 .repeat(1, TimeUnit.SECONDS).delay(2, TimeUnit.SECONDS).schedule();
+    }
+
+    @Subscribe
+    public void onShutdown(ProxyShutdownEvent e) {
+        // drop out of the panel's live set immediately (instant "restarting…" status)
+        if (client != null) client.unregister();
     }
 
     /** Split an argument line, keeping a trailing empty token so completion advances per arg. */

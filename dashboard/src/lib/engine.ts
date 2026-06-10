@@ -417,7 +417,8 @@ function tplIdsFor(db: Awaited<ReturnType<typeof getDB>>, taskId: string): strin
   return (db.globalTemplates ?? []).filter((t) => t.taskIds.includes(taskId)).map((t) => t.id);
 }
 
-/** Re-apply a task's overlay chain to its running instances (+ optionally restart). */
+/** Re-apply a task's overlay chain to its running instances (+ optionally restart) —
+ *  instances in parallel (the serial version made multi-instance resyncs feel stuck). */
 export async function resyncTaskFiles(taskId: string, restart = true): Promise<{ vmid: number; ok: boolean; error?: string }[]> {
   await loadBlueprints();
   const db = await getDB();
@@ -427,47 +428,66 @@ export async function resyncTaskFiles(taskId: string, restart = true): Promise<{
   const kind = bp.software.kind;
   const tplIds = tplIdsFor(db, t.id);
   const all = await discoverInstances();
-  const results: { vmid: number; ok: boolean; error?: string }[] = [];
-  for (const inst of instancesOf(all, t.id)) {
-    if (inst.status !== "running" || !inst.ready) continue;
+  const targets = instancesOf(all, t.id).filter((i) => i.status === "running" && i.ready);
+  return Promise.all(targets.map(async (inst): Promise<{ vmid: number; ok: boolean; error?: string }> => {
     try {
       const host = await nodeIp(inst.node);
       await applyTemplate(inst.vmid, bp.id, t.id, serviceDir(kind), host, kind, tplIds);
       if (restart) await ctExec(inst.vmid, `systemctl restart mc 2>/dev/null || true`, 30_000, host);
-      results.push({ vmid: inst.vmid, ok: true });
+      return { vmid: inst.vmid, ok: true };
     } catch (e) {
-      results.push({ vmid: inst.vmid, ok: false, error: String(e) });
+      return { vmid: inst.vmid, ok: false, error: String(e) };
     }
-  }
-  return results;
+  }));
 }
 
 /**
  * Rewrite-on-change (ideas.md §2): for templateSync tasks, watch the overlay chain's signature;
  * when an edit lands (file manager/SFTP on the shared store), re-apply the files — and restart
  * the instances only if templateSyncRestart is set (else changes load on the next natural
- * restart, never kicking players). First sighting only arms the baseline (no restart storm on
- * boot). Throttled to one scan per minute.
+ * restart, never kicking players).
+ * - signatures for ALL watched tasks are fetched in ONE ssh call (overlaySignatures)
+ * - the last-applied signature is PERSISTED on the task, so a panel restart can't silently
+ *   absorb an overlay edit as a fresh baseline (the old in-memory map did exactly that)
+ * - scans every ~15s (was 60s — felt like "nothing happens")
  */
 async function templateSyncPass(
   db: Awaited<ReturnType<typeof getDB>>,
   log: string[],
 ) {
-  const g = global as unknown as { __conduitTplAt?: number; __conduitTplSigs?: Map<string, string> };
-  if (Date.now() - (g.__conduitTplAt ?? 0) < 60_000) return;
+  const g = global as unknown as { __conduitTplAt?: number };
+  if (Date.now() - (g.__conduitTplAt ?? 0) < 15_000) return;
   g.__conduitTplAt = Date.now();
-  g.__conduitTplSigs ??= new Map();
 
-  const { overlaySignature } = await import("./templates");
-  for (const t of db.tasks) {
-    if (!t.templateSync) continue;
-    const bp = blueprint(t.blueprintId);
-    if (!bp) continue;
+  const watched = db.tasks.filter((t) => t.templateSync && blueprint(t.blueprintId));
+  if (!watched.length) return;
+
+  const { overlaySignatures } = await import("./templates");
+  let sigs: Map<string, string>;
+  try {
+    sigs = await overlaySignatures(watched.map((t) => ({
+      taskId: t.id,
+      eggId: blueprint(t.blueprintId)!.id,
+      kind: blueprint(t.blueprintId)!.software.kind,
+      tplIds: tplIdsFor(db, t.id),
+    })));
+  } catch (e) {
+    log.push(`! template sync scan: ${String(e)}`);
+    return;
+  }
+
+  for (const t of watched) {
+    const sig = sigs.get(t.id);
+    if (sig === undefined) continue;
+    const prev = t.templateSyncSig;
+    if (prev === sig) continue;
+    // persist FIRST so a crash mid-apply doesn't re-trigger forever; first sighting arms only
+    await mutate((d) => {
+      const x = d.tasks.find((y) => y.id === t.id);
+      if (x) x.templateSyncSig = sig;
+    }).catch(() => {});
+    if (prev === undefined) continue; // baseline armed (survives restarts from now on)
     try {
-      const sig = await overlaySignature(bp.id, t.id, bp.software.kind, undefined, tplIdsFor(db, t.id));
-      const prev = g.__conduitTplSigs.get(t.id);
-      g.__conduitTplSigs.set(t.id, sig);
-      if (prev === undefined || prev === sig) continue;
       const res = await resyncTaskFiles(t.id, t.templateSyncRestart === true);
       log.push(`~ template sync ${t.name}: overlay changed → re-applied to ${res.filter((r) => r.ok).length} instance(s)${t.templateSyncRestart ? " + restart" : " (no restart)"}`);
     } catch (e) {

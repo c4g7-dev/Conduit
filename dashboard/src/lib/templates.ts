@@ -99,8 +99,36 @@ export async function applyTemplate(
 export async function overlaySignature(eggId: string, taskId: string, kind: string, host?: string, tplIds: string[] = []): Promise<string> {
   const dirs = overlayDirs(eggId, taskId, kind, tplIds);
   const out = await nodeExec(
-    dirs.map((d) => `([ -d '${d}' ] && find '${d}' -type f -printf '%P %s %T@\\n' | sort) || true`).join("; "),
+    dirs.map((d) => `([ -d '${d}' ] && find '${d}' -type f -printf '%P %s %T@\\n' | sed 's/\\.[0-9]*$//' | sort) || true`).join("; "),
     30_000, host,
   );
   return out.trim();
+}
+
+/**
+ * Batched signatures for many tasks in ONE ssh call (the per-task variant costs a full ssh
+ * round-trip each — with several templateSync tasks the scan dominated the watch loop).
+ * Output sections are split by a per-task marker line.
+ */
+export async function overlaySignatures(
+  specs: { taskId: string; eggId: string; kind: string; tplIds: string[] }[],
+  host?: string,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!specs.length) return out;
+  const script = specs.map((s) => {
+    const dirs = overlayDirs(s.eggId, s.taskId, s.kind, s.tplIds);
+    return `echo "===CONDUIT:${s.taskId}==="; ` +
+      dirs.map((d) => `([ -d '${d}' ] && find '${d}' -type f -printf '%P %s %T@\\n' | sed 's/\\.[0-9]*$//' | sort) || true`).join("; ");
+  }).join("; ");
+  const raw = await nodeExec(script, 60_000, host);
+  let current: string | null = null;
+  let buf: string[] = [];
+  const flush = () => { if (current) out.set(current, buf.join("\n").trim()); buf = []; };
+  for (const line of raw.split("\n")) {
+    const m = /^===CONDUIT:(.+)===$/.exec(line.trim());
+    if (m) { flush(); current = m[1]; } else buf.push(line);
+  }
+  flush();
+  return out;
 }

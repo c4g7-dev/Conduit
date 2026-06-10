@@ -18,15 +18,17 @@ function snapshot(lpSig: string | null) {
   const servers = liveServers().map((s) => ({
     id: s.id, task: s.task, group: s.group, env: s.env,
     online: s.online, max: s.max, tps: s.tps,
-    players: s.players, lastSeen: s.lastSeen,
+    players: s.players, queues: s.queues, lastSeen: s.lastSeen,
   }));
   return { active: connectorActive(), servers, players: allPlayers(), lpSig };
 }
 
-/** Compact change signature — ids, counts, the flattened player set, and the LuckPerms data
- *  hash (so the permissions editor live-updates on any permission change network-wide). */
+/** Compact change signature — ids, counts, queue sizes, the flattened player set, and the
+ *  LuckPerms data hash (so the permissions editor live-updates on any change network-wide). */
 function sig(snap: ReturnType<typeof snapshot>): string {
-  return snap.servers.map((s) => `${s.id}:${s.online}/${s.max}`).sort().join(",")
+  return snap.servers.map((s) =>
+    `${s.id}:${s.online}/${s.max}:${(s.queues ?? []).map((q) => `${q.id}=${q.players.length}`).join("+")}`,
+  ).sort().join(",")
     + "|" + snap.players.map((p) => `${p.name}@${p.server}`).sort().join(",")
     + "|" + (snap.lpSig ?? "");
 }

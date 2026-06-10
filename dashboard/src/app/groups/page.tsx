@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
+import { useStream } from "@/hooks/use-stream";
 import { PageHeader } from "@/components/page-header";
 import { NewGroupDialog } from "@/components/new-group-dialog";
 import { NewSubgroupDialog } from "@/components/new-subgroup-dialog";
@@ -83,13 +84,18 @@ type Metrics = { instances: MetricRow[]; totals: { players: number; capacity: nu
 
 type Tab = "overview" | "instances" | "routing" | "world" | "settings";
 
-type ConnQueues = { servers: { env: string; queues?: { id: string; players: { uuid: string; name: string; priority?: boolean }[] }[] }[] };
+type ConnLive = {
+  active: boolean;
+  servers: { id: string; env: string; lastSeen: number; queues?: { id: string; players: { uuid: string; name: string; priority?: boolean }[] }[] }[];
+};
+// software kinds that report via a connector — only these are judged "live" by its freshness
+const CONNECTED_KINDS = new Set(["paper", "velocity", "hytale"]);
 
 export default function ServersPage() {
   const { data, loading, refresh } = usePoll<State>("/api/conduit/state", 4000);
   const { data: metrics } = usePoll<Metrics>("/api/metrics", 5000);
-  // live subgroup join queues, reported by the proxy connector each heartbeat
-  const { data: connData, refresh: refreshConn } = usePoll<ConnQueues>("/api/connector/servers", 5000);
+  // live connector state over SSE (instant restart/queue visibility), polling fallback
+  const { data: connData } = useStream<ConnLive>("/api/stream", "/api/connector/servers", 5000);
   // software version status (hotfix/update-available) — slow-moving, poll lazily
   const { data: verData, refresh: refreshVers } = usePoll<{ tasks: TaskVersionStatus[] }>("/api/versions/status", 60000);
   const verByTask = useMemo(() => new Map((verData?.tasks ?? []).map((v) => [v.taskId, v])), [verData]);
@@ -100,6 +106,21 @@ export default function ServersPage() {
       for (const q of s.queues ?? []) m.set(q.id, q.players);
     }
     return m;
+  }, [connData]);
+  // vmids with a FRESH connector heartbeat — a restarting instance drops out within seconds,
+  // so the status flips to "restarting…" instead of showing a stale green "ready".
+  // Freshness is judged relative to the NEWEST heartbeat in the snapshot (the proxy beats
+  // every ~1s), which keeps the memo pure and immune to panel↔browser clock skew.
+  const connFresh = useMemo(() => {
+    const s = new Set<number>();
+    const servers = connData?.servers ?? [];
+    const newest = servers.reduce((n, sv) => Math.max(n, sv.lastSeen), 0);
+    for (const sv of servers) {
+      if (newest - sv.lastSeen > 12_000) continue;
+      const m = /-(\d+)$/.exec(sv.id);
+      if (m) s.add(Number(m[1]));
+    }
+    return s;
   }, [connData]);
 
   const groups = useMemo(() => data?.groups ?? [], [data]);
@@ -131,7 +152,7 @@ export default function ServersPage() {
     const json = await res.json();
     if (json.error) return toast.error(json.error);
     toast.success(`${name} removed from the queue`);
-    setTimeout(refreshConn, 1500); // proxy drains within its 1s tick
+    // the SSE stream pushes the shrunken queue as soon as the proxy drains (~1s)
   }
   const { data: nodesData } = usePoll<{ nodes: { node: string; status: string }[] }>("/api/nodes", 15000);
   const nodeNames = (nodesData?.nodes ?? []).filter((n) => n.status === "online").map((n) => n.node);
@@ -713,7 +734,7 @@ export default function ServersPage() {
                     <OverviewTab task={selected} metrics={mByVmid} busy={!!pending[selected.id]} onScale={scale} />
                   )}
                   {tab === "instances" && (
-                    <InstancesTab task={selected} metrics={mByVmid} pending={pending} onAction={instAction} onMigrate={migrate} onDelete={deleteInstance} nodes={nodeNames} />
+                    <InstancesTab task={selected} metrics={mByVmid} connFresh={connFresh} pending={pending} onAction={instAction} onMigrate={migrate} onDelete={deleteInstance} nodes={nodeNames} />
                   )}
                   {tab === "routing" && selected.role === "proxy" && data && (
                     <RoutingTab
@@ -920,8 +941,8 @@ function OverviewTab({ task, metrics, busy, onScale }: { task: Task; metrics: Ma
 }
 
 /* ---- instances tab ------------------------------------------------------- */
-function InstancesTab({ task, metrics, pending, onAction, onMigrate, onDelete, nodes }: {
-  task: Task; metrics: Map<number, MetricRow>; pending: Record<string, boolean>;
+function InstancesTab({ task, metrics, connFresh, pending, onAction, onMigrate, onDelete, nodes }: {
+  task: Task; metrics: Map<number, MetricRow>; connFresh: Set<number>; pending: Record<string, boolean>;
   onAction: (i: Instance, a: "start" | "shutdown" | "stop" | "reboot") => void;
   onMigrate: (i: Instance, target: string) => void;
   onDelete: (i: Instance) => Promise<void>;
@@ -958,8 +979,10 @@ function InstancesTab({ task, metrics, pending, onAction, onMigrate, onDelete, n
                 >
                   <td className="px-3 py-2">
                     <a href={`/services/${inst.vmid}`} className="flex items-center gap-2 hover:text-brand">
-                      {inst.status === "running" && inst.ready ? (
+                      {inst.status === "running" && inst.ready && (!CONNECTED_KINDS.has(task.softwareKind) || connFresh.has(inst.vmid)) ? (
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      ) : inst.status === "running" ? (
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
                       ) : (
                         <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/30" />
                       )}
@@ -975,6 +998,9 @@ function InstancesTab({ task, metrics, pending, onAction, onMigrate, onDelete, n
                   <td className="px-3 py-2">
                     {inst.status === "running" && !inst.ready ? (
                       <span className="flex items-center gap-1 text-amber-400"><Loader2 className="h-3 w-3 animate-spin" />installing</span>
+                    ) : inst.status === "running" && CONNECTED_KINDS.has(task.softwareKind) && !connFresh.has(inst.vmid) ? (
+                      // CT runs but the game server inside isn't heartbeating — restarting/booting
+                      <span className="flex items-center gap-1 text-amber-400"><Loader2 className="h-3 w-3 animate-spin" />restarting…</span>
                     ) : inst.status === "running" ? (
                       <span className="flex items-center gap-1 text-emerald-400/80"><CheckCircle2 className="h-3 w-3" />ready</span>
                     ) : (
