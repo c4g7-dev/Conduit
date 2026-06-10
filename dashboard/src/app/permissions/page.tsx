@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
+import { useStream } from "@/hooks/use-stream";
 import { PageHeader } from "@/components/page-header";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -36,7 +37,8 @@ type LpNode = { permission: string; value: boolean; server: string; world: strin
 type LpGroup = { name: string; weight: number | null; prefix: string | null; parents: string[]; nodeCount: number };
 type LpUser = { uuid: string; username: string | null; primaryGroup: string };
 type LpTrack = { name: string; groups: string[] };
-type LpStatus = { connected: boolean; host: string | null; initialized: boolean; error?: string };
+type LpStatus = { connected: boolean; host: string | null; initialized: boolean; users: number; error?: string };
+type Live = { players: { uuid: string; name: string; server?: string }[]; lpSig: string | null };
 
 type Target = { type: "group"; id: string } | { type: "user"; id: string; name: string };
 
@@ -90,17 +92,26 @@ export default function PermissionsPage() {
   const [userMeta, setUserMeta] = useState<LpUser | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // user search
+  // live stream: online players + LuckPerms data signature (changes on ANY perm edit network-wide)
+  const { data: live } = useStream<Live>("/api/stream", "/api/connector/servers", 8000);
+  const online = useMemo(() => live?.players ?? [], [live]);
+  const onlineUuids = useMemo(() => new Set(online.map((p) => p.uuid)), [online]);
+
+  // user roster: a short list by default, everything via "View all" — search hits ALL players
   const [q, setQ] = useState("");
   const [found, setFound] = useState<LpUser[]>([]);
+  const [showAll, setShowAll] = useState(false);
+  const loadUsers = useCallback(async (query: string, all: boolean) => {
+    const u = new URLSearchParams();
+    if (query) u.set("q", query);
+    if (all) u.set("all", "1"); else if (!query) u.set("limit", "8");
+    const r = await fetch(`/api/luckperms/users?${u}`).then((x) => x.json()).catch(() => null);
+    setFound(r?.users ?? []);
+  }, []);
   useEffect(() => {
-    const t = setTimeout(async () => {
-      if (!q.trim()) { setFound([]); return; }
-      const r = await fetch(`/api/luckperms/users?q=${encodeURIComponent(q.trim())}`).then((x) => x.json()).catch(() => null);
-      setFound(r?.users ?? []);
-    }, 250);
+    const t = setTimeout(() => loadUsers(q.trim(), showAll && !q.trim()), q ? 250 : 0);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, showAll, loadUsers]);
 
   const loadNodes = useCallback(async (t: Target) => {
     setNodes(null);
@@ -114,6 +125,26 @@ export default function PermissionsPage() {
       setUserMeta(r.user ?? null);
     }
   }, []);
+
+  // live refresh: when the LP signature changes (an edit landed anywhere — this panel, in-game
+  // /lp, another server), refetch everything currently on screen.
+  const lastSig = useRef<string | null>(null);
+  useEffect(() => {
+    const s = live?.lpSig ?? null;
+    if (s === null || s === lastSig.current) return;
+    const first = lastSig.current === null;
+    lastSig.current = s;
+    if (first) return; // initial value, nothing stale yet
+    // defer out of the effect body — these fetch + setState, which must not run mid-render
+    const t = setTimeout(() => {
+      refreshGroups();
+      refreshTracks();
+      loadUsers(q.trim(), showAll && !q.trim());
+      if (target) loadNodes(target);
+    }, 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live?.lpSig]);
 
   function select(t: Target) { setTarget(t); loadNodes(t); }
   // default selection once the first group list arrives
@@ -286,19 +317,48 @@ export default function PermissionsPage() {
                 );
               })}
 
-              {/* Users */}
+              {/* Users — online first (live), then a short roster; search hits everyone */}
               <RailHeader label="Users" className="mt-4" />
               <div className="mb-1 flex items-center gap-2 rounded border border-hairline px-2 py-1.5">
                 <Search className="h-3 w-3 text-muted-foreground" />
                 <input
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="Search players…"
+                  placeholder="Search all players…"
                   className="w-full bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/60"
                 />
               </div>
-              {found.map((u, ui) => {
+              {!q.trim() && online.length > 0 && (
+                <>
+                  <div className="px-2 pb-0.5 pt-1 text-[9px] font-semibold uppercase tracking-wider text-emerald-400/70">Online</div>
+                  {online.map((p, pi) => {
+                    const active = target?.type === "user" && target.id === p.uuid;
+                    return (
+                      <button
+                        key={p.uuid}
+                        onClick={() => select({ type: "user", id: p.uuid, name: p.name })}
+                        className={cn(
+                          "player-row-in flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors",
+                          active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                        )}
+                        style={{ animationDelay: `${Math.min(pi * 22, 240)}ms` }}
+                      >
+                        <span className="relative flex h-4 w-4 shrink-0">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={`https://mc-heads.net/avatar/${p.name}/16`} alt="" className="h-4 w-4 rounded-sm" />
+                          <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                        </span>
+                        <span className="flex-1 truncate">{p.name}</span>
+                        <span className="truncate text-[10px] text-muted-foreground/60">{p.server ?? ""}</span>
+                      </button>
+                    );
+                  })}
+                  <div className="px-2 pb-0.5 pt-2 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/50">All players</div>
+                </>
+              )}
+              {found.filter((u) => q.trim() || !onlineUuids.has(u.uuid)).map((u, ui) => {
                 const active = target?.type === "user" && target.id === u.uuid;
+                const isOnline = onlineUuids.has(u.uuid);
                 return (
                   <button
                     key={u.uuid}
@@ -309,14 +369,27 @@ export default function PermissionsPage() {
                     )}
                     style={{ animationDelay: `${Math.min(ui * 22, 240)}ms` }}
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={`https://mc-heads.net/avatar/${u.username ?? u.uuid}/16`} alt="" className="h-4 w-4 rounded-sm" />
+                    <span className="relative flex h-4 w-4 shrink-0">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={`https://mc-heads.net/avatar/${u.username ?? u.uuid}/16`} alt="" className="h-4 w-4 rounded-sm" />
+                      {isOnline && <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400" />}
+                    </span>
                     <span className="flex-1 truncate">{u.username ?? u.uuid}</span>
                     <span className="text-[10px] text-muted-foreground/60">{u.primaryGroup}</span>
                   </button>
                 );
               })}
-              {q && found.length === 0 && <RailEmpty text="no players match (players appear after their first join)" />}
+              {q.trim() && found.length === 0 && <RailEmpty text="no players match (players appear after their first join)" />}
+              {!q.trim() && (status?.users ?? 0) > found.length + online.length && !showAll && (
+                <button onClick={() => setShowAll(true)} className="mt-1 w-full rounded border border-dashed border-hairline px-2 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground">
+                  View all {status?.users} players
+                </button>
+              )}
+              {!q.trim() && showAll && (
+                <button onClick={() => setShowAll(false)} className="mt-1 w-full rounded border border-dashed border-hairline px-2 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground">
+                  Show less
+                </button>
+              )}
             </div>
           </div>
 

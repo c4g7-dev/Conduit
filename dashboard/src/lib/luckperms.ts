@@ -178,7 +178,7 @@ export async function lpGroupNodes(name: string): Promise<LpNode[]> {
   }
 }
 
-/** Known players (joined at least once), filtered by name prefix. */
+/** Known players (joined at least once), filtered by name SUBSTRING — searches everyone. */
 export async function lpListUsers(q = "", limit = 50): Promise<LpUserRow[]> {
   const client = await lpClient();
   if (!client) throw new Error("postgres unreachable");
@@ -186,13 +186,49 @@ export async function lpListUsers(q = "", limit = 50): Promise<LpUserRow[]> {
     const r = await client.query(
       `SELECT uuid, username, primary_group FROM luckperms_players
        WHERE username ILIKE $1 ORDER BY username LIMIT $2`,
-      [`${q}%`, limit],
+      [`%${q}%`, limit],
     );
     return r.rows.map((u: { uuid: string; username: string | null; primary_group: string }) => ({
       uuid: u.uuid, username: u.username, primaryGroup: u.primary_group,
     }));
   } finally {
     await client.end().catch(() => {});
+  }
+}
+
+/**
+ * Cheap change signature over ALL LuckPerms data (groups/users/tracks/nodes) — md5 aggregates,
+ * tables are small. The SSE stream diffs this so the editor live-updates on any change made
+ * anywhere (panel, in-game /lp, another server). Cached ~3s; null when storage is down.
+ */
+declare global {
+  // eslint-disable-next-line no-var
+  var __lpSig: { sig: string | null; at: number; busy: boolean } | undefined;
+}
+export async function lpSignature(): Promise<string | null> {
+  const c = (global.__lpSig ??= { sig: null, at: 0, busy: false });
+  if (Date.now() - c.at < 3000 || c.busy) return c.sig;
+  c.busy = true;
+  try {
+    const client = await lpClient().catch(() => null);
+    if (!client) { c.sig = null; return null; }
+    try {
+      const r = await client.query(`SELECT
+        md5(coalesce((SELECT string_agg(name||permission||value::text||server||world||expiry::text, ',' ORDER BY name, permission, server, world) FROM luckperms_group_permissions), '')) ||
+        md5(coalesce((SELECT string_agg(uuid||permission||value::text||server||world||expiry::text, ',' ORDER BY uuid, permission, server, world) FROM luckperms_user_permissions), '')) ||
+        md5(coalesce((SELECT string_agg(uuid||coalesce(username,'')||primary_group, ',' ORDER BY uuid) FROM luckperms_players), '')) ||
+        md5(coalesce((SELECT string_agg(name||groups, ',' ORDER BY name) FROM luckperms_tracks), '')) ||
+        md5(coalesce((SELECT string_agg(name, ',' ORDER BY name) FROM luckperms_groups), '')) AS sig`);
+      c.sig = r.rows[0]?.sig ?? null;
+      return c.sig;
+    } finally {
+      await client.end().catch(() => {});
+    }
+  } catch {
+    return c.sig;
+  } finally {
+    c.at = Date.now();
+    c.busy = false;
   }
 }
 
