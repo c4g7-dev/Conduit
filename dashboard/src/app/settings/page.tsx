@@ -44,30 +44,31 @@ export default function SettingsPage() {
     refreshNet();
   }
 
-  // DSGVO audit retention (days)
+  // player-history retention (days) — autosaves (debounced) on change, no save button
   const [retention, setRetention] = useState<number | null>(null);
   const [savingRetention, setSavingRetention] = useState(false);
+  const retentionLoaded = useState({ done: false })[0];
   useEffect(() => {
     fetch("/api/audit?days=1").then((r) => r.json())
-      .then((j) => setRetention(j.retentionDays ?? 30))
-      .catch(() => setRetention(30));
+      .then((j) => { setRetention(j.retentionDays ?? 30); retentionLoaded.done = true; })
+      .catch(() => { setRetention(30); retentionLoaded.done = true; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  async function saveRetention() {
-    if (retention === null) return;
-    setSavingRetention(true);
-    try {
-      const r = await fetch("/api/audit", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ retentionDays: retention }),
-      }).then((x) => x.json());
-      if (r.error) throw new Error(r.error);
-      toast.success(`Audit retention set to ${r.retentionDays} days`);
-    } catch (e) {
-      toast.error(String(e));
-    } finally {
-      setSavingRetention(false);
-    }
-  }
+  useEffect(() => {
+    if (!retentionLoaded.done || retention === null || retention < 1 || retention > 365) return;
+    const t = setTimeout(async () => {
+      setSavingRetention(true);
+      try {
+        const r = await fetch("/api/audit", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ retentionDays: retention }),
+        }).then((x) => x.json());
+        if (r.error) throw new Error(r.error);
+      } catch (e) { toast.error(String(e)); } finally { setSavingRetention(false); }
+    }, 700);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [retention]);
 
   return (
     <>
@@ -213,19 +214,13 @@ export default function SettingsPage() {
           </p>
           <div className="flex items-center gap-2">
             <input
-              type="number" min={1} max={365}
+              inputMode="numeric"
               value={retention ?? ""}
-              onChange={(e) => setRetention(Number(e.target.value))}
-              className="w-24 rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 font-mono text-sm outline-none"
+              onChange={(e) => setRetention(e.target.value === "" ? null : Number(e.target.value.replace(/\D/g, "")))}
+              className="w-20 rounded-md border border-hairline bg-accent/30 px-2.5 py-1.5 text-center font-mono text-sm outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
             />
             <span className="text-[12px] text-muted-foreground">days</span>
-            <button
-              onClick={saveRetention}
-              disabled={retention === null || savingRetention}
-              className="ml-2 flex items-center gap-1.5 rounded-md border border-hairline px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-            >
-              {savingRetention ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save retention
-            </button>
+            {savingRetention && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
           </div>
         </div>
 
@@ -257,8 +252,7 @@ export default function SettingsPage() {
             setPicker(null);
           }}
           title={picker === "lp" ? "Servers with LuckPerms" : "Servers with the connector"}
-          description="Pick whole services (group/subgroup selections expand to their services). Applies to all instances."
-          allowInstances={false}
+          description="Pick services, or a group/subgroup. Static services expand to individual instances; dynamic ones are whole-service."
         />
       )}
     </>

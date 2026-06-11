@@ -10,6 +10,7 @@ import { NewSubgroupDialog } from "@/components/new-subgroup-dialog";
 import { DeployServerDialog } from "@/components/deploy-server-dialog";
 import { SubgroupSettingsDialog } from "@/components/subgroup-settings-dialog";
 import { VersionCard, type TaskVersionStatus } from "@/components/version-card";
+import { TargetPickerDialog, expandToTaskIds, type PickGroup, type PickTarget } from "@/components/target-picker-dialog";
 import { EditGroupDialog } from "@/components/edit-group-dialog";
 import { EditTaskDialog } from "@/components/edit-task-dialog";
 import { MotdDialog } from "@/components/motd-dialog";
@@ -1083,11 +1084,15 @@ function RoutingTab({ proxy, candidates, busy, onSetFronts, onSetTryOrder, state
 }) {
   const fronted = new Set(proxy.fronts);
   const byId = new Map(candidates.map((c) => [c.id, c]));
-  const toggle = (id: string) => {
-    const next = new Set(fronted);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    onSetFronts(proxy, [...next]);
-  };
+  const [routePicker, setRoutePicker] = useState(false);
+  // Picker groups exclude the proxy itself (a proxy can't front itself).
+  const pickerGroups: PickGroup[] = state.groups.map((g) => ({
+    id: g.id, name: g.name, subgroups: g.subgroups,
+    tasks: g.tasks.filter((t) => t.role !== "proxy").map((t) => ({
+      id: t.id, name: t.name, role: t.role, mode: t.mode, subgroupId: t.subgroupId,
+      instances: t.instances.map((i) => ({ vmid: i.vmid, name: i.name, status: i.status })),
+    })),
+  }));
 
   // Effective try list: explicit order, else the derived default (fronted lobby-role tasks).
   const explicit = (proxy.tryOrder ?? []).filter((id) => fronted.has(id));
@@ -1112,32 +1117,38 @@ function RoutingTab({ proxy, candidates, busy, onSetFronts, onSetTryOrder, state
           <h3 className="text-sm font-semibold">Backend routing</h3>
         </div>
         <p className="mb-3 text-[12px] text-muted-foreground">
-          Select which servers <span className="text-foreground">{proxy.name}</span> routes players to.
-          Changes apply live via <span className="font-mono">velocity reload</span> — no player kicks.
+          Choose which servers <span className="text-foreground">{proxy.name}</span> routes players to —
+          whole services, or a group/subgroup (all its services). Applies live via
+          <span className="font-mono"> velocity reload</span>, no kicks.
         </p>
-        <div className="space-y-1">
-          {candidates.length === 0 && <p className="py-3 text-center text-xs text-muted-foreground">No backend servers to route to yet.</p>}
-          {candidates.map((c) => {
-            const on = fronted.has(c.id);
-            return (
-              <button
-                key={c.id}
-                disabled={busy}
-                onClick={() => toggle(c.id)}
-                className={cn(
-                  "flex w-full items-center justify-between rounded-md border px-3 py-2 text-[13px] transition-colors disabled:opacity-50",
-                  on ? "border-brand/40 bg-brand/10" : "border-hairline hover:bg-accent/50",
-                )}
-              >
-                <span className="flex items-center gap-2"><RoleDot role={c.role} /> {c.name}</span>
-                <span className={cn("text-[11px] font-medium", on ? "text-brand" : "text-muted-foreground")}>
-                  {on ? "routed" : "not routed"}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <button
+          onClick={() => setRoutePicker(true)}
+          disabled={busy}
+          className="flex w-full items-center gap-2 rounded-md border border-hairline bg-accent/30 px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-accent/50 disabled:opacity-50"
+        >
+          <Network className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          {fronted.size === 0 ? <span className="text-muted-foreground/60">No servers routed — choose…</span> : (
+            <span className="flex min-w-0 flex-1 flex-wrap gap-1">
+              {[...fronted].filter((id) => byId.has(id)).slice(0, 8).map((id) => (
+                <span key={id} className="flex items-center gap-1 rounded bg-accent px-1.5 py-0.5 text-[11px]"><RoleDot role={byId.get(id)!.role} /> {byId.get(id)!.name}</span>
+              ))}
+              {fronted.size > 8 && <span className="rounded bg-accent px-1.5 py-0.5 text-[11px]">+{fronted.size - 8}</span>}
+            </span>
+          )}
+          <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        </button>
       </div>
+
+      {routePicker && (
+        <TargetPickerDialog
+          groups={pickerGroups}
+          picked={new Map<string, PickTarget>([...fronted].filter((id) => byId.has(id)).map((id) => [`t:${id}`, { type: "task" as const, id }]))}
+          onClose={() => setRoutePicker(false)}
+          onSave={(sel) => { onSetFronts(proxy, expandToTaskIds(pickerGroups, sel)); setRoutePicker(false); }}
+          title={`Servers ${proxy.name} routes to`}
+          description="Pick services or a group/subgroup. Static services expand to individual instances; dynamic ones are whole-service. The proxy routes by service."
+        />
+      )}
 
       {/* ── Fallback "try" order: where joins/kicks land, attempted top → bottom ── */}
       <div className="panel p-4">

@@ -7,7 +7,8 @@
  * explicit targets — the parent alone covers them, so later scale-ups are included.
  *
  * Used by the Schedules target chooser and the global-template member chooser; behaviour
- * is tuned via `allowInstances` (offer per-instance rows) and `taskFilter` (e.g. backups
+ * is tuned via `allowInstances` (offer per-instance rows — STATIC services only; dynamic ones
+ * are whole-service since their instances churn) and `taskFilter` (e.g. backups
  * exclude dynamic services — they're recreated on every scale cycle).
  */
 import { useState } from "react";
@@ -57,8 +58,10 @@ export function expandToTaskIds(groups: PickGroup[], sel: Map<string, PickTarget
         return false;
       };
       for (const task of g.tasks) if (inChain(task.subgroupId)) out.add(task.id);
+    } else if (t.type === "instance") {
+      // map an instance pick back to its owning service (task-level consumers like routing/LP)
+      for (const g of groups) for (const task of g.tasks) if (task.instances.some((i) => i.vmid === t.vmid)) out.add(task.id);
     }
-    // instance targets have no task-id expansion (caller opted out via allowInstances)
   }
   return [...out];
 }
@@ -157,7 +160,9 @@ export function TargetPickerDialog({
             const renderTask = (t: PickTask, depth: number, covered: boolean) => {
               const tKey = `t:${t.id}`;
               const tOn = sel.has(tKey) || covered;
-              const expandable = allowInstances && t.instances.length > 1;
+              // Per-instance rows only for STATIC/persistent services — a dynamic service's
+              // instances churn (scale up/down, fresh vmids), so it's selectable only as a whole.
+              const expandable = allowInstances && t.mode !== "dynamic" && t.instances.length > 1;
               return (
                 <div key={t.id} className="space-y-1">
                   <Row t={{ type: "task", id: t.id }} depth={depth} covered={covered}
