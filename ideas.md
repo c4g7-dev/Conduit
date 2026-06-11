@@ -1,10 +1,35 @@
 # Conduit — Ideas & Roadmap Backlog
 
 > Brain-dump of future features for Conduit (the Proxmox-native MC + Hytale network
-> orchestrator). Nothing here is built yet — this is a thinking/planning doc to pick work
-> from later. Rough priority tag on each:
+> orchestrator). Rough priority tag on each:
 > **[P1]** soon / high value · **[P2]** wanted · **[P3]** nice-to-have · **[deferred]** explicitly
 > not now.
+
+---
+
+## ✅ Build status (updated 2026-06-11)
+
+**Done & live on the cluster:**
+- **§1 Version control** — pin/unpin, auto-hotfix within a line, explicit version switch, "update available" badges (MC; Hytale shows static).
+- **§2 Templating** — egg + `_global/<kind>` + named templates + per-task overlay chain, prioritized; rewrite-on-change (templateSync) with optional restart; **instant sync on panel edits** (~0s) + 8s scan for SFTP.
+- **§3 Groups/Subgroups/Queue** — nested subgroups, drag&drop, slot limits, join queue with VIP priority + panel view/kick.
+- **§4 Maintenance** — WebUI toggle on group/subgroup/service, in-game `/conduit maintenance`, LuckPerms bypass tiers.
+- **§5 LuckPerms** — Postgres+Redis backend, panel editor, **managed install set** (auto-installs on new instances).
+- **§6 Limbo & routing** — NanoLimbo egg, proxy try-order editor, routing picker.
+- **§8 Scheduling** — fine-grained targets (group/subgroup/service/instance), restart-on-empty, command + backup actions.
+- **§11 Player audit** — session/action trail, history UI, retention, erasure.
+- **Extra (not in original list):** system-service tagging + **rotatable Redis/Postgres credentials** (unlock-gated); **cross-service inventory sharing** via Redis (beyond one sharded world); HA panel, agents, sharding, golden-image autoscaling, metrics, SSE live status, file manager.
+
+**Partial:**
+- **§7 Hytale** — connector reports/executes already; **quic-relay proxy + auth flow not built**.
+- **§10 Node placement** — pin-to-node works; **whitelist/blacklist modes not built**.
+- **§16 UI polish** — live status / no-refresh, expanded settings, file-manager activity bar done; **custom service icons not built**.
+
+**Not started:** §9 Firewall (dynamic forwarding + ASN), §12 Resource-pack hosting, §13 Language system, §14 Skript connector + Ashlyn rounds, §15 DB viewer.
+
+**In-flight:** unify the target-picker model across the whole dashboard (persist selections as targets so a group pick auto-includes future members; try-order picker scoped to routed servers).
+
+**Deferred:** seamless restart/updates, TimeSMP combat-log bypass, categories.
 
 ---
 
