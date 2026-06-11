@@ -9,9 +9,15 @@ import {
   fsList, fsRead, fsWrite, fsMkdir, fsDelete, fsMove, fsCopy, fsUpload, fsArchive, fsExtract,
   fsDownloadResponse,
 } from "@/lib/agent";
+import { syncOnOverlayWrite } from "@/lib/engine";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+/** Kick an instant templateSync for any overlay/task/_tpl path touched in the file manager. */
+function kickSync(...paths: (string | undefined)[]) {
+  for (const p of paths) if (p) syncOnOverlayWrite(p).catch(() => {});
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -41,6 +47,7 @@ export async function PUT(req: NextRequest) {
     const { path, content } = (await req.json()) as { path?: string; content?: string };
     if (!path) return NextResponse.json({ error: "path required" }, { status: 400 });
     await fsWrite(path, content ?? "");
+    kickSync(path);
     return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 502 });
@@ -61,6 +68,8 @@ export async function POST(req: NextRequest) {
       case "extract": await fsExtract(String(b.path)); break;
       default: return NextResponse.json({ error: `bad action: ${action}` }, { status: 400 });
     }
+    // any mutation under an overlay dir re-syncs the affected services immediately
+    kickSync(b.path as string | undefined, b.to as string | undefined, b.dir as string | undefined, ...((b.paths as string[]) ?? []));
     return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 502 });

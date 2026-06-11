@@ -11,10 +11,13 @@ export async function GET() {
   return NextResponse.json({
     connectorTasks: n?.connectorTasks ?? null, // null = all paper/velocity/hytale (default)
     luckpermsTasks: n?.luckpermsTasks ?? [],
+    invShareGroups: n?.invShareGroups ?? [],
   });
 }
 
-/** { connectorTasks: [...] | null } — null/omitted-empty resets to the default (all). */
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+/** { connectorTasks: [...] | null } and/or { invShareGroups: [{name,taskIds}] }. */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -24,6 +27,15 @@ export async function POST(req: NextRequest) {
         d.network.connectorTasks = Array.isArray(body.connectorTasks) && body.connectorTasks.length
           ? body.connectorTasks.filter((x: unknown) => typeof x === "string")
           : undefined;
+      }
+      if (Array.isArray(body.invShareGroups)) {
+        d.network.invShareGroups = body.invShareGroups
+          .filter((g: { name?: unknown }) => typeof g.name === "string" && g.name.trim())
+          .map((g: { id?: string; name: string; taskIds?: unknown }) => ({
+            id: g.id || slug(g.name),
+            name: g.name.trim(),
+            taskIds: Array.isArray(g.taskIds) ? g.taskIds.filter((x: unknown) => typeof x === "string") : [],
+          }));
       }
     });
     return NextResponse.json({ ok: true });

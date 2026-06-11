@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { usePoll } from "@/hooks/use-poll";
 import { PageHeader } from "@/components/page-header";
-import { Server, Network, ShieldCheck, KeyRound, Loader2, Crosshair, Cable, ChevronDown, RefreshCw } from "lucide-react";
+import { Server, Network, ShieldCheck, KeyRound, Loader2, Crosshair, Cable, ChevronDown, RefreshCw, Boxes } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TargetPickerDialog, expandToTaskIds, type PickGroup, type PickTarget } from "@/components/target-picker-dialog";
 
@@ -224,6 +224,9 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        {/* ── Inventory-share groups ───────────────────────────────────── */}
+        <InvShareCard groups={groups} taskName={taskName} />
+
         {/* ── System-service credentials (gated) ───────────────────────── */}
         <SystemCredentialsCard />
 
@@ -256,6 +259,76 @@ export default function SettingsPage() {
         />
       )}
     </>
+  );
+}
+
+/* ---- inventory-share groups: independent services sharing inventory via Redis ---- */
+type InvGroup = { id: string; name: string; taskIds: string[] };
+function InvShareCard({ groups, taskName }: { groups: PickGroup[]; taskName: Map<string, string> }) {
+  const { data, refresh } = usePoll<{ invShareGroups: InvGroup[] }>("/api/network", 15000);
+  const list = data?.invShareGroups ?? [];
+  const [picker, setPicker] = useState<string | null>(null); // group id being edited, "" = new
+
+  async function save(next: InvGroup[]) {
+    const r = await fetch("/api/network", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ invShareGroups: next }) }).then((x) => x.json());
+    if (r.error) return toast.error(r.error);
+    refresh();
+  }
+  function addGroup() {
+    const name = prompt("Inventory-share group name (e.g. survival-cluster):");
+    if (!name?.trim()) return;
+    save([...list, { id: "", name: name.trim(), taskIds: [] }]).then(() => toast.success(`Group "${name}" created — pick its services`));
+  }
+
+  const editing = picker !== null ? list.find((g) => g.id === picker) : null;
+
+  return (
+    <div className="panel p-5 sm:col-span-2">
+      <div className="mb-1 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <Boxes className="h-4 w-4 text-brand" />
+          <h2 className="text-sm font-semibold">Inventory sharing · across services</h2>
+        </div>
+        <button onClick={addGroup} className="flex items-center gap-1 rounded border border-hairline px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+          <Crosshair className="h-3 w-3" /> new group
+        </button>
+      </div>
+      <p className="mb-3 text-[12px] leading-relaxed text-muted-foreground">
+        Players keep one inventory (items, ender chest, HP/XP, effects) across every Minecraft
+        service in a group — via the Redis cluster, on switch. Instances of a single sharded world
+        already share; this links <span className="text-foreground">independent</span> services.
+      </p>
+      <div className="space-y-2">
+        {list.length === 0 && <p className="text-[12px] text-muted-foreground/60">No inventory-share groups yet.</p>}
+        {list.map((g) => (
+          <div key={g.id} className="flex items-center gap-2 rounded-md border border-hairline px-3 py-2">
+            <span className="text-[13px] font-medium">{g.name}</span>
+            <span className="flex min-w-0 flex-1 flex-wrap gap-1">
+              {g.taskIds.map((id) => <span key={id} className="rounded bg-accent px-1.5 py-0.5 text-[11px]">{taskName.get(id) ?? id}</span>)}
+              {g.taskIds.length === 0 && <span className="text-[11px] text-muted-foreground/50">no services</span>}
+            </span>
+            <button onClick={() => setPicker(g.id)} className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" title="Edit services"><Crosshair className="h-3.5 w-3.5" /></button>
+            <button onClick={() => { if (confirm(`Delete inventory-share group "${g.name}"?`)) save(list.filter((x) => x.id !== g.id)); }}
+              className="rounded p-1 text-destructive/60 hover:bg-destructive/10 hover:text-destructive" title="Delete"><RefreshCw className="hidden" /><span className="text-xs">✕</span></button>
+          </div>
+        ))}
+      </div>
+      {editing && (
+        <TargetPickerDialog
+          groups={groups}
+          picked={new Map<string, PickTarget>(editing.taskIds.map((id) => [`t:${id}`, { type: "task" as const, id }]))}
+          onClose={() => setPicker(null)}
+          onSave={(sel) => {
+            const ids = expandToTaskIds(groups, sel);
+            save(list.map((x) => x.id === editing.id ? { ...x, taskIds: ids } : x));
+            setPicker(null);
+          }}
+          title={`Services in "${editing.name}"`}
+          description="Minecraft services that share one inventory. Static services expand to instances; dynamic ones are whole-service."
+          taskFilter={(t) => t.role !== "proxy"}
+        />
+      )}
+    </div>
   );
 }
 

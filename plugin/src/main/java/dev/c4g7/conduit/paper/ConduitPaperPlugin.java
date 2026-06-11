@@ -33,6 +33,7 @@ public class ConduitPaperPlugin extends JavaPlugin implements Listener {
     private ConduitClient client;
     private String selfTask;
     private ConduitSharding sharding;
+    private ConduitInvShare invShare;
 
     @Override
     public void onEnable() {
@@ -43,6 +44,7 @@ public class ConduitPaperPlugin extends JavaPlugin implements Listener {
         String group = ConduitClient.envOr("CONDUIT_GROUP", "Network");
         client = new ConduitClient(endpoint, token, id, selfTask, group, "server");
         sharding = new ConduitSharding(this, client);
+        invShare = new ConduitInvShare(this, client);
         client.register();
 
         getServer().getPluginManager().registerEvents(this, this);
@@ -64,6 +66,7 @@ public class ConduitPaperPlugin extends JavaPlugin implements Listener {
         JsonObject sh = (cfg != null && cfg.has("sharding") && cfg.get("sharding").isJsonObject())
                 ? cfg.getAsJsonObject("sharding") : null;
         sharding.update(sh);
+        invShare.update(sharding.active());
         if (sharding.active()) for (Player p : Bukkit.getOnlinePlayers()) sharding.tickPlayer(p);
     }
 
@@ -108,6 +111,7 @@ public class ConduitPaperPlugin extends JavaPlugin implements Listener {
     @EventHandler
     public void onJoin(PlayerJoinEvent e) {
         sharding.onJoin(e.getPlayer());
+        invShare.onJoin(e.getPlayer());
         getServer().getScheduler().runTaskAsynchronously(this, () ->
                 client.event("join", e.getPlayer().getName(), selfTask));
     }
@@ -115,6 +119,7 @@ public class ConduitPaperPlugin extends JavaPlugin implements Listener {
     @EventHandler
     public void onQuit(PlayerQuitEvent e) {
         sharding.onQuit(e.getPlayer());
+        invShare.onQuit(e.getPlayer());
         getServer().getScheduler().runTaskAsynchronously(this, () ->
                 client.event("quit", e.getPlayer().getName(), selfTask));
     }

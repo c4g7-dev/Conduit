@@ -166,6 +166,9 @@ export type Network = {
    *  Bumping these rotates Redis / Postgres passwords and re-syncs every consumer. */
   redisPasswordOverride?: string;
   pgPasswordOverride?: string;
+  /** cross-service inventory sharing: named groups of MC services that share player inventory
+   *  (HP/XP/effects) via Redis — beyond a single sharded world's instances. */
+  invShareGroups?: { id: string; name: string; taskIds: string[] }[];
 };
 
 /** What a schedule acts on — a whole group, one subgroup (incl. nested), a service, or a

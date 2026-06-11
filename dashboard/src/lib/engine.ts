@@ -439,6 +439,42 @@ function tplIdsFor(db: Awaited<ReturnType<typeof getDB>>, taskId: string): strin
   return (db.globalTemplates ?? []).filter((t) => t.taskIds.includes(taskId)).map((t) => t.id);
 }
 
+/**
+ * Instant overlay sync: a store-relative path was just written via the panel file manager —
+ * figure out which templateSync tasks that overlay feeds and re-apply to them NOW (no waiting
+ * for the periodic scan). Layers: overlays/_global/<kind>, overlays/<eggId>, overlays/_tpl/<id>,
+ * tasks/<taskId>. Fire-and-forget; the periodic scan still covers external (SFTP) edits.
+ */
+export async function syncOnOverlayWrite(storePath: string): Promise<void> {
+  const p = storePath.replace(/^\/+/, "");
+  await loadBlueprints();
+  const db = await getDB();
+  const tasks = db.tasks.filter((t) => t.templateSync);
+  if (!tasks.length) return;
+  const affected = new Set<string>();
+  for (const t of tasks) {
+    const bp = blueprint(t.blueprintId);
+    if (!bp) continue;
+    const kind = bp.software.kind;
+    const tplIds = tplIdsFor(db, t.id);
+    const layers = [`overlays/_global/${kind}/`, `overlays/${bp.id}/`, `tasks/${t.id}/`, ...tplIds.map((id) => `overlays/_tpl/${id}/`)];
+    if (layers.some((l) => p === l.slice(0, -1) || p.startsWith(l))) affected.add(t.id);
+  }
+  for (const id of affected) {
+    // re-sync (respect each task's restart preference); record the new baseline sig so the
+    // periodic scan doesn't immediately re-fire for the same change.
+    resyncTaskFiles(id, db.tasks.find((t) => t.id === id)?.templateSyncRestart === true, "auto")
+      .then(async () => {
+        const t = db.tasks.find((x) => x.id === id)!;
+        const bp = blueprint(t.blueprintId)!;
+        const { overlaySignature } = await import("./templates");
+        const sig = await overlaySignature(bp.id, t.id, bp.software.kind, undefined, tplIdsFor(db, t.id)).catch(() => undefined);
+        if (sig !== undefined) await mutate((d) => { const x = d.tasks.find((y) => y.id === id); if (x) x.templateSyncSig = sig; }).catch(() => {});
+      })
+      .catch(() => {});
+  }
+}
+
 /** Re-apply a task's overlay chain to its running instances (+ optionally restart) —
  *  instances in parallel (the serial version made multi-instance resyncs feel stuck).
  *  Progress (per-instance status, total bytes/files) is published to the sync-status registry
@@ -495,7 +531,7 @@ async function templateSyncPass(
   log: string[],
 ) {
   const g = global as unknown as { __conduitTplAt?: number };
-  if (Date.now() - (g.__conduitTplAt ?? 0) < 15_000) return;
+  if (Date.now() - (g.__conduitTplAt ?? 0) < 8_000) return; // safety net for external/SFTP edits; panel edits sync instantly
   g.__conduitTplAt = Date.now();
 
   const watched = db.tasks.filter((t) => t.templateSync && blueprint(t.blueprintId));

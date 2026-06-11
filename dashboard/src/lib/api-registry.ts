@@ -78,7 +78,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
   { method: "GET", path: "/api/luckperms/install", group: "Automation", safe: true, desc: "The managed LuckPerms server set (task ids the reconcile keeps installed)." },
   { method: "POST", path: "/api/luckperms/install", group: "Automation", desc: "Set the managed LuckPerms server set ({taskIds}) and install/refresh it; no body = install the existing set (or all Paper/Velocity). Postgres+Redis wired automatically.", sampleBody: { taskIds: ["network-lobby", "network-world"] } },
   { method: "GET", path: "/api/network", group: "Automation", safe: true, desc: "Network managed settings: connector install set (null = all servers) + LuckPerms set." },
-  { method: "POST", path: "/api/network", group: "Automation", desc: "Set the Conduit connector install set ({connectorTasks}); null/empty = every Paper/Velocity/Hytale server.", sampleBody: { connectorTasks: ["network-lobby"] } },
+  { method: "POST", path: "/api/network", group: "Automation", desc: "Set the connector install set ({connectorTasks}; null = all) and/or inventory-share groups ({invShareGroups:[{name,taskIds}]} — MC services sharing one inventory via Redis).", sampleBody: { connectorTasks: ["network-lobby"] } },
   { method: "GET", path: "/api/luckperms/groups", group: "Automation", safe: true, desc: "Permission groups with weight/prefix/parents summaries (the built-in LP editor)." },
   { method: "POST", path: "/api/luckperms/groups", group: "Automation", desc: "Create a permission group (lp creategroup equivalent; triggers networksync).", sampleBody: { name: "vip" } },
   { method: "GET", path: "/api/luckperms/groups/:name", group: "Automation", safe: true, desc: "A group's full node list.", params: [{ name: "name", example: "default" }] },

@@ -9,6 +9,7 @@ import { heartbeat, drainActions, liveServers, allPlayers } from "@/lib/connecto
 import { connectorAuthed } from "@/lib/connector-auth";
 import { buildProxyConfig } from "@/lib/proxy-config";
 import { shardConfigForServer } from "@/lib/shard-state";
+import { getDB } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,10 +40,31 @@ export async function POST(req: NextRequest) {
       const actions = drainActions(Number(b.ackActionId ?? 0));
       return NextResponse.json({ ok: true, actions, names });
     }
-    // Backends: hand a sharded task's instance its strip grid + pending coord-restores.
-    // Send `config: null` when not sharded so the connector clears any stale grid.
+    // Backends: hand a sharded task's instance its strip grid + pending coord-restores, plus the
+    // inventory-share group this service belongs to (cross-service shared inventory via Redis).
+    // For a sharded task the share group is implicitly the task itself (its instances always
+    // share); an explicit group lets independent services share too.
     const shard = await shardConfigForServer(String(b.id), String(b.task ?? ""), String(b.group ?? "")).catch(() => null);
-    return NextResponse.json({ ok: true, actions: [], names, config: shard ? { sharding: shard } : null });
+    let invGroup: string | null = null;
+    try {
+      const db = await getDB();
+      const taskName = String(b.task ?? "");
+      const task = db.tasks.find((t) => t.name === taskName);
+      const grp = task && (db.network?.invShareGroups ?? []).find((g) => g.taskIds.includes(task.id));
+      invGroup = grp ? grp.id : null;
+    } catch { /* default null */ }
+    // A non-sharded service in an inventory-share group needs the Redis endpoints too (the
+    // sharding block already carries them when sharded).
+    let redis: { endpoints: string[]; password: string } | undefined;
+    if (invGroup && !shard) {
+      const { getRedisCluster } = await import("@/lib/redis-cluster");
+      const rc = getRedisCluster();
+      if (rc && rc.endpoints.length) redis = { endpoints: rc.endpoints, password: rc.password };
+    }
+    const cfg = (shard || invGroup)
+      ? { ...(shard ? { sharding: shard } : {}), ...(invGroup ? { invGroup } : {}), ...(redis ? { redis } : {}) }
+      : null;
+    return NextResponse.json({ ok: true, actions: [], names, config: cfg });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 400 });
   }
