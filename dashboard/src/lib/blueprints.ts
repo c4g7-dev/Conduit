@@ -249,6 +249,11 @@ export const BLUEPRINTS: Blueprint[] = [
 /** Built-in IDs can't be deleted/overwritten by custom templates. */
 export const BUILTIN_IDS = new Set(BLUEPRINTS.map((b) => b.id));
 
+/** Software kinds that are managed infrastructure (Conduit owns their creds/config), not
+ *  player-facing game servers — surfaced distinctly in the UI + the sensitive-creds page. */
+export const SYSTEM_KINDS = new Set<SoftwareKind>(["redis", "postgres", "mariadb"]);
+export const isSystemKind = (kind?: string): boolean => SYSTEM_KINDS.has(kind as SoftwareKind);
+
 // Custom (user-created) templates from the store, refreshed via loadBlueprints().
 // Kept in a module cache so blueprint() stays synchronous for its many call sites.
 let custom: Blueprint[] = [];

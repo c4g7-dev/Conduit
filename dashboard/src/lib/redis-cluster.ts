@@ -10,9 +10,11 @@ import { getNetwork } from "./store";
 
 export const REDIS_PORT = 6379;
 
-/** Deterministic Redis auth derived from the network secret (both panel & connector compute it). */
+/** Redis auth: an explicit rotation override if set, else derived from the network secret
+ *  (both panel & connector compute the derived form). */
 export async function redisPassword(): Promise<string> {
   const net = await getNetwork();
+  if (net.redisPasswordOverride) return net.redisPasswordOverride;
   return createHash("sha256").update(`${net.forwardingSecret}:conduit-redis`).digest("hex").slice(0, 32);
 }
 

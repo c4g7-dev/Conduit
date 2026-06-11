@@ -75,7 +75,10 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
 
   // ── Automation ───────────────────────────────────────────────────────
   { method: "GET", path: "/api/luckperms/status", group: "Automation", safe: true, desc: "LuckPerms link health: Postgres storage reachability, schema state, group/user/track counts, Redis messaging endpoint." },
-  { method: "POST", path: "/api/luckperms/install", group: "Automation", desc: "Install/refresh LuckPerms on every running Paper + Velocity instance (Postgres storage + Redis messaging wired automatically; each server restarts).", sampleBody: {} },
+  { method: "GET", path: "/api/luckperms/install", group: "Automation", safe: true, desc: "The managed LuckPerms server set (task ids the reconcile keeps installed)." },
+  { method: "POST", path: "/api/luckperms/install", group: "Automation", desc: "Set the managed LuckPerms server set ({taskIds}) and install/refresh it; no body = install the existing set (or all Paper/Velocity). Postgres+Redis wired automatically.", sampleBody: { taskIds: ["network-lobby", "network-world"] } },
+  { method: "GET", path: "/api/network", group: "Automation", safe: true, desc: "Network managed settings: connector install set (null = all servers) + LuckPerms set." },
+  { method: "POST", path: "/api/network", group: "Automation", desc: "Set the Conduit connector install set ({connectorTasks}); null/empty = every Paper/Velocity/Hytale server.", sampleBody: { connectorTasks: ["network-lobby"] } },
   { method: "GET", path: "/api/luckperms/groups", group: "Automation", safe: true, desc: "Permission groups with weight/prefix/parents summaries (the built-in LP editor)." },
   { method: "POST", path: "/api/luckperms/groups", group: "Automation", desc: "Create a permission group (lp creategroup equivalent; triggers networksync).", sampleBody: { name: "vip" } },
   { method: "GET", path: "/api/luckperms/groups/:name", group: "Automation", safe: true, desc: "A group's full node list.", params: [{ name: "name", example: "default" }] },
@@ -89,6 +92,8 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
   { method: "POST", path: "/api/luckperms/tracks", group: "Automation", desc: "Create/replace a track's ladder, low → high (networksync).", sampleBody: { name: "staff", groups: ["helper", "mod", "admin"] } },
   { method: "DELETE", path: "/api/luckperms/tracks", group: "Automation", desc: "Delete a track.", sampleBody: { name: "staff" } },
   { method: "GET", path: "/api/activity", group: "Automation", safe: true, desc: "Engine event feed + derived health alerts." },
+  { method: "GET", path: "/api/system-credentials", group: "Automation", safe: true, query: "reveal=1", desc: "System-service credentials (Redis player-sync + Postgres/LuckPerms). Masked unless ?reveal=1." },
+  { method: "POST", path: "/api/system-credentials", group: "Automation", destructive: true, desc: "Rotate a system credential ({service:redis|postgres, password?}) — regenerated + re-synced to all consumers.", sampleBody: { service: "redis" } },
   { method: "GET", path: "/api/audit", group: "Automation", safe: true, query: "player=c4g7&days=7", desc: "Player history trail (joins/quits/switches + operator actions), per-day files with auto-retention. Omit player for everything." },
   { method: "POST", path: "/api/audit", group: "Automation", desc: "Set the history retention window (days, 1–365; older day files purge daily).", sampleBody: { retentionDays: 30 } },
   { method: "POST", path: "/api/audit/erase", group: "Automation", destructive: true, desc: "Permanently remove ALL history entries of a player (name or uuid).", sampleBody: { player: "Notch" } },

@@ -157,6 +157,15 @@ export type Network = {
   forwardingSecret: string;
   /** player-audit retention in days (DSGVO) — older day files are purged; default 30 */
   auditRetentionDays?: number;
+  /** task ids that should ALWAYS have LuckPerms installed (reconcile keeps them in sync) */
+  luckpermsTasks?: string[];
+  /** task ids that should have the Conduit connector — undefined = all paper/velocity/hytale
+   *  (default behaviour); set to opt specific services out/in */
+  connectorTasks?: string[];
+  /** rotatable system-service credential overrides (else derived from forwardingSecret).
+   *  Bumping these rotates Redis / Postgres passwords and re-syncs every consumer. */
+  redisPasswordOverride?: string;
+  pgPasswordOverride?: string;
 };
 
 /** What a schedule acts on — a whole group, one subgroup (incl. nested), a service, or a

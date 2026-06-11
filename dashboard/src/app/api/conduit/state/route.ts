@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDB } from "@/lib/store";
-import { blueprint, allBlueprints, loadBlueprints } from "@/lib/blueprints";
+import { blueprint, allBlueprints, loadBlueprints, isSystemKind } from "@/lib/blueprints";
 import { discoverInstances, instancesOf, routingTables } from "@/lib/engine";
 
 export const dynamic = "force-dynamic";
@@ -24,6 +24,7 @@ export async function GET() {
             blueprintName: bp?.name ?? t.blueprintId,
             port: bp?.port ?? 25565,
             softwareKind: bp?.software.kind ?? "generic",
+            system: isSystemKind(bp?.software.kind),
             version: t.software?.version ?? bp?.software.version ?? "",
             motd: t.motd ?? "",
             instances: insts,

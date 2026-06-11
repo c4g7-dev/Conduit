@@ -530,7 +530,13 @@ export async function lpNetworkSync(): Promise<boolean> {
  * Postgres (storage) + Redis (messaging), then restart each so the plugin loads.
  * Idempotent — re-running refreshes jar + config. Returns per-instance results.
  */
-export async function lpInstallAll(): Promise<{ vmid: number; name: string; ok: boolean; error?: string }[]> {
+/**
+ * Install/refresh LuckPerms on running instances. `taskIds` limits to a set of services (the
+ * managed `network.luckpermsTasks`); omitted = every Paper/Velocity service (legacy "all").
+ * Only restarts instances that didn't already have the jar unless `force` (so the reconcile
+ * keep-in-sync pass can call this idempotently without restart storms).
+ */
+export async function lpInstallAll(taskIds?: string[], force = true): Promise<{ vmid: number; name: string; ok: boolean; error?: string }[]> {
   const pg = getPgCluster();
   if (!pg?.primary) throw new Error("no running PostgreSQL instance — deploy the PostgreSQL egg first");
   const redis = getRedisCluster();
@@ -546,15 +552,22 @@ export async function lpInstallAll(): Promise<{ vmid: number; name: string; ok: 
   await loadBlueprints();
   const db = await getDB();
   const all = await discoverInstances();
+  const set = taskIds ? new Set(taskIds) : null;
   const results: { vmid: number; name: string; ok: boolean; error?: string }[] = [];
 
   for (const t of db.tasks) {
+    if (set && !set.has(t.id)) continue;
     const kind = blueprint(t.blueprintId)?.software.kind;
     if (kind !== "paper" && kind !== "velocity") continue;
     for (const inst of instancesOf(all, t.id)) {
       if (inst.status !== "running" || !inst.ready) continue;
       try {
         const host = await nodeIp(inst.node);
+        // skip work (and the restart) if it's already there and we're not forcing
+        if (!force) {
+          const has = await ctExec(inst.vmid, `test -f /opt/mc/plugins/LuckPerms.jar && echo yes || echo no`, 15_000, host).catch(() => "no");
+          if (has.includes("yes")) continue;
+        }
         await installLuckPerms(inst.vmid, kind, {
           jarUrl: kind === "paper" ? urls.bukkit : urls.velocity,
           pgHost: pg.primary.ip,

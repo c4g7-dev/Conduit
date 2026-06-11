@@ -764,6 +764,35 @@ export async function setRedisReplication(vmid: number, password: string, primar
   await ctExec(vmid, cmd, 20_000, host);
 }
 
+/**
+ * Apply a (possibly rotated) Redis password live: try the new password first (already applied →
+ * no-op), else authenticate with the OLD one and CONFIG SET the new requirepass+masterauth, also
+ * persisting it to redis.conf so it survives a restart. `oldCandidates` are passwords to try for
+ * the auth (the derived default + any previous override we know).
+ */
+export async function applyRedisPassword(vmid: number, newPw: string, oldCandidates: string[], host?: string): Promise<void> {
+  const tries = [newPw, ...oldCandidates].filter((v, i, a) => v && a.indexOf(v) === i);
+  const script = `set -e
+NEW='${newPw}'
+for PW in ${tries.map((p) => `'${p}'`).join(" ")}; do
+  if redis-cli -a "$PW" --no-auth-warning PING 2>/dev/null | grep -q PONG; then
+    redis-cli -a "$PW" --no-auth-warning CONFIG SET requirepass "$NEW" >/dev/null 2>&1 || true
+    redis-cli -a "$NEW" --no-auth-warning CONFIG SET masterauth "$NEW" >/dev/null 2>&1 || true
+    CONF=/etc/redis/redis.conf
+    sed -i "s/^requirepass .*/requirepass $NEW/" "$CONF" 2>/dev/null || true
+    sed -i "s/^masterauth .*/masterauth $NEW/" "$CONF" 2>/dev/null || true
+    echo CONDUIT_REDIS_PW_APPLIED; exit 0
+  fi
+done
+echo CONDUIT_REDIS_PW_NOAUTH; exit 0`;
+  await ctExec(vmid, script, 25_000, host);
+}
+
+/** Apply a (possibly rotated) Postgres password to the conduit role (idempotent ALTER ROLE). */
+export async function applyPgPassword(vmid: number, newPw: string, host?: string): Promise<void> {
+  await ctExec(vmid, `su - postgres -c "psql -c \\"ALTER ROLE conduit PASSWORD '${newPw}'\\"" >/dev/null 2>&1 || true; echo CONDUIT_PG_PW_APPLIED`, 25_000, host);
+}
+
 /* ---- Limbo (NanoLimbo fallback/holding server) ---------------------------- */
 
 /** Latest NanoLimbo jar URL from GitHub releases (cached 1h). */

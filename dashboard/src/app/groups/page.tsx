@@ -61,6 +61,7 @@ import {
   RefreshCw,
   FolderSync,
   ListOrdered,
+  Cog,
 } from "lucide-react";
 
 /* ---- types (mirror /api/conduit/state) ----------------------------------- */
@@ -72,6 +73,7 @@ type Task = {
   autoscale: boolean; playersPerInstance: number; cores: number; memory: number;
   disk: number; persistent: boolean; port: number; fronts: string[]; tryOrder?: string[];
   subgroupId?: string; maintenance?: boolean; templateSync?: boolean; templateSyncRestart?: boolean;
+  system?: boolean;
   instances: Instance[]; live: number; running: number;
 };
 type Subgroup = { id: string; name: string; maintenance: boolean; parentId?: string; slotLimit?: number; fullMessage?: string };
@@ -507,6 +509,12 @@ export default function ServersPage() {
                       >
                         <RoleDot role={task.role} />
                         <span className="flex-1 truncate">{task.name}</span>
+                        {task.system && (
+                          <span title="System service — managed infrastructure (Conduit owns its credentials)."
+                            className="flex items-center gap-0.5 rounded bg-sky-500/10 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-sky-400/90">
+                            <Cog className="h-2.5 w-2.5" /> sys
+                          </span>
+                        )}
                         {(() => {
                           const v = verByTask.get(task.id);
                           if (!v || (!v.hotfixAvailable && !v.updateAvailable)) return null;

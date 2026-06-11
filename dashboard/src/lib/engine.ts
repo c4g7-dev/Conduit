@@ -9,6 +9,7 @@
  * SAFETY: only ever touches containers tagged `conduit` in VMID range 200-999.
  * Hand-made containers (e.g. CT100) are never read as instances nor destroyed.
  */
+import { createHash } from "crypto";
 import { api, lxcIp, waitTask, nodeIp, NODE } from "./proxmox";
 import { blueprint, loadBlueprints, type Blueprint, type Seed } from "./blueprints";
 import { getDB, getNetwork, mutate, type Task, type Group, type ImageStatus } from "./store";
@@ -21,6 +22,8 @@ import {
   setRedisReplication,
   installPostgres,
   installLimbo,
+  applyRedisPassword,
+  applyPgPassword,
   installConnector,
   installHytaleConnector,
   installGenericCustom,
@@ -200,14 +203,17 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
   // so it must be restarted for the plugin to actually load (otherwise the instance runs
   // without the connector → shows 0/0, no green dot, and can't shard). Velocity is restarted
   // anyway by syncVelocity on the next routing pass; Paper backends need an explicit restart.
-  if (kind === "paper" || kind === "velocity") {
+  // Connector install set: undefined = all paper/velocity/hytale (default); else opt-in list.
+  const connectorSet = net.connectorTasks;
+  const wantsConnector = !connectorSet || connectorSet.includes(task.id);
+  if ((kind === "paper" || kind === "velocity") && wantsConnector) {
     try {
       await installConnector(inst.vmid, host);
       if (kind === "paper") await ctExec(inst.vmid, `systemctl restart mc 2>/dev/null || true`, 30_000, host);
     } catch (e) {
       pushInstallLog(inst.vmid, `[conduit] connector install skipped: ${String(e)}`);
     }
-  } else if (kind === "hytale") {
+  } else if (kind === "hytale" && wantsConnector) {
     // Hytale gets its own connector mod (reports players to the panel like the MC connector).
     try {
       await installHytaleConnector(inst.vmid, host);
@@ -341,11 +347,15 @@ async function redisPass(
     updatedAt: Date.now(),
   });
 
-  const sig = insts.map((i) => `${i.vmid}@${i.ip}`).join(",") + `|p=${primary.vmid}`;
+  // membership + password in the sig → a rotation re-triggers the apply pass below
+  const sig = insts.map((i) => `${i.vmid}@${i.ip}`).join(",") + `|p=${primary.vmid}|pw=${pw.slice(0, 6)}`;
   if (global.__conduitRedisSig === sig) return;
+  // derived default + previous override are the auth candidates if the password just rotated
+  const derived = createHash("sha256").update(`${(db.network?.forwardingSecret ?? "")}:conduit-redis`).digest("hex").slice(0, 32);
   for (const i of insts) {
     try {
       const host = await nodeIp(i.node);
+      await applyRedisPassword(i.vmid, pw, [derived], host);
       await setRedisReplication(i.vmid, pw, i.vmid === primary.vmid ? null : primary.ip!, host);
     } catch (e) {
       log.push(`! redis replication ${i.vmid}: ${String(e)}`);
@@ -370,6 +380,15 @@ async function pgPass(db: Awaited<ReturnType<typeof getDB>>, all: Instance[]) {
     primary: insts[0] ? { vmid: insts[0].vmid, ip: insts[0].ip! } : null,
     updatedAt: Date.now(),
   });
+  // apply a rotated password to the conduit role (idempotent; only re-runs when the pw changes)
+  if (insts.length) {
+    const pw = await pgPassword();
+    const g = global as unknown as { __conduitPgPwSig?: string };
+    const sig = `${insts[0].vmid}|pw=${pw.slice(0, 6)}`;
+    if (g.__conduitPgPwSig !== sig) {
+      try { await applyPgPassword(insts[0].vmid, pw, await nodeIp(insts[0].node)); g.__conduitPgPwSig = sig; } catch { /* retry next tick */ }
+    }
+  }
 }
 
 /**
@@ -513,6 +532,32 @@ async function templateSyncPass(
     } catch (e) {
       log.push(`! template sync ${t.name}: ${String(e)}`);
     }
+  }
+}
+
+/**
+ * Keep the managed LuckPerms set (network.luckpermsTasks) installed: install on member-task
+ * instances that don't have the jar yet (idempotent, no restart for ones already set up).
+ * Throttled to one sweep per 2 min so it doesn't ssh-poll every tick.
+ */
+async function lpKeepInSync(db: Awaited<ReturnType<typeof getDB>>, log: string[]) {
+  const set = db.network?.luckpermsTasks;
+  if (!set?.length) return;
+  const g = global as unknown as { __conduitLpAt?: number; __conduitLpPwSig?: string };
+  // A Postgres/Redis password rotation must rewrite the LP config (new DB/messaging secret) on
+  // every member — force a reinstall once when the secrets change, regardless of the throttle.
+  const pwSig = `${db.network?.pgPasswordOverride ?? ""}|${db.network?.redisPasswordOverride ?? ""}`;
+  const rotated = g.__conduitLpPwSig !== undefined && g.__conduitLpPwSig !== pwSig;
+  if (!rotated && Date.now() - (g.__conduitLpAt ?? 0) < 120_000) return;
+  g.__conduitLpAt = Date.now();
+  g.__conduitLpPwSig = pwSig;
+  try {
+    const { lpInstallAll } = await import("./luckperms");
+    const res = await lpInstallAll(set, rotated); // force on rotation, else skip already-installed
+    const did = res.filter((r) => r.ok).length;
+    if (did) log.push(`= luckperms: ${rotated ? "re-synced creds to" : "installed on"} ${did} instance(s) of the managed set`);
+  } catch (e) {
+    log.push(`! luckperms keep-in-sync: ${String(e)}`);
   }
 }
 
@@ -1008,6 +1053,7 @@ export async function reconcileAll(): Promise<string[]> {
     await velocityPass(db, all, log);
     await redisPass(db, all, log);
     await pgPass(db, all);
+    await lpKeepInSync(db, log);
     await autoUpdatePass(db, all, log);
     await templateSyncPass(db, log);
 

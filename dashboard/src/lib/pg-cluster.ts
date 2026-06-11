@@ -11,9 +11,10 @@ export const PG_PORT = 5432;
 export const PG_USER = "conduit";
 export const PG_DB = "luckperms";
 
-/** Deterministic Postgres auth derived from the network secret. */
+/** Postgres auth: an explicit rotation override if set, else derived from the network secret. */
 export async function pgPassword(): Promise<string> {
   const net = await getNetwork();
+  if (net.pgPasswordOverride) return net.pgPasswordOverride;
   return createHash("sha256").update(`${net.forwardingSecret}:conduit-postgres`).digest("hex").slice(0, 32);
 }
 
