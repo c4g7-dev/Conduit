@@ -149,16 +149,16 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* ── Player audit (DSGVO) ─────────────────────────────────────── */}
+        {/* ── Player audit ─────────────────────────────────────────────── */}
         <div className="panel p-5 sm:col-span-2">
           <div className="mb-3 flex items-center gap-2.5">
             <ShieldCheck className="h-4 w-4 text-brand" />
-            <h2 className="text-sm font-semibold">Player audit · DSGVO retention</h2>
+            <h2 className="text-sm font-semibold">Player history · retention</h2>
           </div>
           <p className="mb-3 text-[12px] leading-relaxed text-muted-foreground">
-            Joins, quits, server switches and operator actions are logged per player (no chat,
-            no message contents). Day files older than the retention window are purged
-            automatically; per-player erasure is available in each player&apos;s History dialog.
+            Joins, quits, server switches and operator actions are logged per player. Entries
+            older than the retention window are purged automatically; per-player erasure is
+            available in each player&apos;s History dialog.
           </p>
           <div className="flex items-center gap-2">
             <input

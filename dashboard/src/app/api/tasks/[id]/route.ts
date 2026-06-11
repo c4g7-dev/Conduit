@@ -46,6 +46,11 @@ export async function PATCH(
       if (typeof body.templateSyncRestart === "boolean") t.templateSyncRestart = body.templateSyncRestart;
       if (typeof body.pinned === "boolean") t.pinned = body.pinned;
       if (Array.isArray(body.fronts)) t.fronts = body.fronts;
+      if (body.tryOrder !== undefined) {
+        t.tryOrder = Array.isArray(body.tryOrder) && body.tryOrder.length
+          ? body.tryOrder.filter((x: unknown) => typeof x === "string")
+          : undefined;
+      }
       if (typeof body.autoscale === "boolean") t.autoscale = body.autoscale;
       if (typeof body.playersPerInstance === "number") t.playersPerInstance = body.playersPerInstance;
       // CloudNet Smart-style autoscaling knobs

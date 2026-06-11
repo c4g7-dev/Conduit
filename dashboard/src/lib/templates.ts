@@ -105,6 +105,19 @@ export async function overlaySignature(eggId: string, taskId: string, kind: stri
   return out.trim();
 }
 
+/** Total bytes + file count of a task's overlay chain (one instance's worth) — for sync ETAs. */
+export async function overlaySize(eggId: string, taskId: string, kind: string, host?: string, tplIds: string[] = []): Promise<{ bytes: number; files: number }> {
+  const dirs = overlayDirs(eggId, taskId, kind, tplIds);
+  const out = await nodeExec(
+    `B=0; F=0; for d in ${dirs.map((d) => `'${d}'`).join(" ")}; do ` +
+      `if [ -d "$d" ]; then B=$((B + $(find "$d" -type f -printf '%s\\n' | awk '{s+=$1} END{print s+0}'))); ` +
+      `F=$((F + $(find "$d" -type f | wc -l))); fi; done; echo "$B $F"`,
+    20_000, host,
+  );
+  const [b, f] = out.trim().split(/\s+/).map(Number);
+  return { bytes: b || 0, files: f || 0 };
+}
+
 /**
  * Batched signatures for many tasks in ONE ssh call (the per-task variant costs a full ssh
  * round-trip each — with several templateSync tasks the scan dominated the watch loop).

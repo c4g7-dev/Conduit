@@ -11,7 +11,7 @@
  */
 import { api, lxcIp, waitTask, nodeIp, NODE } from "./proxmox";
 import { blueprint, loadBlueprints, type Blueprint, type Seed } from "./blueprints";
-import { getDB, saveDB, getNetwork, mutate, type Task, type Group, type ImageStatus } from "./store";
+import { getDB, getNetwork, mutate, type Task, type Group, type ImageStatus } from "./store";
 import {
   installPaper,
   installVelocity,
@@ -20,6 +20,7 @@ import {
   installRedis,
   setRedisReplication,
   installPostgres,
+  installLimbo,
   installConnector,
   installHytaleConnector,
   installGenericCustom,
@@ -168,6 +169,8 @@ async function provisionInstance(inst: Instance, task: Task, bp: Blueprint) {
     await installRedis(inst.vmid, await redisPassword(), host);
   } else if (kind === "postgres") {
     await installPostgres(inst.vmid, await pgPassword(), host);
+  } else if (kind === "limbo") {
+    await installLimbo(inst.vmid, task, net.forwardingSecret, host);
   } else {
     // generic — run the custom provisioning recipe (packages/assets/install/start) if defined,
     // else come up as a bare container.
@@ -418,8 +421,10 @@ function tplIdsFor(db: Awaited<ReturnType<typeof getDB>>, taskId: string): strin
 }
 
 /** Re-apply a task's overlay chain to its running instances (+ optionally restart) —
- *  instances in parallel (the serial version made multi-instance resyncs feel stuck). */
-export async function resyncTaskFiles(taskId: string, restart = true): Promise<{ vmid: number; ok: boolean; error?: string }[]> {
+ *  instances in parallel (the serial version made multi-instance resyncs feel stuck).
+ *  Progress (per-instance status, total bytes/files) is published to the sync-status registry
+ *  so the UI can show what's copying where with size + ETA. */
+export async function resyncTaskFiles(taskId: string, restart = true, trigger: "manual" | "auto" = "manual"): Promise<{ vmid: number; ok: boolean; error?: string }[]> {
   await loadBlueprints();
   const db = await getDB();
   const t = db.tasks.find((x) => x.id === taskId);
@@ -429,16 +434,31 @@ export async function resyncTaskFiles(taskId: string, restart = true): Promise<{
   const tplIds = tplIdsFor(db, t.id);
   const all = await discoverInstances();
   const targets = instancesOf(all, t.id).filter((i) => i.status === "running" && i.ready);
-  return Promise.all(targets.map(async (inst): Promise<{ vmid: number; ok: boolean; error?: string }> => {
+
+  const { startSync, updateSyncInstance, finishSync } = await import("./sync-status");
+  const { overlaySize } = await import("./templates");
+  const size = await overlaySize(bp.id, t.id, kind, await nodeIp(targets[0]?.node ?? NODE), tplIds).catch(() => ({ bytes: 0, files: 0 }));
+  const syncId = startSync({
+    taskId: t.id, taskName: t.name, trigger, restart,
+    bytes: size.bytes, files: size.files,
+    instances: targets.map((i) => ({ vmid: i.vmid, node: i.node, status: "pending" as const })),
+  });
+
+  const results = await Promise.all(targets.map(async (inst): Promise<{ vmid: number; ok: boolean; error?: string }> => {
+    updateSyncInstance(syncId, inst.vmid, { status: "copying", startedAt: Date.now() });
     try {
       const host = await nodeIp(inst.node);
       await applyTemplate(inst.vmid, bp.id, t.id, serviceDir(kind), host, kind, tplIds);
       if (restart) await ctExec(inst.vmid, `systemctl restart mc 2>/dev/null || true`, 30_000, host);
+      updateSyncInstance(syncId, inst.vmid, { status: "done", finishedAt: Date.now() });
       return { vmid: inst.vmid, ok: true };
     } catch (e) {
+      updateSyncInstance(syncId, inst.vmid, { status: "error", error: String(e), finishedAt: Date.now() });
       return { vmid: inst.vmid, ok: false, error: String(e) };
     }
   }));
+  finishSync(syncId);
+  return results;
 }
 
 /**
@@ -488,7 +508,7 @@ async function templateSyncPass(
     }).catch(() => {});
     if (prev === undefined) continue; // baseline armed (survives restarts from now on)
     try {
-      const res = await resyncTaskFiles(t.id, t.templateSyncRestart === true);
+      const res = await resyncTaskFiles(t.id, t.templateSyncRestart === true, "auto");
       log.push(`~ template sync ${t.name}: overlay changed → re-applied to ${res.filter((r) => r.ok).length} instance(s)${t.templateSyncRestart ? " + restart" : " (no restart)"}`);
     } catch (e) {
       log.push(`! template sync ${t.name}: ${String(e)}`);

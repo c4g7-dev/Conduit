@@ -19,7 +19,7 @@ export type Role = "proxy" | "lobby" | "smp" | "db" | "generic";
  * `version` is what gets pulled — e.g. the Minecraft version for paper, the Velocity
  * version for velocity. Selectable per-task in the UI.
  */
-export type SoftwareKind = "paper" | "velocity" | "mariadb" | "postgres" | "hytale" | "nginx" | "redis" | "generic";
+export type SoftwareKind = "paper" | "velocity" | "limbo" | "mariadb" | "postgres" | "hytale" | "nginx" | "redis" | "generic";
 export type Software = {
   kind: SoftwareKind;
   version: string;
@@ -211,6 +211,22 @@ export const BLUEPRINTS: Blueprint[] = [
       "Redis store for seamless-world player-data sync (inventory/HP/XP across shard handoffs). Self-configuring: the first instance is primary, extras auto-replicate it, and connectors discover the endpoints dynamically with failover. Scale to 2+ for redundancy.",
     provision: "redis-server, auth from network secret, replication auto-wired by the controller",
     software: { kind: "redis", version: "stable" },
+  },
+  {
+    id: "limbo",
+    name: "Limbo (fallback)",
+    role: "lobby",
+    mode: "static",
+    persistent: false,
+    base: DEBIAN,
+    cores: 1,
+    memory: 256,
+    disk: 4,
+    port: 25565,
+    description:
+      "NanoLimbo holding server — a featherweight void world players land on when no lobby is available or everything is full, instead of being disconnected. Speaks Velocity modern forwarding, needs ~100 MB RAM, holds hundreds of players. Put it LAST in the proxy's try order.",
+    provision: "Java 21 + NanoLimbo (latest release), velocity modern forwarding wired from the network secret",
+    software: { kind: "limbo", version: "latest" },
   },
   {
     id: "postgres",

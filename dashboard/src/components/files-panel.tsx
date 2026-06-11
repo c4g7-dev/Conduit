@@ -205,17 +205,20 @@ export function FilesPanel({ backend, roots }: { backend: FsBackend; roots: { la
         })}
       </div>
 
+      {/* Thin activity bar between the header and the listing — an at-a-glance "working…"
+          indicator for ANY operation (listing, upload, delete, move, paste). Reserves its
+          1px height even when idle so the layout never jumps. */}
+      <div className="h-px overflow-hidden bg-hairline/40">
+        {(loading || busy) && (
+          <div className="h-full w-1/3 rounded-full bg-brand [animation:fm-sweep_0.9s_ease-in-out_infinite]" />
+        )}
+      </div>
+
       {error && <div className="px-4 py-2 text-xs text-destructive">Could not list: {error}</div>}
 
       {/* Listing — background right-click = paste/new-folder/upload */}
       <ContextMenu>
         <ContextMenuTrigger render={<div className="relative min-h-[40vh]" />}>
-          {/* loading bar — indeterminate sweep across the top while listing */}
-          {loading && (
-            <div className="absolute inset-x-0 top-0 h-0.5 overflow-hidden bg-brand/10">
-              <div className="h-full w-1/3 rounded-full bg-brand/80 [animation:fm-sweep_0.9s_ease-in-out_infinite]" />
-            </div>
-          )}
           <div key={path} className="animate-in fade-in-0 duration-150">
             {parent && (
               <button onClick={() => setPath(parent)} className="flex w-full items-center gap-2 border-b border-hairline px-4 py-2 text-left text-sm hover:bg-accent/40">

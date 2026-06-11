@@ -73,6 +73,10 @@ export type Task = {
   persistent: boolean;
   /** for proxy-role tasks: ids of tasks this proxy fronts */
   fronts: string[];
+  /** for proxy-role tasks: ordered fallback "try" list (task ids; subset of fronts).
+   *  Players land on the first live entry — put Limbo last as the catch-all. When unset,
+   *  the lobby-role fronted tasks are used in fronts order. */
+  tryOrder?: string[];
   /** optional per-task seed overrides, merged over the blueprint's seed */
   seed?: Seed;
   /** optional per-task software/version override (e.g. a different MC version) */

@@ -11,6 +11,7 @@ import { DeployEggDialog } from "@/components/deploy-egg-dialog";
 import { EggDetailDialog } from "@/components/egg-detail-dialog";
 import { AssetsSection } from "@/components/assets-section";
 import { GlobalTemplatesSection } from "@/components/global-templates-section";
+import { SyncProgressSection } from "@/components/sync-progress";
 import { RoleDot, roleColor } from "@/components/role-dot";
 import { bytes, pct } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -173,6 +174,9 @@ export default function TemplatesPage() {
 
       {/* ── Global templates ──────────────────────────────────────────── */}
       <GlobalTemplatesSection />
+
+      {/* ── Live template file-sync progress (auto + manual) ───────────── */}
+      <SyncProgressSection />
 
       {/* ── Assets ────────────────────────────────────────────────────── */}
       <SectionLabel>Assets · Worlds &amp; Plugins</SectionLabel>

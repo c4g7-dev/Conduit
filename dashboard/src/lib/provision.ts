@@ -764,6 +764,84 @@ export async function setRedisReplication(vmid: number, password: string, primar
   await ctExec(vmid, cmd, 20_000, host);
 }
 
+/* ---- Limbo (NanoLimbo fallback/holding server) ---------------------------- */
+
+/** Latest NanoLimbo jar URL from GitHub releases (cached 1h). */
+async function resolveLimboJar(): Promise<string> {
+  const g = global as unknown as { __conduitLimboJar?: { url: string; at: number } };
+  if (g.__conduitLimboJar && Date.now() - g.__conduitLimboJar.at < 3_600_000) return g.__conduitLimboJar.url;
+  const res = await fetch("https://api.github.com/repos/Nan1t/NanoLimbo/releases/latest", {
+    headers: { accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(10_000),
+  });
+  const rel = (await res.json()) as { assets?: { name: string; browser_download_url: string }[] };
+  const jar = rel.assets?.find((a) => a.name.endsWith(".jar"))?.browser_download_url;
+  if (!jar) throw new Error("no NanoLimbo release asset found");
+  g.__conduitLimboJar = { url: jar, at: Date.now() };
+  return jar;
+}
+
+function limboScript(task: Task, secret: string, jarUrl: string): string {
+  const unit = sysdUnit(
+    `Conduit Limbo (${task.name})`,
+    `${JAVA_BIN} -Xms64M -Xmx${Math.max(128, task.memory - 64)}M -jar limbo.jar`,
+    "/opt/mc",
+    true,
+  );
+  // NanoLimbo settings.yml — void holding world, velocity MODERN forwarding from the network
+  // secret (same trust as the real backends), generous slot count.
+  const settings = `bind:
+  ip: '0.0.0.0'
+  port: 25565
+maxPlayers: 500
+ping:
+  description: '{"text": "\\u00a7bConduit \\u00a77Limbo"}'
+  version: 'Conduit'
+dimension: THE_END
+gameMode: 2
+playerList:
+  enable: true
+  username: 'Conduit Limbo'
+headerAndFooter:
+  enable: true
+  header: '{"text": "\\u00a7bConduit"}'
+  footer: '{"text": "\\u00a77waiting for a free server\\u2026"}'
+joinMessages:
+  enable: true
+  chatMessage: '{"text": "\\u00a77You are in \\u00a7bLimbo\\u00a77 \\u2014 you will be moved once a server frees up."}'
+infoForwarding:
+  type: MODERN
+  secret: '${secret}'
+readTimeout: 30000
+debugLevel: 0
+`;
+  return `set -e
+MCDIR=/opt/mc
+mkdir -p "$MCDIR"
+if [ -f "$MCDIR/.conduit-ready" ]; then echo "already-provisioned"; exit 0; fi
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq tmux >/dev/null
+${javaInstall(21)}
+curl -fsSL -o "$MCDIR/limbo.jar" '${jarUrl}'
+cat > "$MCDIR/settings.yml" <<'CONF'
+${settings}
+CONF
+cat > /etc/systemd/system/mc.service <<'UNIT'
+${unit}
+UNIT
+systemctl daemon-reload
+systemctl enable mc >/dev/null 2>&1 || true
+systemctl start mc
+touch "$MCDIR/.conduit-ready"
+echo CONDUIT_PROVISIONED_LIMBO
+`;
+}
+
+export async function installLimbo(vmid: number, task: Task, secret: string, host?: string): Promise<void> {
+  const jarUrl = await resolveLimboJar();
+  await ctExec(vmid, limboScript(task, secret, jarUrl), 300_000, host);
+}
+
 /* ---- PostgreSQL (permissions backend for LuckPerms) ----------------------- */
 
 function postgresScript(password: string): string {

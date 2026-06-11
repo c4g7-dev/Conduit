@@ -23,13 +23,13 @@ export async function POST(req: NextRequest) {
       case "unqueue": if (!b.player) return NextResponse.json({ error: "player required" }, { status: 400 }); id = queueAction({ kind: "unqueue", player: b.player, env: "proxy" }); break;
       default: return NextResponse.json({ error: `bad kind: ${b.kind}` }, { status: 400 });
     }
-    // operator-action audit (message TEXT deliberately not stored — privacy)
+    // operator-action audit (kick reason / message text stored as detail)
     if (b.player && (b.kind === "kick" || b.kind === "move" || b.kind === "message" || b.kind === "unqueue")) {
       recordAudit({
         type: b.kind,
         player: b.player,
         server: b.kind === "move" ? b.target : sid,
-        detail: b.kind === "kick" ? b.reason : undefined,
+        detail: b.kind === "kick" ? b.reason : b.kind === "message" ? b.text : undefined,
         actor: "panel",
       });
     }

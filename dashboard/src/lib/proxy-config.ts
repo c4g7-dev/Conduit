@@ -63,14 +63,23 @@ export async function buildProxyConfig(taskName: string, groupId: string): Promi
     ?? db.tasks.find((t) => t.name === taskName);
   const group = proxy ? db.groups.find((g) => g.id === proxy.groupId) : undefined;
 
-  // Fronted backend tasks that are lobbies become fallbacks (ordered as configured).
+  // Fallback "try" list: an explicit per-proxy order (tryOrder, UI-managed) wins; else the
+  // fronted lobby-role tasks in fronts order; else any lobby task in the group.
   const fronts = proxy?.fronts ?? [];
   const fallbacks: { task: string; permission: string | null }[] = [];
-  for (const id of fronts) {
-    const t = db.tasks.find((x) => x.id === id);
-    if (!t) continue;
-    const role = blueprint(t.blueprintId)?.role;
-    if (role === "lobby") fallbacks.push({ task: t.name, permission: null });
+  if (proxy?.tryOrder?.length) {
+    for (const id of proxy.tryOrder) {
+      const t = db.tasks.find((x) => x.id === id);
+      if (t && fronts.includes(id)) fallbacks.push({ task: t.name, permission: null });
+    }
+  }
+  if (fallbacks.length === 0) {
+    for (const id of fronts) {
+      const t = db.tasks.find((x) => x.id === id);
+      if (!t) continue;
+      const role = blueprint(t.blueprintId)?.role;
+      if (role === "lobby") fallbacks.push({ task: t.name, permission: null });
+    }
   }
   // If no lobby is explicitly fronted, fall back to any lobby task in the same group.
   if (fallbacks.length === 0 && proxy) {

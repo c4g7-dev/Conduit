@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
     const player = String(b.player ?? "").trim();
     if (!player) return NextResponse.json({ error: "player required" }, { status: 400 });
     const { removed } = await erasePlayerAudit(player);
-    pushEvent(`DSGVO erasure: removed ${removed} audit entr${removed === 1 ? "y" : "ies"} for "${player}"`, "warn");
+    pushEvent(`history erasure: removed ${removed} entr${removed === 1 ? "y" : "ies"} for "${player}"`, "warn");
     return NextResponse.json({ ok: true, removed });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 400 });

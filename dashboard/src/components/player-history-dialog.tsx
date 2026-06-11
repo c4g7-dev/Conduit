@@ -26,7 +26,7 @@ const TYPE_META: Record<AuditEntry["type"], { icon: React.ElementType; color: st
   switch: { icon: ArrowRightLeft, color: "#60a5fa", label: (e) => `switched to ${e.server ?? "?"}` },
   kick: { icon: UserX, color: "#f87171", label: (e) => `kicked by an operator${e.detail ? ` — "${e.detail}"` : ""}` },
   move: { icon: MoveRight, color: "#fbbf24", label: (e) => `moved to ${e.server ?? "?"} by an operator` },
-  message: { icon: MessageSquare, color: "#c084fc", label: () => "received an operator message" },
+  message: { icon: MessageSquare, color: "#c084fc", label: (e) => `operator message${e.detail ? `: "${e.detail}"` : ""}` },
   unqueue: { icon: Hourglass, color: "#94a3b8", label: () => "removed from a queue by an operator" },
 };
 
@@ -44,7 +44,7 @@ export function PlayerHistoryDialog({ player, onClose }: { player: string; onClo
   useEffect(() => { load(); }, [load]);
 
   async function erase() {
-    if (!confirm(`DSGVO erasure: permanently delete ALL stored audit entries for "${player}"? This cannot be undone.`)) return;
+    if (!confirm(`Permanently delete ALL stored history entries for "${player}"? This cannot be undone.`)) return;
     setBusy(true);
     try {
       const r = await fetch("/api/audit/erase", {
@@ -68,8 +68,8 @@ export function PlayerHistoryDialog({ player, onClose }: { player: string; onClo
             <History className="h-4 w-4 text-brand" /> History · {player}
           </DialogTitle>
           <DialogDescription>
-            Session + operator-action trail. Entries are auto-purged by the DSGVO retention window
-            (configurable in Settings).
+            Session + operator-action trail. Entries older than the retention window
+            (configurable in Settings) are purged automatically.
           </DialogDescription>
         </DialogHeader>
 
@@ -112,7 +112,7 @@ export function PlayerHistoryDialog({ player, onClose }: { player: string; onClo
           <button onClick={erase} disabled={busy || !entries?.length}
             className="flex items-center gap-1.5 rounded-md border border-destructive/40 px-2.5 py-1.5 text-[12px] text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40">
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-            Erase player data (DSGVO)
+            Erase player data
           </button>
         </div>
       </DialogContent>

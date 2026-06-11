@@ -60,6 +60,7 @@ import {
   ArrowUpCircle,
   RefreshCw,
   FolderSync,
+  ListOrdered,
 } from "lucide-react";
 
 /* ---- types (mirror /api/conduit/state) ----------------------------------- */
@@ -69,7 +70,7 @@ type Task = {
   blueprintName: string; softwareKind: string; version: string; motd: string;
   mode: "dynamic" | "static"; desired: number; min: number; max: number;
   autoscale: boolean; playersPerInstance: number; cores: number; memory: number;
-  disk: number; persistent: boolean; port: number; fronts: string[];
+  disk: number; persistent: boolean; port: number; fronts: string[]; tryOrder?: string[];
   subgroupId?: string; maintenance?: boolean; templateSync?: boolean; templateSyncRestart?: boolean;
   instances: Instance[]; live: number; running: number;
 };
@@ -395,6 +396,25 @@ export default function ServersPage() {
       const json = await res.json();
       if (json.error) throw new Error(json.error);
       toast.success("Routing updated — proxy reloaded");
+      refresh();
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      set(proxy.id, false);
+    }
+  }
+
+  async function setTryOrder(proxy: Task, tryOrder: string[] | null) {
+    set(proxy.id, true);
+    try {
+      const res = await fetch(`/api/tasks/${proxy.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tryOrder }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      toast.success(tryOrder ? "Try order updated — applies on the next heartbeat" : "Try order reset to default");
       refresh();
     } catch (e) {
       toast.error(String(e));
@@ -742,6 +762,7 @@ export default function ServersPage() {
                       candidates={allTasks.filter((t) => t.role !== "proxy")}
                       busy={!!pending[selected.id]}
                       onSetFronts={setFronts}
+                      onSetTryOrder={setTryOrder}
                       state={data}
                       metrics={metrics ?? null}
                     />
@@ -1046,17 +1067,35 @@ function InstancesTab({ task, metrics, connFresh, pending, onAction, onMigrate, 
 }
 
 /* ---- routing tab (proxy) ------------------------------------------------- */
-function RoutingTab({ proxy, candidates, busy, onSetFronts, state, metrics }: {
+function RoutingTab({ proxy, candidates, busy, onSetFronts, onSetTryOrder, state, metrics }: {
   proxy: Task; candidates: Task[]; busy: boolean;
   onSetFronts: (p: Task, fronts: string[]) => void;
+  onSetTryOrder: (p: Task, tryOrder: string[] | null) => void;
   state: State; metrics: Metrics | null;
 }) {
   const fronted = new Set(proxy.fronts);
+  const byId = new Map(candidates.map((c) => [c.id, c]));
   const toggle = (id: string) => {
     const next = new Set(fronted);
     if (next.has(id)) next.delete(id); else next.add(id);
     onSetFronts(proxy, [...next]);
   };
+
+  // Effective try list: explicit order, else the derived default (fronted lobby-role tasks).
+  const explicit = (proxy.tryOrder ?? []).filter((id) => fronted.has(id));
+  const derived = proxy.fronts.filter((id) => byId.get(id)?.role === "lobby");
+  const tryList = explicit.length ? explicit : derived;
+  const custom = explicit.length > 0;
+  const addable = proxy.fronts.filter((id) => !tryList.includes(id) && byId.has(id));
+
+  const move = (i: number, d: -1 | 1) => {
+    const j = i + d;
+    if (j < 0 || j >= tryList.length) return;
+    const next = [...tryList];
+    [next[i], next[j]] = [next[j], next[i]];
+    onSetTryOrder(proxy, next);
+  };
+
   return (
     <div className="space-y-4">
       <div className="panel p-4">
@@ -1090,6 +1129,63 @@ function RoutingTab({ proxy, candidates, busy, onSetFronts, state, metrics }: {
             );
           })}
         </div>
+      </div>
+
+      {/* ── Fallback "try" order: where joins/kicks land, attempted top → bottom ── */}
+      <div className="panel p-4">
+        <div className="mb-1 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ListOrdered className="h-4 w-4 text-brand" />
+            <h3 className="text-sm font-semibold">Fallback try order</h3>
+          </div>
+          {custom && (
+            <button onClick={() => onSetTryOrder(proxy, null)} disabled={busy}
+              className="text-[11px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50">
+              reset to default
+            </button>
+          )}
+        </div>
+        <p className="mb-3 text-[12px] text-muted-foreground">
+          Joining players (and kick-redirects, <span className="font-mono">/hub</span>) try these top
+          to bottom — first live, non-full server wins. Put a <span className="text-foreground">Limbo</span> last
+          as the never-fail catch-all.{!custom && " Currently the default order (fronted lobbies)."}
+        </p>
+        <div className="space-y-1">
+          {tryList.length === 0 && <p className="py-3 text-center text-xs text-muted-foreground">Nothing in the try list — front a lobby (or Limbo) above.</p>}
+          {tryList.map((id, i) => {
+            const c = byId.get(id);
+            if (!c) return null;
+            return (
+              <div key={id} className="flex items-center gap-2 rounded-md border border-hairline px-3 py-2 text-[13px]">
+                <span className="w-5 text-center font-mono text-[10px] text-muted-foreground">{i + 1}</span>
+                <RoleDot role={c.role} />
+                <span className="flex-1 truncate">{c.name}</span>
+                {c.softwareKind === "limbo" && <span className="rounded bg-accent px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">limbo</span>}
+                <button onClick={() => move(i, -1)} disabled={busy || i === 0} className="rounded p-0.5 text-muted-foreground hover:bg-accent disabled:opacity-30">↑</button>
+                <button onClick={() => move(i, 1)} disabled={busy || i === tryList.length - 1} className="rounded p-0.5 text-muted-foreground hover:bg-accent disabled:opacity-30">↓</button>
+                <button
+                  onClick={() => onSetTryOrder(proxy, tryList.filter((x) => x !== id))}
+                  disabled={busy || tryList.length <= 1}
+                  title={tryList.length <= 1 ? "The try list needs at least one entry" : "Remove from the try list"}
+                  className="rounded p-0.5 text-destructive/60 hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {addable.length > 0 && (
+          <select
+            value=""
+            disabled={busy}
+            onChange={(e) => { if (e.target.value) onSetTryOrder(proxy, [...tryList, e.target.value]); }}
+            className="mt-2 h-8 w-full rounded-md border border-hairline bg-transparent px-2 text-[13px] text-muted-foreground outline-none"
+          >
+            <option value="">+ add a routed server to the try list…</option>
+            {addable.map((id) => <option key={id} value={id}>{byId.get(id)!.name}</option>)}
+          </select>
+        )}
       </div>
 
       <div className="panel overflow-hidden">

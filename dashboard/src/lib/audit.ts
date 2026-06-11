@@ -19,7 +19,7 @@ export type AuditEntry = {
   uuid?: string;
   /** server involved (joined/left/now-on); for `move` the destination */
   server?: string;
-  /** free detail — kick reason, message text is NOT stored (privacy), move source, … */
+  /** free detail — kick reason, operator message text, … */
   detail?: string;
   /** who triggered it: the player themself or a panel operator action */
   actor?: "player" | "panel";
@@ -64,7 +64,9 @@ export async function flushAudit(): Promise<void> {
     const byDay = new Map<string, AuditEntry[]>();
     for (const e of batch) {
       const k = dayKey(e.at);
-      (byDay.get(k) ?? byDay.set(k, []).get(k)!).push(e);
+      const list = byDay.get(k) ?? [];
+      list.push(e);
+      byDay.set(k, list);
     }
     for (const [day, entries] of byDay) {
       const existing = await readDay(day);
